@@ -1,8 +1,12 @@
 use crate::prelude::*;
 use eframe::{egui, egui::{Rgba, Ui}, Frame};
+use serde::{Deserialize, Serialize};
+use serde_json;
+use crate::resource_interface;
 
-/// Style for the UI, loaded 
-pub struct Style {
+/// Style for the UI, loaded from /resources/styles.json
+#[derive(Deserialize)]
+pub struct Styles {
     /// Show a grid in the background
 	show_grid: bool,
 	/// Fraction of grid size that lines are drawn, 0.1 is probably good
@@ -14,6 +18,14 @@ pub struct Style {
     color_background: [u8; 3],
     color_foreground: [u8; 3],
     color_grid: [u8; 3]
+}
+
+impl Styles {
+    pub fn load() -> Result<Self, String> {
+        let raw_string: String = load_file_with_better_error(resource_interface::STYLES_FILE)?;
+        let styles: Self = to_string_err(serde_json::from_str(&raw_string))?;
+        Ok(styles)
+    }
 }
 
 pub struct LogicCircuitToplevelView {
@@ -33,7 +45,7 @@ impl LogicCircuitToplevelView {
 			grid_size: 20.0
 		}
 	}
-	pub fn draw(&self, ui: &mut Ui, style: &Style) {
+	pub fn draw(&self, ui: &mut Ui, styles: &Styles) {
 		// My favorite part of drawing graphics...
 		let grid_to_px = |grid: V2| -> V2 {
 			grid// TODO

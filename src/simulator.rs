@@ -1,10 +1,11 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{fmt::{format, Debug}, rc::Rc};
-use eframe::egui::{Rgba, Ui};
-use crate::prelude::*;
+use std::{fmt::Debug, fs};
+use serde::{Deserialize, Serialize};
+use crate::{prelude::*, resource_interface};
+use resource_interface::LogicCircuitSave;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum LogicState {
 	Driven(bool),
 	Floating,
@@ -42,6 +43,26 @@ impl LogicState {
 		else {
 			false
 		}
+	}
+	/// WARNING! Not neccessarily the same as real-world, this method is only here because logic gates will have to work w/ something, even if their inputs are floating or contested
+	pub fn to_bool(&self) -> bool {
+		match &self {
+			Self::Driven(b) => *b,
+			Self::Floating => false,
+			Self::Contested => false
+		}
+	}
+}
+
+impl Default for LogicState {
+	fn default() -> Self {
+		Self::Floating
+	}
+}
+
+impl From<bool> for LogicState {
+	fn from(value: bool) -> Self {
+		Self::Driven(value)
 	}
 }
 
@@ -82,7 +103,7 @@ pub fn merge_logic_states(a: LogicState, b: LogicState) -> LogicState {
 }
 
 // Not just something that is connected, but something that is setting the voltage either high or low
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum LogicDriveSource {
 	/// Set by the UI or the Clock or whatever
 	Global,
@@ -106,7 +127,7 @@ impl LogicDriveSource {
 	}
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LogicNet {
 	connections: Vec<CircuitWidePinReference>,
 	sources: Vec<LogicDriveSource>,
@@ -123,13 +144,16 @@ impl LogicNet {
 			state: LogicState::Floating
 		}
 	}
-	fn resolve_sources(&self, ancestors: &AncestryStack) -> Vec<(LogicDriveSource, LogicState)> {
-		// TODO: Keep history of recursion to ignore nets that have already been reached
+	fn resolve_sources(&self, self_ancestors: &AncestryStack, self_id: u64, caller_ancestors: &AncestryStack, caller_id: u64) -> Vec<(LogicDriveSource, LogicState)> {
+		// Keep history of recursion to ignore nets that have already been reached
+		if ancestors_og == ancestors_modified_with_recursion &&  {// TODO
+			return Vec::new();
+		}
 		let mut out = Vec::<(LogicDriveSource, LogicState)>::new();
 		for connection in &self.connections {
 			match ancestors.parent() {
-				LogicParent::Circuit(circuit) => match connection {
-					CircuitWidePinReference::ComponentPin(component_pin_ref) => match circuit.components.get_item_tuple(&component_pin_ref.component_query) {
+				Some(circuit) => match connection {
+					CircuitWidePinReference::ComponentPin(component_pin_ref) => match circuit.components.get_item_tuple(&component_pin_ref.component_query.into_another_type()) {
 						Some((_, component)) => match component.query_pin(&component_pin_ref.pin_query) {
 							Some(pin) => {
 								// Check what the internal source is
@@ -185,7 +209,7 @@ impl LogicNet {
 						None => panic!("Net references external connection {:?} which is invalid", connection)
 					}
 				},
-				LogicParent::Toplevel(_) => panic!("Net cannot have a toplevel wrapper as its parent")
+				None => panic!("Net cannot have a toplevel wrapper as its parent")
 			}
 		}
 		// Done
@@ -207,7 +231,7 @@ impl LogicNet {
 	}
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LogicConnectionPin {
 	internal_source: Option<LogicDriveSource>,
 	internal_state: LogicState,
@@ -244,7 +268,7 @@ impl LogicConnectionPin {
 }
 
 /// Everything within a circuit
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum CircuitWidePinReference {
 	ComponentPin(ComponentPinReference),
 	ExternalConnection(GenericQuery<LogicConnectionPin>)
@@ -261,23 +285,23 @@ impl CircuitWidePinReference {
 	}
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentPinReference {
-	component_query: GenericQuery<Box<dyn LogicDevice>>,
+	/// Has to be a query for something else (()), not <Box<dyn LogicDevice>> so it will work with serde
+	component_query: GenericQuery<()>,
 	pin_query: GenericQuery<LogicConnectionPin>
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Wire {
 	segments: Vec<(V2, V2)>,
 	net: GenericQuery<LogicNet>
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogicDeviceGeneric {
 	pub pins: GenericDataset<LogicConnectionPin>,
 	position_grid: V2,
-	border_stroke: Rgba,
 	unique_name: String,
 	sub_compute_cycles: usize,
 	rotation: FourWayDir
@@ -287,7 +311,6 @@ impl LogicDeviceGeneric {
 	pub fn new(
 		pins: GenericDataset<LogicConnectionPin>,
 		position_grid: V2,
-		border_stroke: Rgba,
 		unique_name: String,
 		sub_compute_cycles: usize,
 		rotation: FourWayDir
@@ -298,7 +321,6 @@ impl LogicDeviceGeneric {
 		Ok(Self {
 			pins,
 			position_grid,
-			border_stroke,
 			unique_name,
 			sub_compute_cycles,
 			rotation
@@ -308,9 +330,11 @@ impl LogicDeviceGeneric {
 
 /// Could be a simple gate, or something more complicated like an adder, or maybe even the whole computer
 pub trait LogicDevice: Debug {
+	// TODO: Add a draw method
 	fn get_generic(&self) -> &LogicDeviceGeneric;
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric;
 	fn compute_private(&mut self, ancestors: &AncestryStack);
+	fn save(&self) -> Result<EnumAllLogicDevicesSave, String>;
 	fn compute(&mut self, ancestors: &AncestryStack) {
 		for _ in 0..self.get_generic().sub_compute_cycles {
 			self.compute_private(ancestors);
@@ -353,42 +377,57 @@ pub trait LogicDevice: Debug {
 		}
 		Ok(())
 	}
-}
-
-#[derive(Clone)]
-pub enum LogicParent<'a> {
-	Circuit(&'a LogicCircuit),
-	Toplevel(&'a LogicCircuitToplevelView)
-}
-
-impl<'a> LogicParent<'a> {
-	pub fn is_toplevel(&self) -> bool {
-		match &self {
-			Self::Circuit(_) => false,
-			Self::Toplevel(_) => true
-		}
+	fn get_pin_state_panic(&self, pin_query: &GenericQuery<LogicConnectionPin>) -> LogicState {
+		self.query_pin(pin_query).expect(&format!("Pin query {:?} for logic device \"{}\" not valid", &pin_query, &self.get_generic().unique_name)).state()
+	}
+	fn set_pin_internal_state_panic(&mut self, pin_query: &GenericQuery<LogicConnectionPin>, state: LogicState) {
+		self.query_pin_mut(pin_query).expect(&format!("Pin query {:?} not valid", &pin_query)).internal_state = state;
 	}
 }
 
 #[derive(Clone)]
-pub struct AncestryStack<'a>(Vec<LogicParent<'a>>);
+pub struct AncestryStack<'a>(Vec<&'a LogicCircuit>);
 
 impl<'a> AncestryStack<'a> {
-	pub fn parent(&self) -> &LogicParent<'a> {
-		self.0.last().expect("Ancestor stack should not be empty")
+	pub fn parent(&self) -> Option<&'a LogicCircuit> {
+		if self.0.len() == 0 {
+			None
+		}
+		else {
+			Some(self.0.last().expect("Ancestor stack should not be empty"))
+		}
 	}
-	pub fn grandparent(&self) -> &LogicParent<'a> {
-		&self.0[self.0.len() - 2]
+	pub fn grandparent(&self) -> Option<&'a LogicCircuit> {
+		if self.0.len() < 2 {
+			None
+		}
+		else {
+			Some(&self.0[self.0.len() - 2])
+		}
 	}
 	pub fn trim(&self) -> Self {
+		if self.0.len() == 0 {
+			panic!("Attempt to trim ancestry stack with no items");
+		}
 		let mut out = self.clone();
 		out.0.pop();
 		out
 	}
-	pub fn push(&self, new_node: LogicParent<'a>) -> Self {
+	pub fn push(&self, new_node: &'a LogicCircuit) -> Self {
 		let mut out = self.clone();
 		out.0.push(new_node);
 		out
+	}
+}
+
+impl<'a> PartialEq for AncestryStack<'a> {
+	fn eq(&self, other: &Self) -> bool {
+		for i in 0..self.0.len() {
+			if self.0[i].get_generic().unique_name != other.0[i].get_generic().unique_name {
+				return false;
+			}
+		}
+		return true;
 	}
 }
 
@@ -397,7 +436,8 @@ pub struct LogicCircuit {
 	generic_device: LogicDeviceGeneric,
 	components: GenericDataset<Box<dyn LogicDevice>>,
 	nets: GenericDataset<LogicNet>,
-	wires: GenericDataset<Wire>
+	wires: GenericDataset<Wire>,
+	save_path: String
 }
 
 impl LogicCircuit {
@@ -408,25 +448,40 @@ impl LogicCircuit {
 		position_grid: V2,
 		unique_name: String,
 		sub_compute_cycles: usize,
-		wires: GenericDataset<Wire>
+		wires: GenericDataset<Wire>,
+		save_path: String
 	) -> Result<Self, String> {
 		Ok(Self {
 			generic_device: LogicDeviceGeneric::new(
 				external_connections,
 				position_grid,
-				Rgba::WHITE,
 				unique_name,
 				sub_compute_cycles,
 				FourWayDir::E
 			)?,
 			components,
 			nets,
-			wires
+			wires,
+			save_path
+		})
+	}
+	pub fn from_save(save: LogicCircuitSave, save_path: String) -> Result<Self, String> {
+		let mut components = GenericDataset::<Box<dyn LogicDevice>>::new();
+		// Init compnents
+		for (ref_, save_comp) in save.components.items {
+			components.items.push((ref_.into_another_type(), EnumAllLogicDevicesSave::to_dynamic(save_comp)?));
+		}
+		Ok(Self {
+			generic_device: save.generic_device,
+			components,
+			nets: save.nets,
+			wires: save.wires,
+			save_path
 		})
 	}
 	pub fn resolve_circuit_pin_ref(&self, ref_: &CircuitWidePinReference) -> Option<&LogicConnectionPin> {
 		match ref_ {
-			CircuitWidePinReference::ComponentPin(component_pin_ref) => match self.components.get_item_tuple(&component_pin_ref.component_query) {
+			CircuitWidePinReference::ComponentPin(component_pin_ref) => match self.components.get_item_tuple(&component_pin_ref.component_query.into_another_type()) {
 				Some((_, component)) => component.query_pin(&component_pin_ref.pin_query),
 				None => None
 			},
@@ -453,10 +508,46 @@ impl LogicDevice for LogicCircuit {
 			net.update_state(&ancestors_above);
 		}
 	}
+	fn save(&self) -> Result<EnumAllLogicDevicesSave, String> {
+		// Convert components to enum variants to be serialized
+		let mut components_save = GenericDataset::<EnumAllLogicDevicesSave>::new();
+		for (ref_, component) in &self.components.items {
+			components_save.items.push((ref_.into_another_type(), component.save()?));
+		}
+		// First, actually save this circuit
+		let save = LogicCircuitSave {
+			generic_device: self.generic_device.clone(),
+			components: components_save,
+			nets: self.nets.clone(),
+			wires: self.wires.clone()
+		};
+		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
+		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_path), &raw_string))?;
+		// Path to save file
+		Ok(EnumAllLogicDevicesSave::SubCircuit(self.save_path.clone()))
+	}
 	fn get_circuit(&self) -> &Self {
 		&self
 	}
 	fn get_circuit_mut(&mut self) -> &mut Self {
 		self
+	}
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GateAnd(LogicDeviceGeneric);
+
+impl LogicDevice for GateAnd {
+	fn get_generic(&self) -> &LogicDeviceGeneric {
+		&self.0
+	}
+	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
+		&mut self.0
+	}
+	fn compute_private(&mut self, _ancestors: &AncestryStack) {
+		self.set_pin_internal_state_panic(&"q".into(), (self.get_pin_state_panic(&"a".into()).to_bool() && self.get_pin_state_panic(&"b".into()).to_bool()).into());
+	}
+	fn save(&self) -> Result<EnumAllLogicDevicesSave, String> {
+		Ok(EnumAllLogicDevicesSave::GateAnd(self.clone()))
 	}
 }

@@ -17,9 +17,10 @@ pub mod prelude {
 	// Name of this app
 	pub const APP_NAME: &str = "Rusty Logic";
     pub type V2 = Vector2<f32>;
-    pub use ui::{Style, LogicCircuitToplevelView, App};
-    pub use simulator::{LogicDevice, LogicConnectionPin, LogicCircuit};
-    #[derive(Clone, Copy, Debug)]
+    pub use ui::{Styles, LogicCircuitToplevelView, App};
+    pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, LogicCircuit};
+    pub use resource_interface::{load_file_with_better_error, EnumAllLogicDevicesSave};
+    #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
     pub enum FourWayDir {
         E,
         N,
@@ -52,6 +53,23 @@ pub mod prelude {
             }
         }
     }
+    impl Default for FourWayDir {
+        fn default() -> Self {
+            Self::E
+        }
+    }
+    pub fn to_string_err<T, E: ToString>(result: Result<T, E>) -> Result<T, String> {
+		match result {
+			Ok(t) => Ok(t),
+			Err(e) => Err(e.to_string())
+		}
+	}
+	pub fn to_string_err_with_message<T, E: ToString>(result: Result<T, E>, message: &str) -> Result<T, String> {
+		match result {
+			Ok(t) => Ok(t),
+			Err(e) => Err(format!("Message: {}, Error: {}", message, e.to_string()))
+		}
+	}
     /// Generic reference to things in the game
     #[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Hash)]
     pub struct GenericRef<T> {
@@ -144,6 +162,19 @@ pub mod prelude {
         }
         pub fn unique_name(unique_name: String) -> Self {
             Self::UniqueName(unique_name, CustomPhantomData::new())
+        }
+        /// WARNING: This method can do what this whole type is meant to avoid: using queries in the wrong context. Use with caution.
+        pub fn into_another_type<T2>(&self) -> GenericQuery<T2> {
+            match &self {
+                Self::Id(id, _) => GenericQuery::<T2>::Id(*id, CustomPhantomData::<T2>::new()),
+                Self::UniqueName(name, _) => GenericQuery::<T2>::UniqueName(name.clone(), CustomPhantomData::<T2>::new())
+            }
+        }
+    }
+
+    impl<T> From<&str> for GenericQuery<T> {
+        fn from(value: &str) -> GenericQuery<T> {
+            GenericQuery::<T>::UniqueName(value.to_string(), CustomPhantomData::new())
         }
     }
 
