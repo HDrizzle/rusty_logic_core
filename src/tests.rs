@@ -1,3 +1,8 @@
+use crate::prelude::*;
+use crate::basic_components;
+use crate::simulator::CircuitWidePinReference;
+use crate::simulator::ComponentPinReference;
+
 #[test]
 fn logic_state_merge() {
     use crate::simulator::{merge_logic_states, LogicState};
@@ -21,4 +26,37 @@ fn logic_state_merge() {
     // Successful merging
     assert_eq!(merge_logic_states(LogicState::Driven(false), LogicState::Driven(false)), LogicState::Driven(false));
     assert_eq!(merge_logic_states(LogicState::Driven(true), LogicState::Driven(true)), LogicState::Driven(true));
+}
+
+#[test]
+fn basic_sim_and_gate() {
+    let mut circuit = LogicCircuit::new(
+        vec![
+            Box::<dyn LogicDevice>::new(basic_components::GateAnd::new(IntV2(0, 0), "and", FourWayDir::default()))
+        ].into(),
+        vec![
+            LogicConnectionPin::new(IntV2(0, 0), FourWayDir::default(), 1.0, "a"),
+            LogicConnectionPin::new(IntV2(0, 0), FourWayDir::default(), 1.0, "b"),
+            LogicConnectionPin::new(IntV2(0, 0), FourWayDir::default(), 1.0, "q"),
+        ],
+        vec![
+            LogicNet::new(vec![
+                CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0.into(), "a".into())),
+                CircuitWidePinReference::ExternalConnection("a".into())
+            ]),
+            LogicNet::new(vec![
+                CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0.into(), "b".into())),
+                CircuitWidePinReference::ExternalConnection("b".into())
+            ]),
+            LogicNet::new(vec![
+                CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0.into(), "q".into())),
+                CircuitWidePinReference::ExternalConnection("q".into())
+            ]),
+        ],
+        IntV2(0, 0),
+        "test-circuit".to_string(),
+        1,
+        GenericDataset::new(),
+        "test".to_string()
+    ).unwrap();
 }

@@ -1,12 +1,13 @@
 //! Simulation inspired by CircuitVerse, UI based off of KiCad
 
-use std::marker::PhantomData;
+use std::{marker::PhantomData, ops};
 use serde::{Serialize, Deserialize};
 use nalgebra::Vector2;
 
 pub mod simulator;
 pub mod ui;
 pub mod resource_interface;
+pub mod basic_components;
 #[cfg(test)]
 pub mod tests;
 
@@ -178,6 +179,12 @@ pub mod prelude {
         }
     }
 
+    impl<T> From<u64> for GenericQuery<T> {
+        fn from(value: u64) -> GenericQuery<T> {
+            GenericQuery::<T>::id(value)
+        }
+    }
+
     impl<T> Clone for GenericQuery<T> {
         fn clone(&self) -> Self {
             match &self {
@@ -248,6 +255,58 @@ pub mod prelude {
             match self.get_item_tuple(query) {
                 Some((ref_, _)) => Some(ref_.id),
                 None => None
+            }
+        }
+    }
+    
+    impl<T> From<Vec<T>> for GenericDataset<T> {
+        fn from(value: Vec<T>) -> Self {
+            let mut items = Vec::<(GenericRef<T>, T)>::new();
+            for (i, item) in value.into_iter().enumerate() {
+                items.push((GenericRef::id(i as u64), item));
+            }
+            // Done
+            Self {
+                items
+            }
+        }
+    }
+
+    #[derive(Default, Serialize, Deserialize, Clone, Copy, PartialEq, Debug, Eq, Hash)]
+    pub struct IntV2(pub i32, pub i32);
+
+    impl IntV2 {
+        pub fn mult(&self, other: i32) -> Self {
+            Self(self.0 * other, self.1 * other)
+        }
+        pub fn to_v2(&self) -> V2 {
+            V2::new(self.0 as f32, self.1 as f32)
+        }
+    }
+
+    impl ops::Add<IntV2> for IntV2 {
+        type Output = IntV2;
+
+        fn add(self, other: Self) -> Self {
+            Self(self.0 + other.0, self.1 + other.1)
+        }
+    }
+
+    impl ops::Sub<IntV2> for IntV2 {
+        type Output = IntV2;
+
+        fn sub(self, other: IntV2) -> Self {
+            Self(self.0 - other.0, self.1 - other.1)
+        }
+    }
+
+    impl ops::Index<usize> for IntV2 {
+        type Output = i32;
+        fn index(&self, index: usize) -> &Self::Output {
+            match index {
+                0 => &self.0,
+                1 => &self.1,
+                n => panic!("IntV2 index must be 0 or 1, not {}", n)
             }
         }
     }

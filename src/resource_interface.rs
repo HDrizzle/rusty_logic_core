@@ -4,7 +4,7 @@ use std::fs;
 use crate::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json;
-use crate::simulator;
+use crate::basic_components;
 
 
 // STATICS
@@ -34,7 +34,7 @@ pub struct LogicCircuitSave {
 pub enum EnumAllLogicDevicesSave {
     /// Relative path of circuit
     SubCircuit(String),
-    GateAnd(simulator::GateAnd)
+    GateAnd(basic_components::GateAnd)
 }
 
 impl EnumAllLogicDevicesSave {

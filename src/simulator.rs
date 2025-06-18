@@ -102,6 +102,15 @@ pub fn merge_logic_states(a: LogicState, b: LogicState) -> LogicState {
 	}
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubCircuitPath(Vec<String>);
+
+impl SubCircuitPath {
+	pub fn to_string(&self) -> String {
+		self.0.join("/") + "/"
+	}
+}
+
 // Not just something that is connected, but something that is setting the voltage either high or low
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum LogicDriveSource {
@@ -110,9 +119,10 @@ pub enum LogicDriveSource {
 	/// Connection to something outside this circuit
 	ExternalConnection(GenericQuery<LogicConnectionPin>),
 	/// A set of things connected together
+	/// This also depends on context, for example the nets one either side of a sub-circuit pin would be referenced within different "namespaces"
 	Net(GenericQuery<LogicNet>),
 	/// Output of a basic logic gate, the actual transistors are not gonna be simulated
-	InternalConnection(ComponentPinReference)
+	ComponentInternal(ComponentPinReference)
 }
 
 impl LogicDriveSource {
@@ -122,16 +132,26 @@ impl LogicDriveSource {
 			Self::Global => true,
 			Self::ExternalConnection(_) => false,
 			Self::Net(_) => false,
-			Self::InternalConnection(_) => true
+			Self::ComponentInternal(_) => true
 		}
 	}
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GlobalSourceReference {
+	/// Pin of top level circuit, which always takes its inputs from Global
+	Global(GenericQuery<LogicConnectionPin>),
+	/// Output from basic logic component
+	/// 0. Vec of strings, each one a sub-circuit of the last
+	/// 1. Component reference within the previously given circuit
+	ComponentInternal(SubCircuitPath, ComponentPinReference)
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LogicNet {
 	connections: Vec<CircuitWidePinReference>,
-	sources: Vec<LogicDriveSource>,
-	state: LogicState
+	pub sources: Vec<GlobalSourceReference>,
+	pub state: LogicState
 }
 
 impl LogicNet {
@@ -144,36 +164,38 @@ impl LogicNet {
 			state: LogicState::Floating
 		}
 	}
-	fn resolve_sources(&self, self_ancestors: &AncestryStack, self_id: u64, caller_ancestors: &AncestryStack, caller_id: u64) -> Vec<(LogicDriveSource, LogicState)> {
+	/// Goes "down the rabbit hole" and finds everything that this net is connected to, and only takes logic states from global inputs and basic component outputs
+	/// Pretty sure it can't get stuck in a recursive loop
+	fn resolve_sources(&self, self_ancestors: &AncestryStack, self_id: u64, caller_history: &Vec<(AncestryStack, u64)>) -> Vec<(GlobalSourceReference, LogicState)> {
 		// Keep history of recursion to ignore nets that have already been reached
-		if ancestors_og == ancestors_modified_with_recursion &&  {// TODO
-			return Vec::new();
+		for (caller_ancestry, caller_id) in caller_history {
+			if caller_ancestry == self_ancestors && *caller_id == self_id {
+				return Vec::new();
+			}
 		}
-		let mut out = Vec::<(LogicDriveSource, LogicState)>::new();
+		let mut new_caller_history = caller_history.clone();
+		new_caller_history.push((self_ancestors.clone(), self_id));
+		let mut out = Vec::<(GlobalSourceReference, LogicState)>::new();
 		for connection in &self.connections {
-			match ancestors.parent() {
+			match self_ancestors.parent() {
 				Some(circuit) => match connection {
 					CircuitWidePinReference::ComponentPin(component_pin_ref) => match circuit.components.get_item_tuple(&component_pin_ref.component_query.into_another_type()) {
 						Some((_, component)) => match component.query_pin(&component_pin_ref.pin_query) {
 							Some(pin) => {
 								// Check what the internal source is
-								if let Some(logic_source) = &pin.internal_source {
+								match &pin.internal_source {
 									// Check if pin is internally driven (by a sub-circuit)
-									if let LogicDriveSource::Net(child_circuit_net_query) = logic_source {
+									LogicConnectionPinInternalSource::Net(child_circuit_net_query) => {
 										let circuit = component.get_circuit();
 										match circuit.nets.get_item_tuple(child_circuit_net_query) {
-											Some((_, child_net)) => out.append(&mut child_net.resolve_sources(&ancestors.push(LogicParent::Circuit(circuit)))),
+											Some((child_net_ref, child_net)) => out.append(&mut child_net.resolve_sources(&self_ancestors.push(circuit), child_net_ref.id, &new_caller_history)),
 											None => panic!("Internal connection in circuit \"{}\" references net {:?} inside sub-circuit \"{}\", the net does not exist", circuit.get_generic().unique_name, &child_circuit_net_query, component.get_generic().unique_name)
 										}
-										continue;
-									}
+									},
 									// Check if pin is driven by a regular component
-									if let LogicDriveSource::InternalConnection(component_pin_ref) = logic_source {
-										out.push((LogicDriveSource::InternalConnection(component_pin_ref.clone()), pin.internal_state));
-										continue;
+									LogicConnectionPinInternalSource::ComponentInternal => {
+										out.push((GlobalSourceReference::ComponentInternal(self_ancestors.to_sub_circuit_path(), component_pin_ref.clone()), pin.internal_state));
 									}
-									// Other disallowed drive sources
-									panic!("Internal connection {:?} has internal logic source {:?} which is not allowed", &connection, &pin.external_source);
 								}
 							},
 							None => panic!("Net references internal pin {:?} on component \"{}\" circuit \"{}\", which doesn't exist on that component", &component_pin_ref.pin_query, component.get_generic().unique_name, circuit.get_generic().unique_name)
@@ -183,27 +205,23 @@ impl LogicNet {
 					CircuitWidePinReference::ExternalConnection(ext_conn_query) => match circuit.query_pin(&ext_conn_query) {
 						Some(pin) => {
 							// Check what the external source is
-							if let Some(logic_source) = &pin.external_source {
+							match &pin.external_source {
 								// Check if external pin is connected to net on other side
-								if let LogicDriveSource::Net(parent_circuit_net_query) = logic_source {
+								LogicConnectionPinExternalSource::Net(parent_circuit_net_query) => {
 									// External pin is connected to a net in a circuit that contains the circuit that this net is a part of
 									// Check that this net's "grandparent" is a circuit and not toplevel
-									match ancestors.grandparent() {
-										LogicParent::Toplevel(_) => panic!("External connection is connected to a net, but the parent of this circuit is toplevel, this shouldn't happen"),
-										LogicParent::Circuit(parent_circuit) => match parent_circuit.nets.get_item_tuple(parent_circuit_net_query) {
-											Some((_, parent_circuit_net)) => out.append(&mut parent_circuit_net.resolve_sources(&ancestors.trim())),
+									match self_ancestors.grandparent() {
+										Some(parent_circuit) => match parent_circuit.nets.get_item_tuple(parent_circuit_net_query) {
+											Some((parent_net_ref, parent_circuit_net)) => out.append(&mut parent_circuit_net.resolve_sources(&self_ancestors.trim(), parent_net_ref.id, &new_caller_history)),
 											None => panic!("External connection is referencing a net ({:?}) which does not exist in this circuit's parent", &parent_circuit_net_query)
-										}
+										},
+										None => panic!("External connection is connected to a net, but the parent of this circuit is toplevel, this shouldn't happen")
 									}
-									continue;
 								}
 								// Check if it is connected to a global pin
-								if let LogicDriveSource::Global = logic_source {
-									out.push((LogicDriveSource::Global, pin.external_state));
-									continue;
+								LogicConnectionPinExternalSource::Global => {
+									out.push((GlobalSourceReference::Global(ext_conn_query.clone()), pin.external_state));
 								}
-								// Other disallowed drive sources
-								panic!("External connection {:?} has external logic source {:?} which is not allowed", &connection, &pin.external_source);
 							}
 						},
 						None => panic!("Net references external connection {:?} which is invalid", connection)
@@ -215,9 +233,9 @@ impl LogicNet {
 		// Done
 		out
 	}
-	pub fn update_state(&mut self, ancestors: &AncestryStack) {
-		let sources_raw = self.resolve_sources(ancestors);
-		let mut sources = Vec::<LogicDriveSource>::new();
+	pub fn update_state(&self, ancestors: &AncestryStack, self_id: u64) -> (LogicState, Vec<GlobalSourceReference>) {
+		let sources_raw = self.resolve_sources(ancestors, self_id, &Vec::new());
+		let mut sources = Vec::<GlobalSourceReference>::new();
 		let mut new_state = LogicState::Floating;
 		// Go through and remove any logic states that are floating
 		for (source, state) in sources_raw {
@@ -226,40 +244,60 @@ impl LogicNet {
 				new_state = merge_logic_states(new_state, state);
 			}
 		}
-		self.state = new_state;
-		self.sources = sources;
+		// Done
+		(new_state, sources)
 	}
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub enum LogicConnectionPinExternalSource {
+	Net(GenericQuery<LogicNet>),
+	#[default]
+	Global
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub enum LogicConnectionPinInternalSource {
+	Net(GenericQuery<LogicNet>),
+	#[default]
+	ComponentInternal
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LogicConnectionPin {
-	internal_source: Option<LogicDriveSource>,
+	internal_source: Option<LogicConnectionPinInternalSource>,
 	internal_state: LogicState,
-	external_source: Option<LogicDriveSource>,
+	external_source: Option<LogicConnectionPinExternalSource>,
 	external_state: LogicState,
-	relative_start_grid: V2,
+	relative_end_grid: IntV2,
 	direction: FourWayDir,
+	/// Usually 1, may be something else if theres a curve on an OR input or something
 	length: f32,
 	name: String
 }
 
 impl LogicConnectionPin {
-	pub fn set_drive_internal(&mut self, state: LogicState, source: LogicDriveSource) {
-		if !state.is_floating() {
-			self.internal_source = Some(source);
+	pub fn new(
+		relative_end_grid: IntV2,
+		direction: FourWayDir,
+		length: f32,
+		name: &str
+	) -> Self {
+		Self {
+			internal_source: None,
+			internal_state: LogicState::Floating,
+			external_source: None,
+			external_state: LogicState::Floating,
+			relative_end_grid,
+			direction,
+			length,
+			name: name.to_string()
 		}
-		else {
-			self.internal_source = None;
-		}
+	}
+	pub fn set_drive_internal(&mut self, state: LogicState) {
 		self.internal_state = state;
 	}
-	pub fn set_drive_external(&mut self, state: LogicState, source: LogicDriveSource) {
-		if !state.is_floating() {
-			self.external_source = Some(source);
-		}
-		else {
-			self.external_source = None;
-		}
+	pub fn set_drive_external(&mut self, state: LogicState) {
 		self.external_state = state;
 	}
 	pub fn state(&self) -> LogicState {
@@ -292,16 +330,26 @@ pub struct ComponentPinReference {
 	pin_query: GenericQuery<LogicConnectionPin>
 }
 
+impl ComponentPinReference {
+	pub fn new(component_query: GenericQuery<()>, pin_query: GenericQuery<LogicConnectionPin>) -> Self {
+		Self {
+			component_query,
+			pin_query
+		}
+	}
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Wire {
 	segments: Vec<(V2, V2)>,
-	net: GenericQuery<LogicNet>
+	net: GenericQuery<LogicNet>,
+	state: LogicState
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogicDeviceGeneric {
 	pub pins: GenericDataset<LogicConnectionPin>,
-	position_grid: V2,
+	position_grid: IntV2,
 	unique_name: String,
 	sub_compute_cycles: usize,
 	rotation: FourWayDir
@@ -310,7 +358,7 @@ pub struct LogicDeviceGeneric {
 impl LogicDeviceGeneric {
 	pub fn new(
 		pins: GenericDataset<LogicConnectionPin>,
-		position_grid: V2,
+		position_grid: IntV2,
 		unique_name: String,
 		sub_compute_cycles: usize,
 		rotation: FourWayDir
@@ -333,11 +381,11 @@ pub trait LogicDevice: Debug {
 	// TODO: Add a draw method
 	fn get_generic(&self) -> &LogicDeviceGeneric;
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric;
-	fn compute_private(&mut self, ancestors: &AncestryStack);
+	fn compute_step(&mut self, ancestors: &AncestryStack);
 	fn save(&self) -> Result<EnumAllLogicDevicesSave, String>;
 	fn compute(&mut self, ancestors: &AncestryStack) {
 		for _ in 0..self.get_generic().sub_compute_cycles {
-			self.compute_private(ancestors);
+			self.compute_step(ancestors);
 		}
 	}
 	fn get_circuit(&self) -> &LogicCircuit {
@@ -349,12 +397,11 @@ pub trait LogicDevice: Debug {
 	fn set_pin_external_state(
 		&mut self,
 		pin_query: &GenericQuery<LogicConnectionPin>,
-		state: LogicState,
-		external_driver: LogicDriveSource// Either Global or Logic net
+		state: LogicState
 	) -> Result<(), String> {
 		let generic: &mut LogicDeviceGeneric = self.get_generic_mut();
 		let pin: &mut LogicConnectionPin = generic.pins.get_item_mut(pin_query).expect(&format!("Pin query {:?} does not work on logic device \"{}\"", pin_query, generic.unique_name));
-		pin.set_drive_external(state, external_driver);
+		pin.set_drive_external(state);
 		Ok(())
 	}
 	fn query_pin(&self, pin_query: &GenericQuery<LogicConnectionPin>) -> Option<&LogicConnectionPin> {
@@ -372,8 +419,8 @@ pub trait LogicDevice: Debug {
 		}
 	}
 	fn set_all_pin_states(&mut self, states: Vec<(GenericQuery<LogicConnectionPin>, LogicState, LogicDriveSource)>) -> Result<(), String> {
-		for (pin_query, state, source) in states {
-			self.set_pin_external_state(&pin_query, state, source)?;
+		for (pin_query, state, _source) in states {
+			self.set_pin_external_state(&pin_query, state)?;
 		}
 		Ok(())
 	}
@@ -418,6 +465,17 @@ impl<'a> AncestryStack<'a> {
 		out.0.push(new_node);
 		out
 	}
+	/// IMPORTANT: The first entry here will be ignored when creating the path because it would otherwise be redundant
+	pub fn to_sub_circuit_path(&self) -> SubCircuitPath {
+		let mut out = Vec::<String>::new();
+		for (i, circuit) in self.0.iter().enumerate() {
+			if i ==  0 {
+				continue;
+			}
+			out.push(circuit.get_generic().unique_name.clone());
+		}
+		SubCircuitPath(out)
+	}
 }
 
 impl<'a> PartialEq for AncestryStack<'a> {
@@ -445,7 +503,7 @@ impl LogicCircuit {
 		components: GenericDataset<Box<dyn LogicDevice>>,
 		external_connections: GenericDataset<LogicConnectionPin>,
 		nets: GenericDataset<LogicNet>,
-		position_grid: V2,
+		position_grid: IntV2,
 		unique_name: String,
 		sub_compute_cycles: usize,
 		wires: GenericDataset<Wire>,
@@ -500,12 +558,26 @@ impl LogicDevice for LogicCircuit {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic_device
 	}
-	fn compute_private(&mut self, ancestors_above: &AncestryStack) {
-		// TODO: Get around borrow checker
-		//let ancestors = ancestors_above.push(LogicParent::Circuit(&self));
+	fn compute_step(&mut self, ancestors_above: &AncestryStack) {
+		let ancestors = ancestors_above.push(&self);
 		// Update net states
-		for (_, net) in &mut self.nets.items {
-			net.update_state(&ancestors_above);
+		let mut new_net_states: Vec<(LogicState, Vec<GlobalSourceReference>)> = Vec::new();
+		for (net_ref, net) in &self.nets.items {
+			new_net_states.push(net.update_state(&ancestors, net_ref.id));
+		}
+		for (i, (_, net)) in &mut self.nets.items.iter_mut().enumerate() {
+			net.state = new_net_states[i].0;
+			net.sources = new_net_states[i].1.clone();
+		}
+		// Update pin & wire states from nets
+		for (wire_ref, wire) in &mut self.wires.items {
+			wire.state = self.nets.get_item_tuple(&wire.net).expect(&format!("Wire {:?} has invalid net query {:?}", wire_ref, &wire.net)).1.state;
+		}
+		for (pin_ref, pin) in &mut self.generic_device.pins.items {
+			match &pin.internal_source {
+				LogicConnectionPinInternalSource::Net(net_query) => pin.set_drive_internal(self.nets.get_item_tuple(net_query).expect(&format!("External connection pin {:?} has invalid net query {:?}", pin_ref, net_query)).1.state),
+				LogicConnectionPinInternalSource::ComponentInternal => panic!("External connection pin {:?} for circuit \"{}\" has the internal source as ComponentInternal which shouldn't happen", pin_ref, &self.generic_device.unique_name)
+			}
 		}
 	}
 	fn save(&self) -> Result<EnumAllLogicDevicesSave, String> {
@@ -531,23 +603,5 @@ impl LogicDevice for LogicCircuit {
 	}
 	fn get_circuit_mut(&mut self) -> &mut Self {
 		self
-	}
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct GateAnd(LogicDeviceGeneric);
-
-impl LogicDevice for GateAnd {
-	fn get_generic(&self) -> &LogicDeviceGeneric {
-		&self.0
-	}
-	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
-		&mut self.0
-	}
-	fn compute_private(&mut self, _ancestors: &AncestryStack) {
-		self.set_pin_internal_state_panic(&"q".into(), (self.get_pin_state_panic(&"a".into()).to_bool() && self.get_pin_state_panic(&"b".into()).to_bool()).into());
-	}
-	fn save(&self) -> Result<EnumAllLogicDevicesSave, String> {
-		Ok(EnumAllLogicDevicesSave::GateAnd(self.clone()))
 	}
 }
