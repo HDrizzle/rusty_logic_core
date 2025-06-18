@@ -1,5 +1,6 @@
 use crate::prelude::*;
 use crate::basic_components;
+use crate::simulator::AncestryStack;
 use crate::simulator::CircuitWidePinReference;
 use crate::simulator::ComponentPinReference;
 
@@ -32,13 +33,13 @@ fn logic_state_merge() {
 fn basic_sim_and_gate() {
     let mut circuit = LogicCircuit::new(
         vec![
-            Box::<dyn LogicDevice>::new(basic_components::GateAnd::new(IntV2(0, 0), "and", FourWayDir::default()))
+            Box::new(basic_components::GateAnd::new(IntV2(0, 0), "and", FourWayDir::default())).into_box()
         ].into(),
         vec![
-            LogicConnectionPin::new(IntV2(0, 0), FourWayDir::default(), 1.0, "a"),
-            LogicConnectionPin::new(IntV2(0, 0), FourWayDir::default(), 1.0, "b"),
-            LogicConnectionPin::new(IntV2(0, 0), FourWayDir::default(), 1.0, "q"),
-        ],
+            (LogicConnectionPin::new(IntV2(0, 0), FourWayDir::default(), 1.0), "a"),
+            (LogicConnectionPin::new(IntV2(0, 0), FourWayDir::default(), 1.0), "b"),
+            (LogicConnectionPin::new(IntV2(0, 0), FourWayDir::default(), 1.0), "q"),
+        ].into(),
         vec![
             LogicNet::new(vec![
                 CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0.into(), "a".into())),
@@ -52,11 +53,19 @@ fn basic_sim_and_gate() {
                 CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0.into(), "q".into())),
                 CircuitWidePinReference::ExternalConnection("q".into())
             ]),
-        ],
+        ].into(),
         IntV2(0, 0),
         "test-circuit".to_string(),
         1,
         GenericDataset::new(),
         "test".to_string()
     ).unwrap();
+    circuit.set_pin_external_state(&"a".into(), true.into()).unwrap();
+    circuit.set_pin_external_state(&"b".into(), true.into()).unwrap();
+    circuit.compute(&AncestryStack::new());
+    circuit.compute(&AncestryStack::new());
+    circuit.compute(&AncestryStack::new());
+    circuit.compute(&AncestryStack::new());
+    circuit.compute(&AncestryStack::new());
+    assert_eq!(circuit.get_pin_state_panic(&"q".into()), true.into());
 }

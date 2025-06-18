@@ -81,6 +81,13 @@ pub mod prelude {
     }
 
     impl<T> GenericRef<T> {
+        pub fn new(id: u64, unique_name_opt: Option<String>) -> Self {
+            Self {
+                id,
+                unique_name_opt,
+                _phantom: PhantomData{}
+            }
+        }
         pub fn id(id: u64) -> Self {
             Self {
                 id,
@@ -264,6 +271,19 @@ pub mod prelude {
             let mut items = Vec::<(GenericRef<T>, T)>::new();
             for (i, item) in value.into_iter().enumerate() {
                 items.push((GenericRef::id(i as u64), item));
+            }
+            // Done
+            Self {
+                items
+            }
+        }
+    }
+
+    impl<T> From<Vec<(T, &str)>> for GenericDataset<T> {
+        fn from(value: Vec<(T, &str)>) -> Self {
+            let mut items = Vec::<(GenericRef<T>, T)>::new();
+            for (i, (item, name)) in value.into_iter().enumerate() {
+                items.push((GenericRef::new(i as u64, Some(name.to_string())), item));
             }
             // Done
             Self {

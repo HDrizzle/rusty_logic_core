@@ -13,9 +13,9 @@ impl GateAnd {
     ) -> Self {
         Self(LogicDeviceGeneric::new(
             vec![
-                LogicConnectionPin::new(IntV2(-2, -1), FourWayDir::W, 1.0, "a"),
-                LogicConnectionPin::new(IntV2(-2, 1), FourWayDir::W, 1.0, "b"),
-                LogicConnectionPin::new(IntV2(2, 0), FourWayDir::E, 1.0, "q"),
+                (LogicConnectionPin::new(IntV2(-2, -1), FourWayDir::W, 1.0), "a"),
+                (LogicConnectionPin::new(IntV2(-2, 1), FourWayDir::W, 1.0), "b"),
+                (LogicConnectionPin::new(IntV2(2, 0), FourWayDir::E, 1.0), "q"),
             ].into(),
             position_grid,
             unique_name.to_owned(),
