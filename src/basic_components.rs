@@ -1,6 +1,6 @@
 use crate::prelude::*;
 use serde::{Deserialize, Serialize};
-use crate::simulator::AncestryStack;
+use crate::simulator::{AncestryStack, LogicConnectionPinInternalSource};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GateAnd(LogicDeviceGeneric);
@@ -13,9 +13,9 @@ impl GateAnd {
     ) -> Self {
         Self(LogicDeviceGeneric::new(
             vec![
-                (LogicConnectionPin::new(IntV2(-2, -1), FourWayDir::W, 1.0), "a"),
-                (LogicConnectionPin::new(IntV2(-2, 1), FourWayDir::W, 1.0), "b"),
-                (LogicConnectionPin::new(IntV2(2, 0), FourWayDir::E, 1.0), "q"),
+                (LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-2, -1), FourWayDir::W, 1.0), "a"),
+                (LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-2, 1), FourWayDir::W, 1.0), "b"),
+                (LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(2, 0), FourWayDir::E, 1.0), "q"),
             ].into(),
             position_grid,
             unique_name.to_owned(),

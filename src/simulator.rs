@@ -1,6 +1,6 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{fmt::Debug, fs};
+use std::{fmt::Debug, fs, cell::RefCell};
 use serde::{Deserialize, Serialize};
 use crate::{prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
@@ -180,17 +180,18 @@ impl LogicNet {
 			match self_ancestors.parent() {
 				Some(circuit) => match connection {
 					CircuitWidePinReference::ComponentPin(component_pin_ref) => match circuit.components.get_item_tuple(&component_pin_ref.component_query.into_another_type()) {
-						Some((_, component)) => match component.query_pin(&component_pin_ref.pin_query) {
+						Some((_, component_cell)) => match component_cell.borrow().query_pin(&component_pin_ref.pin_query) {
 							Some(pin) => {
 								// Check what the internal source is
 								if let Some(source) = &pin.internal_source {
 									match source {
 										// Check if pin is internally driven (by a sub-circuit)
 										LogicConnectionPinInternalSource::Net(child_circuit_net_query) => {
+											let component = component_cell.borrow();
 											let circuit = component.get_circuit();
 											match circuit.nets.get_item_tuple(child_circuit_net_query) {
 												Some((child_net_ref, child_net)) => out.append(&mut child_net.resolve_sources(&self_ancestors.push(circuit), child_net_ref.id, &new_caller_history)),
-												None => panic!("Internal connection in circuit \"{}\" references net {:?} inside sub-circuit \"{}\", the net does not exist", circuit.get_generic().unique_name, &child_circuit_net_query, component.get_generic().unique_name)
+												None => panic!("Internal connection in circuit \"{}\" references net {:?} inside sub-circuit \"{}\", the net does not exist", circuit.get_generic().unique_name, &child_circuit_net_query, component_cell.borrow().get_generic().unique_name)
 											}
 										},
 										// Check if pin is driven by a regular component
@@ -200,7 +201,7 @@ impl LogicNet {
 									}
 								}
 							},
-							None => panic!("Net references internal pin {:?} on component \"{}\" circuit \"{}\", which doesn't exist on that component", &component_pin_ref.pin_query, component.get_generic().unique_name, circuit.get_generic().unique_name)
+							None => panic!("Net references internal pin {:?} on component \"{}\" circuit \"{}\", which doesn't exist on that component", &component_pin_ref.pin_query, component_cell.borrow().get_generic().unique_name, circuit.get_generic().unique_name)
 						},
 						None => panic!("Net references internal pin on component {:?} circuit \"{}\", which doesn't exist in the circuit", &component_pin_ref.component_query, circuit.get_generic().unique_name)
 					},
@@ -251,26 +252,46 @@ impl LogicNet {
 		// Done
 		(new_state, sources)
 	}
-	pub fn add_component_connection_if_missing(&mut self, comp_ref: &GenericRef<Box<dyn LogicDevice>>, pin_ref: &GenericRef<LogicConnectionPin>) {
-		for conn in self.connections {
+	pub fn add_component_connection_if_missing(&mut self, comp_ref: &GenericRef<RefCell<Box<dyn LogicDevice>>>, pin_ref: &GenericRef<LogicConnectionPin>) {
+		for conn in &self.connections {
 			match conn {
 				CircuitWidePinReference::ExternalConnection(_) => {},
 				CircuitWidePinReference::ComponentPin(test_comp_pin_ref) => {
-					if 
+					// If the connection already exists, return
+					if comp_ref.query_matches(&test_comp_pin_ref.component_query.into_another_type()) && pin_ref.query_matches(&test_comp_pin_ref.pin_query) {
+						return;
+					}
 				}
 			}
 		}
+		// Hasn't returned yet, add connection
+		self.connections.push(CircuitWidePinReference::ComponentPin(ComponentPinReference::new(comp_ref.to_query().into_another_type(), pin_ref.to_query())));
+	}
+	pub fn add_external_connection_if_missing(&mut self, pin_ref: &GenericRef<LogicConnectionPin>) {
+		for conn in &self.connections {
+			match conn {
+				CircuitWidePinReference::ExternalConnection(test_pin_query) => {
+					// If the connection already exists, return
+					if pin_ref.query_matches(&test_pin_query) {
+						return;
+					}
+				},
+				CircuitWidePinReference::ComponentPin(_) => {}
+			}
+		}
+		// Hasn't returned yet, add connection
+		self.connections.push(CircuitWidePinReference::ExternalConnection(pin_ref.to_query()));
 	}
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub enum LogicConnectionPinExternalSource {
 	Net(GenericQuery<LogicNet>),
 	#[default]
 	Global
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub enum LogicConnectionPinInternalSource {
 	Net(GenericQuery<LogicNet>),
 	#[default]
@@ -279,9 +300,9 @@ pub enum LogicConnectionPinInternalSource {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LogicConnectionPin {
-	internal_source: Option<LogicConnectionPinInternalSource>,
+	pub internal_source: Option<LogicConnectionPinInternalSource>,
 	internal_state: LogicState,
-	external_source: Option<LogicConnectionPinExternalSource>,
+	pub external_source: Option<LogicConnectionPinExternalSource>,
 	external_state: LogicState,
 	relative_end_grid: IntV2,
 	direction: FourWayDir,
@@ -291,14 +312,16 @@ pub struct LogicConnectionPin {
 
 impl LogicConnectionPin {
 	pub fn new(
+		internal_source: Option<LogicConnectionPinInternalSource>,
+		external_source: Option<LogicConnectionPinExternalSource>,
 		relative_end_grid: IntV2,
 		direction: FourWayDir,
 		length: f32
 	) -> Self {
 		Self {
-			internal_source: None,
+			internal_source,
 			internal_state: LogicState::Floating,
-			external_source: None,
+			external_source,
 			external_state: LogicState::Floating,
 			relative_end_grid,
 			direction,
@@ -509,15 +532,15 @@ impl<'a> PartialEq for AncestryStack<'a> {
 #[derive(Debug)]
 pub struct LogicCircuit {
 	generic_device: LogicDeviceGeneric,
-	components: GenericDataset<Box<dyn LogicDevice>>,
-	nets: GenericDataset<LogicNet>,
-	wires: GenericDataset<Wire>,
+	pub components: GenericDataset<RefCell<Box<dyn LogicDevice>>>,
+	pub nets: GenericDataset<LogicNet>,
+	pub wires: GenericDataset<Wire>,
 	save_path: String
 }
 
 impl LogicCircuit {
 	pub fn new(
-		components: GenericDataset<Box<dyn LogicDevice>>,
+		components_not_celled: GenericDataset<Box<dyn LogicDevice>>,
 		external_connections: GenericDataset<LogicConnectionPin>,
 		nets: GenericDataset<LogicNet>,
 		position_grid: IntV2,
@@ -526,6 +549,10 @@ impl LogicCircuit {
 		wires: GenericDataset<Wire>,
 		save_path: String
 	) -> Result<Self, String> {
+		let mut components = GenericDataset::<RefCell<Box<dyn LogicDevice>>>::new();
+		for (ref_, comp) in components_not_celled.items {
+			components.items.push((ref_.into_another_type(), RefCell::new(comp)));
+		}
 		let mut new = Self {
 			generic_device: LogicDeviceGeneric::new(
 				external_connections,
@@ -539,14 +566,14 @@ impl LogicCircuit {
 			wires,
 			save_path
 		};
-		new.recompute_connections()?;
+		new.recompute_connections();
 		Ok(new)
 	}
 	pub fn from_save(save: LogicCircuitSave, save_path: String) -> Result<Self, String> {
-		let mut components = GenericDataset::<Box<dyn LogicDevice>>::new();
+		let mut components = GenericDataset::<RefCell<Box<dyn LogicDevice>>>::new();
 		// Init compnents
 		for (ref_, save_comp) in save.components.items {
-			components.items.push((ref_.into_another_type(), EnumAllLogicDevicesSave::to_dynamic(save_comp)?));
+			components.items.push((ref_.into_another_type(), RefCell::new(EnumAllLogicDevicesSave::to_dynamic(save_comp)?)));
 		}
 		Ok(Self {
 			generic_device: save.generic_device,
@@ -556,10 +583,13 @@ impl LogicCircuit {
 			save_path
 		})
 	}
-	pub fn resolve_circuit_pin_ref(&self, ref_: &CircuitWidePinReference) -> Option<&LogicConnectionPin> {
+	/*pub fn resolve_circuit_pin_ref(&self, ref_: &CircuitWidePinReference) -> Option<&LogicConnectionPin> {
 		match ref_ {
 			CircuitWidePinReference::ComponentPin(component_pin_ref) => match self.components.get_item_tuple(&component_pin_ref.component_query.into_another_type()) {
-				Some((_, component)) => component.query_pin(&component_pin_ref.pin_query),
+				Some((_, component)) => {
+					let component_uncelled = component.borrow();
+					component_uncelled.query_pin(&component_pin_ref.pin_query)
+				},
 				None => None
 			},
 			CircuitWidePinReference::ExternalConnection(ext_conn_query) => match self.generic_device.pins.get_item_tuple(&ext_conn_query) {
@@ -576,9 +606,9 @@ impl LogicCircuit {
 			},
 			CircuitWidePinReference::ExternalConnection(ext_conn_query) => self.generic_device.pins.get_item_mut(&ext_conn_query)
 		}
-	}
+	}*/
 	/// Nets reference connections to pins and pins may reference nets, this function makes sure each "connection" is either connected both ways or deleted if one end is missing
-	pub fn recompute_connections(&mut self) -> Result<(), String> {
+	pub fn recompute_connections(&mut self) {
 		// Net -> Pin
 		let mut net_to_pin_connections_to_drop = Vec::<(usize, Vec<usize>)>::new();
 		for (net_i, (net_ref, net)) in self.nets.items.iter().enumerate() {
@@ -586,7 +616,7 @@ impl LogicCircuit {
 			for (conn_i, net_connection) in net.connections.iter().enumerate() {
 				match net_connection {
 					CircuitWidePinReference::ComponentPin(component_pin_ref) => match self.components.get_item_mut(&component_pin_ref.component_query.into_another_type()) {
-						Some(component) => match component.query_pin_mut(&component_pin_ref.pin_query) {
+						Some(component) => match component.borrow_mut().query_pin_mut(&component_pin_ref.pin_query) {
 							Some(pin) => {
 								pin.external_source = Some(LogicConnectionPinExternalSource::Net(net_ref.to_query()));
 							}
@@ -613,13 +643,13 @@ impl LogicCircuit {
 		// Component pin -> Net
 		let mut pin_to_net_connections_to_drop = Vec::<CircuitWidePinReference>::new();
 		for (comp_ref, comp) in &self.components.items {
-			for (pin_ref, pin) in &comp.get_generic().pins.items {
+			for (pin_ref, pin) in &comp.borrow().get_generic().pins.items {
 				if let Some(source) = &pin.external_source {
-					let ref_to_this_pin = CircuitWidePinReference::ComponentPin(ComponentPinReference::new(comp_ref.to_query(), pin_ref.to_query()));
+					let ref_to_this_pin = CircuitWidePinReference::ComponentPin(ComponentPinReference::new(comp_ref.to_query().into_another_type(), pin_ref.to_query()));
 					match source {
 						LogicConnectionPinExternalSource::Global => panic!("Pin {:?} of component {:?} has external source 'Global' which doesn't make sense", &pin_ref, &comp_ref),
 						LogicConnectionPinExternalSource::Net(net_query) => match self.nets.get_item_mut(net_query) {
-							Some(net) => net.add_connection_if_missing(ref_to_this_pin.clone()),
+							Some(net) => net.add_component_connection_if_missing(comp_ref, pin_ref),
 							None => pin_to_net_connections_to_drop.push(ref_to_this_pin.clone()),
 						}
 					}
@@ -627,8 +657,28 @@ impl LogicCircuit {
 			}
 		}
 		// External pin -> Net
-		// TODO
-		Ok(())
+		for (pin_ref, pin) in &self.generic_device.pins.items {
+			if let Some(source) = &pin.internal_source {
+				match source {
+					LogicConnectionPinInternalSource::ComponentInternal => panic!("External connection pin {:?} of circuit {:?} has internal source 'ComponentInternal' which doesn't make sense", &pin_ref, &self.generic_device.unique_name),
+					LogicConnectionPinInternalSource::Net(net_query) => match self.nets.get_item_mut(&net_query) {
+						Some(net) => net.add_external_connection_if_missing(pin_ref),
+						None => pin_to_net_connections_to_drop.push(CircuitWidePinReference::ExternalConnection(pin_ref.to_query())),
+					}
+				}
+			}
+		}
+		// Remove broken Pin -> Net connections
+		for pin_ref in pin_to_net_connections_to_drop {
+			match pin_ref {
+				CircuitWidePinReference::ComponentPin(component_pin_ref) => {
+					self.components.get_item_mut(&component_pin_ref.component_query.into_another_type()).expect(&format!("Component query {:?} from net connections to delete is invalid", &component_pin_ref.component_query)).borrow_mut().query_pin_mut(&component_pin_ref.pin_query).expect(&format!("Pin query {:?} for component {:?} from net connections to delete is invalid", &component_pin_ref.pin_query, &component_pin_ref.component_query)).external_source = None;
+				},
+				CircuitWidePinReference::ExternalConnection(ext_conn_query) => {
+					self.generic_device.pins.get_item_mut(&ext_conn_query).expect(&format!("External connection query {:?} from net connections to delete is invalid", &ext_conn_query)).internal_source = None;
+				}
+			}
+		}
 	}
 }
 
@@ -646,14 +696,17 @@ impl LogicDevice for LogicCircuit {
 		for (net_ref, net) in &self.nets.items {
 			new_net_states.push(net.update_state(&ancestors, net_ref.id));
 		}
+		drop(ancestors);
 		for (i, (_, net)) in &mut self.nets.items.iter_mut().enumerate() {
 			net.state = new_net_states[i].0;
 			net.sources = new_net_states[i].1.clone();
 		}
 		// Update pin & wire states from nets
+		// Wires
 		for (wire_ref, wire) in &mut self.wires.items {
 			wire.state = self.nets.get_item_tuple(&wire.net).expect(&format!("Wire {:?} has invalid net query {:?}", wire_ref, &wire.net)).1.state;
 		}
+		// External connection pins
 		for (pin_ref, pin) in &mut self.generic_device.pins.items {
 			if let Some(source) = &pin.internal_source {
 				match source {
@@ -662,13 +715,30 @@ impl LogicDevice for LogicCircuit {
 				}
 			}
 		}
-		// TODO: Component pins
+		// Component pins, and propagate through components
+		for (comp_ref, comp) in &self.components.items {
+			for (pin_ref, pin) in &mut comp.borrow_mut().get_generic_mut().pins.items {
+				if let Some(source) = &pin.external_source {
+					match source {
+						LogicConnectionPinExternalSource::Global => panic!("Pin {:?} of component {:?} has external source 'Global' which doesn't make sense", &pin_ref, &comp_ref),
+						LogicConnectionPinExternalSource::Net(net_query) => {
+							pin.external_state = self.nets.get_item_mut(&net_query).expect(&format!("Pin {:?} of component {:?} references net {:?} which doesn't exist", &pin_ref, &comp_ref, &net_query)).state;
+						}
+					}
+				}
+			}
+		}
+		// THIS GOES LAST, has to be seperate loop then before
+		let ancestors = ancestors_above.push(&self);
+		for (_, comp) in &self.components.items {
+			comp.borrow_mut().compute(&ancestors);
+		}
 	}
 	fn save(&self) -> Result<EnumAllLogicDevicesSave, String> {
 		// Convert components to enum variants to be serialized
 		let mut components_save = GenericDataset::<EnumAllLogicDevicesSave>::new();
 		for (ref_, component) in &self.components.items {
-			components_save.items.push((ref_.into_another_type(), component.save()?));
+			components_save.items.push((ref_.into_another_type(), component.borrow().save()?));
 		}
 		// First, actually save this circuit
 		let save = LogicCircuitSave {
