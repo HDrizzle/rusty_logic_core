@@ -38,4 +38,7 @@ impl LogicDevice for GateAnd {
 	fn save(&self) -> Result<EnumAllLogicDevicesSave, String> {
 		Ok(EnumAllLogicDevicesSave::GateAnd(self.clone()))
 	}
+    fn draw<'a>(&self, draw: ComponentDrawInfo<'a>) {
+        // TODO
+    }
 }

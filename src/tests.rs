@@ -27,16 +27,15 @@ fn logic_state_merge() {
     assert_eq!(merge_logic_states(LogicState::Driven(true), LogicState::Driven(true)), LogicState::Driven(true));
 }
 
-#[test]
-fn basic_sim_and_gate() {
-    let mut circuit = LogicCircuit::new(
+fn create_simple_circuit() -> LogicCircuit {
+    LogicCircuit::new(
         vec![
             Box::new(basic_components::GateAnd::new(IntV2(0, 0), "and", FourWayDir::default())).into_box()
         ].into(),
         vec![
-            (LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(0, 0), FourWayDir::default(), 1.0), "a"),
-            (LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(0, 0), FourWayDir::default(), 1.0), "b"),
-            (LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(0, 0), FourWayDir::default(), 1.0), "q"),
+            (LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(-3, -1), FourWayDir::default(), 1.0), "a"),
+            (LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(-3, 1), FourWayDir::default(), 1.0), "b"),
+            (LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(3, 0), FourWayDir::default(), 1.0), "q"),
         ].into(),
         vec![
             LogicNet::new(vec![
@@ -57,7 +56,12 @@ fn basic_sim_and_gate() {
         1,
         GenericDataset::new(),
         "test".to_string()
-    ).unwrap();
+    ).unwrap()
+}
+
+#[test]
+fn basic_sim_and_gate() {
+    let mut circuit = create_simple_circuit();
     // Connections computed correctly
     assert_eq!(circuit.get_generic().pins.items[0].1.internal_source, Some(LogicConnectionPinInternalSource::Net(GenericQuery::id(0))));
     assert_eq!(circuit.get_generic().pins.items[1].1.internal_source, Some(LogicConnectionPinInternalSource::Net(GenericQuery::id(1))));
@@ -73,4 +77,19 @@ fn basic_sim_and_gate() {
     circuit.compute(&AncestryStack::new());
     // AND gate output
     assert_eq!(circuit.get_pin_state_panic(&"q".into()), true.into());
+    // Set global inputs
+    circuit.set_pin_external_state(&"a".into(), false.into()).unwrap();
+    // Compute
+    circuit.compute(&AncestryStack::new());
+    circuit.compute(&AncestryStack::new());
+    // AND gate output
+    assert_eq!(circuit.get_pin_state_panic(&"q".into()), false.into());
+    // Set global inputs
+    circuit.set_pin_external_state(&"a".into(), true.into()).unwrap();
+    circuit.set_pin_external_state(&"b".into(), false.into()).unwrap();
+    // Compute
+    circuit.compute(&AncestryStack::new());
+    circuit.compute(&AncestryStack::new());
+    // AND gate output
+    assert_eq!(circuit.get_pin_state_panic(&"q".into()), false.into());
 }

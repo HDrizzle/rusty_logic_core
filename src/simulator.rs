@@ -304,10 +304,10 @@ pub struct LogicConnectionPin {
 	internal_state: LogicState,
 	pub external_source: Option<LogicConnectionPinExternalSource>,
 	external_state: LogicState,
-	relative_end_grid: IntV2,
-	direction: FourWayDir,
+	pub relative_end_grid: IntV2,
+	pub direction: FourWayDir,
 	/// Usually 1, may be something else if theres a curve on an OR input or something
-	length: f32
+	pub length: f32
 }
 
 impl LogicConnectionPin {
@@ -383,10 +383,10 @@ pub struct Wire {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogicDeviceGeneric {
 	pub pins: GenericDataset<LogicConnectionPin>,
-	position_grid: IntV2,
-	unique_name: String,
-	sub_compute_cycles: usize,
-	rotation: FourWayDir
+	pub position_grid: IntV2,
+	pub unique_name: String,
+	pub sub_compute_cycles: usize,
+	pub rotation: FourWayDir
 }
 
 impl LogicDeviceGeneric {
@@ -417,6 +417,7 @@ pub trait LogicDevice: Debug where Self: 'static {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric;
 	fn compute_step(&mut self, ancestors: &AncestryStack);
 	fn save(&self) -> Result<EnumAllLogicDevicesSave, String>;
+	fn draw<'a>(&self, draw: ComponentDrawInfo<'a>);
 	fn compute(&mut self, ancestors: &AncestryStack) {
 		for _ in 0..self.get_generic().sub_compute_cycles {
 			self.compute_step(ancestors);
@@ -531,7 +532,7 @@ impl<'a> PartialEq for AncestryStack<'a> {
 
 #[derive(Debug)]
 pub struct LogicCircuit {
-	generic_device: LogicDeviceGeneric,
+	pub generic_device: LogicDeviceGeneric,
 	pub components: GenericDataset<RefCell<Box<dyn LogicDevice>>>,
 	pub nets: GenericDataset<LogicNet>,
 	pub wires: GenericDataset<Wire>,
@@ -751,6 +752,15 @@ impl LogicDevice for LogicCircuit {
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_path), &raw_string))?;
 		// Path to save file
 		Ok(EnumAllLogicDevicesSave::SubCircuit(self.save_path.clone()))
+	}
+	fn draw<'a>(&self, draw: ComponentDrawInfo<'a>) {
+		// Wires
+		// TODO
+		// Sub componnets
+		for (_, comp) in &self.components.items {
+			let comp_pos = comp.borrow().get_generic().position_grid;
+			comp.borrow_mut().draw(draw.add_child_grid_pos(comp_pos));
+		}
 	}
 	fn get_circuit(&self) -> &Self {
 		&self

@@ -18,9 +18,13 @@ pub mod prelude {
 	// Name of this app
 	pub const APP_NAME: &str = "Rusty Logic";
     pub type V2 = Vector2<f32>;
-    pub use ui::{Styles, LogicCircuitToplevelView, App};
+    use eframe::egui::{Color32, CornerRadius};
+    pub use ui::{Styles, LogicCircuitToplevelView, App, ComponentDrawInfo};
     pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, LogicCircuit};
     pub use resource_interface::{load_file_with_better_error, EnumAllLogicDevicesSave};
+    pub fn u8_3_to_color32(in_: [u8; 3]) -> Color32 {
+        Color32::from_rgb(in_[0], in_[1], in_[2])
+    }
     #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
     pub enum FourWayDir {
         E,
@@ -329,6 +333,39 @@ pub mod prelude {
                 n => panic!("IntV2 index must be 0 or 1, not {}", n)
             }
         }
+    }
+
+    use simulator::{CircuitWidePinReference, LogicConnectionPinExternalSource, ComponentPinReference};
+    pub fn create_simple_circuit() -> LogicCircuit {
+        LogicCircuit::new(
+            vec![
+                Box::new(basic_components::GateAnd::new(IntV2(0, 0), "and", FourWayDir::default())).into_box()
+            ].into(),
+            vec![
+                (LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(-3, -1), FourWayDir::default(), 1.0), "a"),
+                (LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(-3, 1), FourWayDir::default(), 1.0), "b"),
+                (LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(3, 0), FourWayDir::default(), 1.0), "q"),
+            ].into(),
+            vec![
+                LogicNet::new(vec![
+                    CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0.into(), "a".into())),
+                    CircuitWidePinReference::ExternalConnection("a".into())
+                ]),
+                LogicNet::new(vec![
+                    CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0.into(), "b".into())),
+                    CircuitWidePinReference::ExternalConnection("b".into())
+                ]),
+                LogicNet::new(vec![
+                    CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0.into(), "q".into())),
+                    CircuitWidePinReference::ExternalConnection("q".into())
+                ]),
+            ].into(),
+            IntV2(0, 0),
+            "test-circuit".to_string(),
+            1,
+            GenericDataset::new(),
+            "test".to_string()
+        ).unwrap()
     }
 }
 
