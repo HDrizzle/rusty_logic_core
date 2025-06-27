@@ -1,6 +1,6 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{fmt::Debug, fs, cell::RefCell};
+use std::{fmt::Debug, fs, cell::RefCell, time::{Instant, Duration}, collections::HashMap};
 use serde::{Deserialize, Serialize};
 use crate::{prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
@@ -122,7 +122,9 @@ pub enum LogicDriveSource {
 	/// This also depends on context, for example the nets one either side of a sub-circuit pin would be referenced within different "namespaces"
 	Net(GenericQuery<LogicNet>),
 	/// Output of a basic logic gate, the actual transistors are not gonna be simulated
-	ComponentInternal(ComponentPinReference)
+	ComponentInternal(ComponentPinReference),
+	/// The clock source of a given circuit/sub-circuit
+	Clock(SubCircuitPath)
 }
 
 impl LogicDriveSource {
@@ -132,7 +134,8 @@ impl LogicDriveSource {
 			Self::Global => true,
 			Self::ExternalConnection(_) => false,
 			Self::Net(_) => false,
-			Self::ComponentInternal(_) => true
+			Self::ComponentInternal(_) => true,
+			Self::Clock(_) => true
 		}
 	}
 }
@@ -144,7 +147,9 @@ pub enum GlobalSourceReference {
 	/// Output from basic logic component
 	/// 0. Vec of strings, each one a sub-circuit of the last
 	/// 1. Component reference within the previously given circuit
-	ComponentInternal(SubCircuitPath, ComponentPinReference)
+	ComponentInternal(SubCircuitPath, ComponentPinReference),
+	/// The clock source of a given circuit/sub-circuit
+	Clock(SubCircuitPath)
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -225,6 +230,9 @@ impl LogicNet {
 									// Check if it is connected to a global pin
 									LogicConnectionPinExternalSource::Global => {
 										out.push((GlobalSourceReference::Global(ext_conn_query.clone()), pin.external_state));
+									},
+									LogicConnectionPinExternalSource::Clock => {
+										out.push((GlobalSourceReference::Clock(self_ancestors.to_sub_circuit_path()), pin.external_state));
 									}
 								}
 							}
@@ -288,7 +296,8 @@ impl LogicNet {
 pub enum LogicConnectionPinExternalSource {
 	Net(GenericQuery<LogicNet>),
 	#[default]
-	Global
+	Global,
+	Clock
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -386,7 +395,10 @@ pub struct LogicDeviceGeneric {
 	pub position_grid: IntV2,
 	pub unique_name: String,
 	pub sub_compute_cycles: usize,
-	pub rotation: FourWayDir
+	pub rotation: FourWayDir,
+	pub selected: bool,
+	/// Only for graphical purposes
+	pub bounding_box: (V2, V2)
 }
 
 impl LogicDeviceGeneric {
@@ -395,7 +407,8 @@ impl LogicDeviceGeneric {
 		position_grid: IntV2,
 		unique_name: String,
 		sub_compute_cycles: usize,
-		rotation: FourWayDir
+		rotation: FourWayDir,
+		bounding_box: (V2, V2)
 	) -> Result<Self, String> {
 		if sub_compute_cycles == 0 {
 			return Err("Sub-compute cycles cannot be 0".to_string());
@@ -405,19 +418,20 @@ impl LogicDeviceGeneric {
 			position_grid,
 			unique_name,
 			sub_compute_cycles,
-			rotation
+			rotation,
+			selected: false,
+			bounding_box
 		})
 	}
 }
 
 /// Could be a simple gate, or something more complicated like an adder, or maybe even the whole computer
-pub trait LogicDevice: Debug where Self: 'static {
-	// TODO: Add a draw method
+pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn get_generic(&self) -> &LogicDeviceGeneric;
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric;
 	fn compute_step(&mut self, ancestors: &AncestryStack);
 	fn save(&self) -> Result<EnumAllLogicDevicesSave, String>;
-	fn draw<'a>(&self, draw: ComponentDrawInfo<'a>);
+	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>);
 	fn compute(&mut self, ancestors: &AncestryStack) {
 		for _ in 0..self.get_generic().sub_compute_cycles {
 			self.compute_step(ancestors);
@@ -467,6 +481,34 @@ pub trait LogicDevice: Debug where Self: 'static {
 	}
 	fn into_box(self: Box<Self>) -> Box<dyn LogicDevice> where Self: Sized {
 		self as Box<dyn LogicDevice>
+	}
+}
+
+/// Everything that implements `Component` also automatically works with the graphics
+impl<T: LogicDevice> GraphicSelectableItem for T {
+	fn draw<'a>(&self, draw: ComponentDrawInfo<'a>) {
+		for (_, pin) in &self.get_generic().pins.items {
+			draw.draw_polyline(
+				vec![
+					pin.relative_end_grid.to_v2(),
+					pin.relative_end_grid.to_v2() - (pin.direction.to_unit() * pin.length)
+				],
+				draw.styles.color_from_logic_state(pin.state())
+			);
+		}
+		self.draw_except_pins(&draw);
+	}
+	fn get_selected(&self) -> bool {
+		self.get_generic().selected
+	}
+	fn set_selected(&mut self, selected: bool) {
+		self.get_generic_mut().selected = selected;
+	}
+	fn bounding_box(&self) -> (V2, V2) {
+		self.get_generic().bounding_box
+	}
+	fn dragging_to(&mut self, change: V2) {
+		// TODO
 	}
 }
 
@@ -536,7 +578,16 @@ pub struct LogicCircuit {
 	pub components: GenericDataset<RefCell<Box<dyn LogicDevice>>>,
 	pub nets: GenericDataset<LogicNet>,
 	pub wires: GenericDataset<Wire>,
-	save_path: String
+	save_path: String,
+	/// The clock is only meant to be used in the toplevel circuit, if you want to use the same clock everywhere, just have an input pin dedicated to it for all sub-circuits.
+	/// Alternatively, a sub-circuit can have its own internal clock which would be different from the outside clock
+	pub clock_enabled: bool,
+	pub clock_state: bool,
+	pub clock_freq: f32,
+	clock_last_change: Instant,
+	/// Inspired by CircuitVerse, block-diagram version of circuit
+	/// {pin ID: (relative position (ending), direction)}
+	block_pin_positions: HashMap<u64, (IntV2, FourWayDir)>
 }
 
 impl LogicCircuit {
@@ -548,7 +599,10 @@ impl LogicCircuit {
 		unique_name: String,
 		sub_compute_cycles: usize,
 		wires: GenericDataset<Wire>,
-		save_path: String
+		save_path: String,
+		clock_enabled: bool,
+		clock_state: bool,
+		clock_freq: f32
 	) -> Result<Self, String> {
 		let mut components = GenericDataset::<RefCell<Box<dyn LogicDevice>>>::new();
 		for (ref_, comp) in components_not_celled.items {
@@ -560,13 +614,20 @@ impl LogicCircuit {
 				position_grid,
 				unique_name,
 				sub_compute_cycles,
-				FourWayDir::E
+				FourWayDir::E,
+				(V2::zeros(), V2::zeros())
 			)?,
 			components,
 			nets,
 			wires,
-			save_path
+			save_path,
+			clock_enabled,
+			clock_state,
+			clock_freq,
+			clock_last_change: Instant::now(),
+			block_pin_positions: HashMap::new()
 		};
+		new.recompute_default_layout();
 		new.recompute_connections();
 		Ok(new)
 	}
@@ -581,8 +642,34 @@ impl LogicCircuit {
 			components,
 			nets: save.nets,
 			wires: save.wires,
-			save_path
+			save_path,
+			clock_enabled: save.clock_enabled,
+			clock_state: save.clock_state,
+			clock_freq: save.clock_freq,
+			clock_last_change: Instant::now(),
+			block_pin_positions: save.block_pin_positions
 		})
+	}
+	fn recompute_default_layout(&mut self) {
+		// Bounding box & layout, like in CircuitVerse
+		let mut count_pins_not_clock: i32 = 0;
+		let mut block_pin_positions: HashMap<u64, (IntV2, FourWayDir)> = HashMap::new();
+		for (pin_ref, pin) in &self.generic_device.pins.items {
+			if let Some(ext_source) = &pin.external_source {
+				if let LogicConnectionPinExternalSource::Clock = ext_source {
+					continue;
+				}
+			}
+			if count_pins_not_clock % 2 == 0 {
+				block_pin_positions.insert(pin_ref.id, (IntV2(-(CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH as i32) - 1, count_pins_not_clock / 2), FourWayDir::W));
+			}
+			else {
+				block_pin_positions.insert(pin_ref.id, (IntV2(CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH as i32 + 1, count_pins_not_clock / 2), FourWayDir::E));
+			}
+			count_pins_not_clock += 1;
+		}
+		self.block_pin_positions = block_pin_positions;
+		self.generic_device.bounding_box = (V2::new(-(CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH as f32), -1.0), V2::new(CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH as f32, ((count_pins_not_clock / 2) + 1) as f32));
 	}
 	/*pub fn resolve_circuit_pin_ref(&self, ref_: &CircuitWidePinReference) -> Option<&LogicConnectionPin> {
 		match ref_ {
@@ -652,7 +739,8 @@ impl LogicCircuit {
 						LogicConnectionPinExternalSource::Net(net_query) => match self.nets.get_item_mut(net_query) {
 							Some(net) => net.add_component_connection_if_missing(comp_ref, pin_ref),
 							None => pin_to_net_connections_to_drop.push(ref_to_this_pin.clone()),
-						}
+						},
+						LogicConnectionPinExternalSource::Clock => {}
 					}
 				}
 			}
@@ -681,6 +769,16 @@ impl LogicCircuit {
 			}
 		}
 	}
+	/// Draws the circuit with wires and everything how you would expect, the `LogicDevice` `draw_except_pins` function draws a block diagram of this circuit intended for use when it is a sub-circuit
+	pub fn draw_toplevel<'a>(&self, draw: ComponentDrawInfo<'a>) {
+		// Wires
+		// TODO
+		// Sub componnets
+		for (_, comp) in &self.components.items {
+			let comp_pos = comp.borrow().get_generic().position_grid;
+			comp.borrow_mut().draw(draw.add_child_grid_pos(comp_pos));
+		}
+	}
 }
 
 impl LogicDevice for LogicCircuit {
@@ -691,6 +789,11 @@ impl LogicDevice for LogicCircuit {
 		&mut self.generic_device
 	}
 	fn compute_step(&mut self, ancestors_above: &AncestryStack) {
+		// Update clock
+		if self.clock_last_change.elapsed() > Duration::from_secs_f32(0.5 / self.clock_freq) {// The frequency is based on a whole period, it must change twice per period, so 0.5/f not 1/f
+			self.clock_state = !self.clock_state;
+			self.clock_last_change = Instant::now();
+		}
 		let ancestors = ancestors_above.push(&self);
 		// Update net states
 		let mut new_net_states: Vec<(LogicState, Vec<GlobalSourceReference>)> = Vec::new();
@@ -715,6 +818,11 @@ impl LogicDevice for LogicCircuit {
 					LogicConnectionPinInternalSource::ComponentInternal => panic!("External connection pin {:?} for circuit \"{}\" has the internal source as ComponentInternal which shouldn't happen", pin_ref, &self.generic_device.unique_name)
 				}
 			}
+			if let Some(ext_source) = &pin.external_source {
+				if let LogicConnectionPinExternalSource::Clock = ext_source {
+					pin.external_state = self.clock_state.into();
+				}
+			}
 		}
 		// Component pins, and propagate through components
 		for (comp_ref, comp) in &self.components.items {
@@ -724,7 +832,8 @@ impl LogicDevice for LogicCircuit {
 						LogicConnectionPinExternalSource::Global => panic!("Pin {:?} of component {:?} has external source 'Global' which doesn't make sense", &pin_ref, &comp_ref),
 						LogicConnectionPinExternalSource::Net(net_query) => {
 							pin.external_state = self.nets.get_item_mut(&net_query).expect(&format!("Pin {:?} of component {:?} references net {:?} which doesn't exist", &pin_ref, &comp_ref, &net_query)).state;
-						}
+						},
+						LogicConnectionPinExternalSource::Clock => {}// A clock-connected pin is handled by the sub-circuit itself
 					}
 				}
 			}
@@ -746,21 +855,33 @@ impl LogicDevice for LogicCircuit {
 			generic_device: self.generic_device.clone(),
 			components: components_save,
 			nets: self.nets.clone(),
-			wires: self.wires.clone()
+			wires: self.wires.clone(),
+			clock_enabled: self.clock_enabled,
+			clock_state: self.clock_state,
+			clock_freq: self.clock_freq,
+			block_pin_positions: self.block_pin_positions.clone()
 		};
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_path), &raw_string))?;
 		// Path to save file
 		Ok(EnumAllLogicDevicesSave::SubCircuit(self.save_path.clone()))
 	}
-	fn draw<'a>(&self, draw: ComponentDrawInfo<'a>) {
-		// Wires
+	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+		// Rectangle
+		draw.draw_polyline(
+			vec![
+				V2::new(-self.generic_device.bounding_box.0.x, -self.generic_device.bounding_box.0.y),
+				V2::new(self.generic_device.bounding_box.1.x, -self.generic_device.bounding_box.0.y),
+				V2::new(self.generic_device.bounding_box.1.x, self.generic_device.bounding_box.1.y),
+				V2::new(-self.generic_device.bounding_box.0.x, self.generic_device.bounding_box.1.y),
+				V2::new(-self.generic_device.bounding_box.0.x, -self.generic_device.bounding_box.0.y)
+			],
+			draw.styles.color_foreground
+		);
+		// Pins at alternate locations
 		// TODO
-		// Sub componnets
-		for (_, comp) in &self.components.items {
-			let comp_pos = comp.borrow().get_generic().position_grid;
-			comp.borrow_mut().draw(draw.add_child_grid_pos(comp_pos));
-		}
+		// Name
+		// TODO
 	}
 	fn get_circuit(&self) -> &Self {
 		&self
