@@ -2,7 +2,7 @@ use crate::{prelude::*, resource_interface, simulator::AncestryStack};
 use eframe::{egui::{self, Color32, Frame, Painter, Pos2, Sense, Shape, Stroke, Ui, Vec2}, epaint::{CubicBezierShape, PathStroke}};
 use serde::Deserialize;
 use serde_json;
-use std::f32::consts::TAU;
+use std::{f32::consts::TAU, collections::HashSet};
 
 /// Style for the UI, loaded from /resources/styles.json
 #[derive(Clone, Deserialize)]
@@ -55,19 +55,27 @@ impl Default for Styles {
 }
 
 pub trait GraphicSelectableItem {
-	fn draw<'a>(&self, draw: ComponentDrawInfo<'a>);
+	/// The implementation if this is responsible for adding it's own position to the offset
+	fn draw<'a>(&self, draw: &ComponentDrawInfo<'a>);
 	fn get_selected(&self) -> bool;
 	fn set_selected(&mut self, selected: bool);
-	/// Relative to Grid
-	fn bounding_box(&self) -> (V2, V2);
-	/// Relative to Grid
+	/// Relative to Grid and self, return must be wrt global grid, hence why grid offset must be provided
+	/// grid_offset will only correct for positions of nested sub-circuits, not the position of the object that "it knows about"
+	fn bounding_box(&self, grid_offset: V2) -> (V2, V2);
+	/// Mouse is relative to Grid
 	/// Things with complicated shapes should override this with something better
-	fn is_click_hit(&self, mouse: V2) -> bool {
-		let bb: (V2, V2) = self.bounding_box();
+	fn is_click_hit(&self, mouse: V2, grid_offset: V2) -> bool {
+		let bb: (V2, V2) = self.bounding_box(grid_offset);
 		mouse.x >= bb.0.x && mouse.x <= bb.1.x && mouse.y >= bb.0.y && mouse.y <= bb.1.y
 	}
 	/// Relative to Grid
-	fn dragging_to(&mut self, change: V2);
+	fn dragging_to(&mut self, current_pos: V2);
+	fn start_dragging(&mut self);
+	/// Relative to Grid
+	fn stop_dragging(&mut self, final_pos: V2);
+	fn get_position_before_dragging(&self) -> IntV2;
+	/// Used for the net highlight feature
+	fn is_connected_to_net(&self, net_ref: GenericRef<LogicNet>) -> bool;
 }
 
 pub struct ComponentDrawInfo<'a> {
@@ -143,7 +151,11 @@ impl<'a> ComponentDrawInfo<'a> {
 		let nalgebra_v2 = ((grid + self.offset_grid.to_v2()) * self.grid_size) + self.rect_center;
 		egui::Pos2{x: nalgebra_v2.x, y: nalgebra_v2.y}
 	}
-	pub fn add_child_grid_pos(&'a self, new_grid_pos: IntV2) -> Self {
+	pub fn mouse_pos2_to_grid(&self, mouse_pos: Pos2) -> V2 {
+		// TODO
+		((emath_pos2_to_v2(mouse_pos) - self.rect_center) / self.grid_size) - self.offset_grid.to_v2()
+	}
+	pub fn add_grid_pos(&'a self, new_grid_pos: IntV2) -> Self {
 		Self {
 			screen_center_wrt_grid: self.screen_center_wrt_grid,
 			grid_size: self.grid_size,
@@ -170,20 +182,14 @@ impl LogicCircuitToplevelView {
 		Self {
 			circuit,
 			screen_center_wrt_grid: V2::zeros(),
-			grid_size: 10.0,
+			grid_size: 15.0,
 			logic_loop_error: false
 		}
 	}
 	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles) {
 		let mut recompute_connections = false;
 		let mut propagate = true;// TODO: Change to false when rest of logic is implemented
-		// First, detect user unput
 		// TODO
-		// Update
-		if recompute_connections || propagate {
-			self.logic_loop_error = self.propagate_until_stable(PROPAGATION_LIMIT);
-		}
-		// Graphics
 		let (response, painter) = ui.allocate_painter(ui.available_size_before_wrap(), Sense::drag());
 		let draw_info = ComponentDrawInfo::new(
 			self.screen_center_wrt_grid,
@@ -193,39 +199,16 @@ impl LogicCircuitToplevelView {
 			styles,
 			emath_pos2_to_v2(response.rect.center())
 		);
-		//draw_info.painter.add(Shape::line(vec![Pos2::new(-100.0, -100.0), Pos2::new(-100.0, -100.0)], PathStroke::new(2.0, Color32::from_rgb(0, 255, 0))));
-        // graphics help from https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/painting.rs
-		// Draw circuit's inputs/outputs
-		for (_, pin) in &self.circuit.get_generic().pins.items {
-			draw_info.draw_polyline(
-				vec![
-					V2::new(-0.9, -0.9),
-					V2::new(-0.9, 0.9),
-					V2::new(0.9, 0.9),
-					V2::new(0.9, -0.9),
-					V2::new(-0.9, -0.9)
-				].iter().map(|p| p + pin.relative_end_grid.to_v2() + pin.direction.to_unit()).collect(),
-				styles.color_from_logic_state(pin.state())
-			);
-			if let Some(ext_source) = &pin.external_source {
-				if let LogicConnectionPinExternalSource::Clock = ext_source {
-					let clk_scale = 0.7;
-					draw_info.draw_polyline(
-						vec![
-							V2::new(-clk_scale, 0.0),
-							V2::new(-clk_scale, clk_scale),
-							V2::new(0.0, clk_scale),
-							V2::new(0.0, -clk_scale),
-							V2::new(clk_scale, -clk_scale),
-							V2::new(clk_scale, 0.0)
-						].iter().map(|p| p + pin.relative_end_grid.to_v2() + pin.direction.to_unit()).collect(),
-						styles.color_foreground
-					);
-				}
-			}
+		// First, detect user unput
+		let input_state = ui.ctx().input(|i| i.clone());
+		self.circuit.toplevel_ui_interact(response, &draw_info, input_state);
+		// Update
+		if recompute_connections || propagate {
+			self.logic_loop_error = self.propagate_until_stable(PROPAGATION_LIMIT);
 		}
+        // graphics help from https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/painting.rs
 		// Draw circuit
-		self.circuit.draw_toplevel(draw_info.add_child_grid_pos(self.circuit.generic_device.position_grid));
+		self.circuit.draw(&draw_info);
 	}
 	/// Runs `compute_step()` repeatedly on the circuit until there are no changes, there must be a limit because there are circuits (ex. NOT gate connected to itself) where this would otherwise never end
 	pub fn propagate_until_stable(&mut self, propagation_limit: usize) -> bool {

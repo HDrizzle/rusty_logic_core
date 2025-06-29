@@ -1,9 +1,22 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{fmt::Debug, fs, cell::RefCell, time::{Instant, Duration}, collections::HashMap};
+use std::{cell::RefCell, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, time::{Duration, Instant}};
 use serde::{Deserialize, Serialize};
 use crate::{prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
+use eframe::{egui::{self, response::Response, Key, KeyboardShortcut, Modifiers}, glow::FALSE};
+
+fn logic_device_to_graphic_item(x: &dyn LogicDevice) -> &dyn GraphicSelectableItem {
+	x
+}
+
+fn pin_to_graphic_item(x: &LogicConnectionPin) -> &dyn GraphicSelectableItem {
+	x
+}
+
+fn wire_to_graphic_item(x: &Wire) -> &dyn GraphicSelectableItem {
+	x
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum LogicState {
@@ -316,7 +329,9 @@ pub struct LogicConnectionPin {
 	pub relative_end_grid: IntV2,
 	pub direction: FourWayDir,
 	/// Usually 1, may be something else if theres a curve on an OR input or something
-	pub length: f32
+	pub length: f32,
+	selected: bool,
+	pub position_before_dragging: IntV2
 }
 
 impl LogicConnectionPin {
@@ -334,7 +349,9 @@ impl LogicConnectionPin {
 			external_state: LogicState::Floating,
 			relative_end_grid,
 			direction,
-			length
+			length,
+			selected: false,
+			position_before_dragging: relative_end_grid
 		}
 	}
 	pub fn set_drive_internal(&mut self, state: LogicState) {
@@ -345,6 +362,71 @@ impl LogicConnectionPin {
 	}
 	pub fn state(&self) -> LogicState {
 		merge_logic_states(self.internal_state, self.external_state)
+	}
+}
+
+/// ONLY meant to be used on external pins on the toplevel circuit, all other pins are just rendered as part of the component
+impl GraphicSelectableItem for LogicConnectionPin {
+	fn draw<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+		draw.draw_polyline(
+			vec![
+				V2::new(-0.9, -0.9),
+				V2::new(-0.9, 0.9),
+				V2::new(0.9, 0.9),
+				V2::new(0.9, -0.9),
+				V2::new(-0.9, -0.9)
+			].iter().map(|p| p + self.relative_end_grid.to_v2() + self.direction.to_unit()).collect(),
+			draw.styles.color_from_logic_state(self.state())
+		);
+		if let Some(ext_source) = &self.external_source {
+			if let LogicConnectionPinExternalSource::Clock = ext_source {
+				let clk_scale = 0.7;
+				draw.draw_polyline(
+					vec![
+						V2::new(-clk_scale, 0.0),
+						V2::new(-clk_scale, clk_scale),
+						V2::new(0.0, clk_scale),
+						V2::new(0.0, -clk_scale),
+						V2::new(clk_scale, -clk_scale),
+						V2::new(clk_scale, 0.0)
+					].iter().map(|p| p + self.relative_end_grid.to_v2() + self.direction.to_unit()).collect(),
+					draw.styles.color_foreground
+				);
+			}
+		}
+	}
+	fn get_selected(&self) -> bool {
+		self.selected
+	}
+	fn set_selected(&mut self, selected: bool) {
+		self.selected = selected;
+	}
+	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
+		let half_diagonal = V2::new(0.9, 0.9);
+		let box_center = self.direction.to_unit() + self.relative_end_grid.to_v2();
+		let global_offset = grid_offset + box_center;
+		(global_offset - half_diagonal, global_offset + half_diagonal)
+	}
+	fn dragging_to(&mut self, current_pos: V2) {
+		self.relative_end_grid = round_v2_to_intv2(current_pos);
+	}
+	fn start_dragging(&mut self) {
+		self.position_before_dragging = self.relative_end_grid;
+	}
+	fn stop_dragging(&mut self, final_pos: V2) {
+		self.relative_end_grid = round_v2_to_intv2(final_pos);
+	}
+	fn get_position_before_dragging(&self) -> IntV2 {
+		self.position_before_dragging
+	}
+	fn is_connected_to_net(&self, net_ref: GenericRef<LogicNet>) -> bool {
+		match &self.internal_source {
+			Some(source) => match source {
+				LogicConnectionPinInternalSource::ComponentInternal => false,
+				LogicConnectionPinInternalSource::Net(net_query) => net_ref.query_matches(net_query)
+			},
+			None => false
+		}
 	}
 }
 
@@ -382,9 +464,81 @@ impl ComponentPinReference {
 	}
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Wire {
-	segments: Vec<(V2, V2)>,
+	start_pos: IntV2,
+	length: u32,
+	direction: FourWayDir,
+	net: GenericQuery<LogicNet>,
+	state: LogicState,
+	start_connection: Option<WireConnection>,
+	end_connection: Option<WireConnection>,
+	start_selected: bool,
+	end_selected: bool,
+	dragging_another_wire: Option<(IntV2, FourWayDir, u32)>,
+	position_before_dragging: IntV2
+}
+
+impl GraphicSelectableItem for Wire {
+	fn draw<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+		draw.draw_polyline(
+			vec![
+				self.start_pos.to_v2(),
+				self.start_pos.to_v2() + (self.direction.to_unit() * (self.length as f32))
+			],
+			draw.styles.color_from_logic_state(self.state)
+		);
+	}
+	fn get_selected(&self) -> bool {
+		self.start_selected || self.end_selected
+	}
+	fn set_selected(&mut self, selected: bool) {
+		self.start_selected = selected;
+		self.end_selected = selected;
+	}
+	/// Excludes end BBs which are special and for dragging the ends around or extruding at right angles
+	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
+		let local_bb: (V2, V2) = match self.direction {
+			FourWayDir::E => (V2::new(0.5, -0.25), V2::new(self.length as f32 - 0.5, 0.25)),
+			FourWayDir::N => (V2::new(-0.25, 0.5 - (self.length as f32)), V2::new(0.25, -0.5)),
+			FourWayDir::W => (V2::new(self.length as f32 - 0.5, -0.25), V2::new(0.5, 0.25)),
+			FourWayDir::S => (V2::new(-0.25, -0.5), V2::new(0.25, 0.5 - (self.length as f32)))
+		};
+		(local_bb.0 + grid_offset, local_bb.1 + grid_offset)
+	}
+	fn dragging_to(&mut self, current_pos: V2) {
+		self.start_pos = round_v2_to_intv2(current_pos);
+	}
+	fn start_dragging(&mut self) {
+		self.position_before_dragging = self.start_pos;
+	}
+	fn stop_dragging(&mut self, final_pos: V2) {
+		self.start_pos = round_v2_to_intv2(final_pos);
+	}
+	fn get_position_before_dragging(&self) -> IntV2 {
+		self.position_before_dragging
+	}
+	fn is_connected_to_net(&self, net_ref: GenericRef<LogicNet>) -> bool {
+		net_ref.query_matches(&self.net)
+	}
+}
+
+/// What is the end of a wire connected to?
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum WireConnection {
+	/// Component or external pin
+	Pin(CircuitWidePinReference),
+	/// "Dor", 3 or 4 wires
+	WireJoint(GenericQuery<WireJoint>),
+	/// "Elbow" joint, no dot required
+	Wire(GenericQuery<Wire>)
+}
+
+/// "Dot", connecting 2 or 4 wires
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct WireJoint {
+	wires: Vec<GenericQuery<Wire>>,
+	pos: IntV2,
 	net: GenericQuery<LogicNet>,
 	state: LogicState
 }
@@ -393,6 +547,7 @@ pub struct Wire {
 pub struct LogicDeviceGeneric {
 	pub pins: GenericDataset<LogicConnectionPin>,
 	pub position_grid: IntV2,
+	pub position_before_dragging: IntV2,
 	pub unique_name: String,
 	pub sub_compute_cycles: usize,
 	pub rotation: FourWayDir,
@@ -416,6 +571,7 @@ impl LogicDeviceGeneric {
 		Ok(Self {
 			pins,
 			position_grid,
+			position_before_dragging: position_grid,
 			unique_name,
 			sub_compute_cycles,
 			rotation,
@@ -486,7 +642,7 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 
 /// Everything that implements `Component` also automatically works with the graphics
 impl<T: LogicDevice> GraphicSelectableItem for T {
-	fn draw<'a>(&self, draw: ComponentDrawInfo<'a>) {
+	fn draw<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		for (_, pin) in &self.get_generic().pins.items {
 			draw.draw_polyline(
 				vec![
@@ -504,11 +660,24 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 	fn set_selected(&mut self, selected: bool) {
 		self.get_generic_mut().selected = selected;
 	}
-	fn bounding_box(&self) -> (V2, V2) {
-		self.get_generic().bounding_box
+	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
+		let local_bb = self.get_generic().bounding_box;
+		(local_bb.0 + grid_offset, local_bb.1 + grid_offset)
 	}
-	fn dragging_to(&mut self, change: V2) {
-		// TODO
+	fn dragging_to(&mut self, current_pos: V2) {
+		self.get_generic_mut().position_grid = round_v2_to_intv2(current_pos);
+	}
+	fn start_dragging(&mut self) {
+		self.get_generic_mut().position_before_dragging = self.get_generic().position_grid;
+	}
+	fn stop_dragging(&mut self, final_pos: V2) {
+		self.get_generic_mut().position_grid = round_v2_to_intv2(final_pos);
+	}
+	fn get_position_before_dragging(&self) -> IntV2 {
+		self.get_generic().position_before_dragging
+	}
+	fn is_connected_to_net(&self, _net_ref: GenericRef<LogicNet>) -> bool {
+		false// Don't highlight a whole component, only wires and pins
 	}
 }
 
@@ -572,6 +741,43 @@ impl<'a> PartialEq for AncestryStack<'a> {
 	}
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum GraphicSelectableItemRef {
+	Component(u64),
+	Wire(u64),
+	Pin(u64)
+}
+
+#[derive(Debug, Default, Clone)]
+pub enum SelectionState {
+	/// Just there
+	#[default]
+	Fixed,
+	/// Being dragged by mouse, keeps track of where it started (wrt grid). If there aren't any selected items, then use this to drag a rectangle to select stuff
+	/// (Start, Delta)
+	Dragging(V2, V2),
+	/// After Paste operation, the pasted stuff will remain selected and following the mouse until a left click
+	FollowingMouse
+}
+
+#[derive(Debug, Clone)]
+pub enum Tool {
+	Select {
+		selected_graphics: HashSet<GraphicSelectableItemRef>,
+		selected_graphics_state: SelectionState
+	},
+	HighlightNet(Option<u64>),
+	PlaceComponnet,
+	PlaceWire,
+	PlacePin
+}
+
+impl Default for Tool {
+	fn default() -> Self {
+		Self::Select{selected_graphics: HashSet::new(), selected_graphics_state: SelectionState::default()}
+	}
+}
+
 #[derive(Debug)]
 pub struct LogicCircuit {
 	pub generic_device: LogicDeviceGeneric,
@@ -587,7 +793,10 @@ pub struct LogicCircuit {
 	clock_last_change: Instant,
 	/// Inspired by CircuitVerse, block-diagram version of circuit
 	/// {pin ID: (relative position (ending), direction)}
-	block_pin_positions: HashMap<u64, (IntV2, FourWayDir)>
+	block_pin_positions: HashMap<u64, (IntV2, FourWayDir)>,
+	displayed_as_block: bool,
+	/// For UI
+	tool: RefCell<Tool>
 }
 
 impl LogicCircuit {
@@ -602,7 +811,8 @@ impl LogicCircuit {
 		save_path: String,
 		clock_enabled: bool,
 		clock_state: bool,
-		clock_freq: f32
+		clock_freq: f32,
+		displayed_as_block: bool
 	) -> Result<Self, String> {
 		let mut components = GenericDataset::<RefCell<Box<dyn LogicDevice>>>::new();
 		for (ref_, comp) in components_not_celled.items {
@@ -625,13 +835,15 @@ impl LogicCircuit {
 			clock_state,
 			clock_freq,
 			clock_last_change: Instant::now(),
-			block_pin_positions: HashMap::new()
+			block_pin_positions: HashMap::new(),
+			displayed_as_block,
+			tool: RefCell::new(Tool::default())
 		};
 		new.recompute_default_layout();
 		new.recompute_connections();
 		Ok(new)
 	}
-	pub fn from_save(save: LogicCircuitSave, save_path: String) -> Result<Self, String> {
+	pub fn from_save(save: LogicCircuitSave, save_path: String, displayed_as_block: bool) -> Result<Self, String> {
 		let mut components = GenericDataset::<RefCell<Box<dyn LogicDevice>>>::new();
 		// Init compnents
 		for (ref_, save_comp) in save.components.items {
@@ -647,7 +859,9 @@ impl LogicCircuit {
 			clock_state: save.clock_state,
 			clock_freq: save.clock_freq,
 			clock_last_change: Instant::now(),
-			block_pin_positions: save.block_pin_positions
+			block_pin_positions: save.block_pin_positions,
+			displayed_as_block,
+			tool: RefCell::new(Tool::default())
 		})
 	}
 	fn recompute_default_layout(&mut self) {
@@ -769,15 +983,109 @@ impl LogicCircuit {
 			}
 		}
 	}
-	/// Draws the circuit with wires and everything how you would expect, the `LogicDevice` `draw_except_pins` function draws a block diagram of this circuit intended for use when it is a sub-circuit
-	pub fn draw_toplevel<'a>(&self, draw: ComponentDrawInfo<'a>) {
-		// Wires
-		// TODO
-		// Sub componnets
-		for (_, comp) in &self.components.items {
-			let comp_pos = comp.borrow().get_generic().position_grid;
-			comp.borrow_mut().draw(draw.add_child_grid_pos(comp_pos));
+	pub fn toplevel_ui_interact<'a>(&mut self, response: Response, draw: &ComponentDrawInfo<'a>, mut input_state: egui::InputState) {
+		match self.tool.borrow_mut().deref_mut() {
+			Tool::Select{selected_graphics, selected_graphics_state} => {
+				match selected_graphics_state {
+					SelectionState::Fixed => {
+						if response.dragged() {
+							*selected_graphics_state = SelectionState::Dragging(emath_pos2_to_v2(response.hover_pos().expect("Hover pos should work when dragging")) / draw.grid_size, emath_vec2_to_v2(response.drag_delta()) / draw.grid_size);
+						}
+						if response.clicked() {
+							// Find if command/ctrl is being held down
+							let multi_select_key: bool = input_state.key_down(Key::A);// TODO: Command / Control
+							// Find what was clicked (if anything)
+							match self.was_anything_clicked(draw.mouse_pos2_to_grid(response.interact_pointer_pos().expect("Interact pointer pos should work when clicked"))) {
+								Some(new_selected_item) => match multi_select_key {
+									true => match selected_graphics.contains(&new_selected_item) {
+										true => {
+											selected_graphics.remove(&new_selected_item);
+										},
+										false => {
+											selected_graphics.insert(new_selected_item);
+										}
+									},
+									false => {selected_graphics.insert(new_selected_item);}
+								},
+								None => {
+									if !multi_select_key {
+										*selected_graphics = HashSet::new();
+									}
+								}
+							}
+						}
+						// Cmd-A for select-all
+						if input_state.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::A)) {
+							*selected_graphics = HashSet::from_iter(self.get_all_graphics_references());
+						}
+						
+					},
+					SelectionState::Dragging(start_grid, delta_grid) => {
+						// TODO
+					},
+					SelectionState::FollowingMouse => {
+						// TODO
+					}
+				}
+				// Copy
+				if input_state.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::C)) {
+					// TODO
+				}
+				// Delete
+				if input_state.consume_key(Modifiers::NONE, Key::Delete) {
+
+				}
+			},
+			Tool::HighlightNet(net_id) => {
+				// TODO
+			},
+			Tool::PlaceComponnet => {
+				// TODO
+			},
+			Tool::PlaceWire => {
+				// TODO
+			},
+			Tool::PlacePin => {
+				// TODO
+			}
 		}
+		
+	}
+	fn was_anything_clicked<'a>(&self, grid_pos: V2) -> Option<GraphicSelectableItemRef> {
+		None// TODO
+	}
+	fn remove_graphic_item(&mut self, ref_: GraphicSelectableItemRef) {
+		// TODO
+	}
+	fn run_function_on_graphic_item<T>(&self, ref_: GraphicSelectableItemRef, mut func: impl FnMut(Box<&dyn GraphicSelectableItem>) -> T) -> T {
+		let error_msg = format!("Graphic item reference {:?} cannot be found", &ref_);
+		match ref_ {
+			GraphicSelectableItemRef::Component(comp_id) => func(Box::new(logic_device_to_graphic_item(self.components.get_item_tuple(&(comp_id.into())).expect(&error_msg).1.borrow().deref().as_ref()))),
+			GraphicSelectableItemRef::Wire(wire_id) => func(Box::new(wire_to_graphic_item(&self.wires.get_item_tuple(&(wire_id.into())).expect(&error_msg).1))),
+			GraphicSelectableItemRef::Pin(pin_id) => func(Box::new(pin_to_graphic_item(&self.generic_device.pins.get_item_tuple(&(pin_id.into())).expect(&error_msg).1))),
+		}
+	}
+	/*fn delete_graphic_item(&mut self, ref_: GraphicSelectableItem) {
+		let error_msg = format!("Graphic item reference {:?} cannot be found", &ref_);
+		match ref_ {
+			GraphicSelectableItemRef::Component(comp_id) => func(Box::new(logic_device_to_graphic_item(self.components.get_item_tuple(&(comp_id.into())).expect(&error_msg).1.borrow().deref().as_ref()))),
+			GraphicSelectableItemRef::Wire(wire_id) => func(Box::new(wire_to_graphic_item(&self.wires.get_item_tuple(&(wire_id.into())).expect(&error_msg).1))),
+			GraphicSelectableItemRef::Pin(pin_id) => func(Box::new(pin_to_graphic_item(&self.generic_device.pins.get_item_tuple(&(pin_id.into())).expect(&error_msg).1))),
+		}
+	}*/
+	fn get_all_graphics_references(&self) -> Vec<GraphicSelectableItemRef> {
+		let mut out = Vec::<GraphicSelectableItemRef>::new();
+		for (ref_, _) in &self.components.items {
+			out.push(GraphicSelectableItemRef::Component(ref_.id));
+		}
+		for (ref_, _) in &self.wires.items {
+			out.push(GraphicSelectableItemRef::Wire(ref_.id));
+		}
+		for (ref_, _) in &self.generic_device.pins.items {
+			out.push(GraphicSelectableItemRef::Pin(ref_.id));
+		}
+		// TODO: Text boxes once I implement them
+		out
 	}
 }
 
@@ -864,25 +1172,34 @@ impl LogicDevice for LogicCircuit {
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_path), &raw_string))?;
 		// Path to save file
-		Ok(EnumAllLogicDevicesSave::SubCircuit(self.save_path.clone()))
+		Ok(EnumAllLogicDevicesSave::SubCircuit(self.save_path.clone(), self.displayed_as_block))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
-		// Rectangle
-		draw.draw_polyline(
-			vec![
-				V2::new(-self.generic_device.bounding_box.0.x, -self.generic_device.bounding_box.0.y),
-				V2::new(self.generic_device.bounding_box.1.x, -self.generic_device.bounding_box.0.y),
-				V2::new(self.generic_device.bounding_box.1.x, self.generic_device.bounding_box.1.y),
-				V2::new(-self.generic_device.bounding_box.0.x, self.generic_device.bounding_box.1.y),
-				V2::new(-self.generic_device.bounding_box.0.x, -self.generic_device.bounding_box.0.y)
-			],
-			draw.styles.color_foreground
-		);
-		// Pins at alternate locations
-		// TODO
-		// Name
-		// TODO
+		if self.displayed_as_block {
+			// Rectangle
+			draw.draw_polyline(
+				vec![
+					V2::new(-self.generic_device.bounding_box.0.x, -self.generic_device.bounding_box.0.y),
+					V2::new(self.generic_device.bounding_box.1.x, -self.generic_device.bounding_box.0.y),
+					V2::new(self.generic_device.bounding_box.1.x, self.generic_device.bounding_box.1.y),
+					V2::new(-self.generic_device.bounding_box.0.x, self.generic_device.bounding_box.1.y),
+					V2::new(-self.generic_device.bounding_box.0.x, -self.generic_device.bounding_box.0.y)
+				],
+				draw.styles.color_foreground
+			);
+			// Pins at alternate locations
+			// TODO
+			// Name
+			// TODO
+		}
+		else {
+			// Draws the circuit with wires and everything how you would expect
+			for ref_ in self.get_all_graphics_references() {
+				self.run_function_on_graphic_item(ref_, |graphic_item| graphic_item.draw(draw));
+			}
+		}
 	}
+	
 	fn get_circuit(&self) -> &Self {
 		&self
 	}

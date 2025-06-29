@@ -14,10 +14,10 @@ pub static STYLES_FILE: &str = "resources/styles.json";
 
 /// Loads circuit, path is relative to `CIRCUITS_DIR` and does not include .json extension
 /// Example: File is located at `resources/circuits/sequential/d_latch.json` -> circuit path is `sequential/d_latch`
-pub fn load_circuit(circuit_rel_path: &str) -> Result<LogicCircuit, String> {
+pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool) -> Result<LogicCircuit, String> {
 	let path = get_circuit_file_path(circuit_rel_path);
 	let string_raw = load_file_with_better_error(&path)?;
-	LogicCircuit::from_save(to_string_err(serde_json::from_str(&string_raw))?, circuit_rel_path.to_string())
+	LogicCircuit::from_save(to_string_err(serde_json::from_str(&string_raw))?, circuit_rel_path.to_string(), displayed_as_block)
 }
 
 /// Like LogicCircuit but serializable
@@ -38,8 +38,8 @@ pub struct LogicCircuitSave {
 /// Not great but I can't think of anything else
 #[derive(Debug, Serialize, Deserialize)]
 pub enum EnumAllLogicDevicesSave {
-	/// Relative path of circuit
-	SubCircuit(String),
+	/// (Relative path of circuit, Whether to use block diagram)
+	SubCircuit(String, bool),
 	GateAnd(basic_components::GateAnd),
 	GateNand(basic_components::GateNand)
 }
@@ -47,7 +47,7 @@ pub enum EnumAllLogicDevicesSave {
 impl EnumAllLogicDevicesSave {
 	pub fn to_dynamic(self_instance: Self) -> Result<Box<dyn LogicDevice>, String> {
 		match self_instance {
-			Self::SubCircuit(circuit_rel_path) => Ok(Box::new(load_circuit(&circuit_rel_path)?)),
+			Self::SubCircuit(circuit_rel_path, displayed_as_block) => Ok(Box::new(load_circuit(&circuit_rel_path, displayed_as_block)?)),
 			Self::GateAnd(gate) => Ok(Box::new(gate)),
 			Self::GateNand(gate) => Ok(Box::new(gate))
 		}

@@ -57,8 +57,9 @@ fn create_simple_circuit() -> LogicCircuit {
 		GenericDataset::new(),
 		"test".to_string(),
 		true,
-			false,
-			1.0
+		false,
+		1.0,
+		false
 	).unwrap()
 }
 

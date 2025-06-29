@@ -1,6 +1,6 @@
 //! Simulation inspired by CircuitVerse, UI based off of KiCad
 
-use std::{marker::PhantomData, ops};
+use std::{marker::PhantomData, ops, f32::consts::PI};
 use serde::{Serialize, Deserialize};
 use nalgebra::Vector2;
 use eframe::emath;
@@ -33,6 +33,13 @@ pub mod prelude {
 	}
 	pub fn emath_pos2_to_v2(in_: emath::Pos2) -> V2 {
 		V2::new(in_.x, in_.y)
+	}
+	pub fn round_v2_to_intv2(in_: V2) -> IntV2 {
+		IntV2(in_.x.round() as i32, in_.y.round() as i32)
+	}
+	pub fn angle_radius_to_v2(angle_deg: f32, radius: f32) -> V2 {
+		let angle_rad = angle_deg * PI / 180.0;
+		V2::new(angle_rad.cos(), angle_rad.sin()) * radius
 	}
 	#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 	pub enum FourWayDir {
@@ -84,6 +91,7 @@ pub mod prelude {
 			Err(e) => Err(format!("Message: {}, Error: {}", message, e.to_string()))
 		}
 	}
+
 	/// Generic reference to things in the game
 	#[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Hash)]
 	pub struct GenericRef<T> {
@@ -382,7 +390,8 @@ pub mod prelude {
 			"test".to_string(),
 			true,
 			false,
-			1.0
+			1.0,
+			false
 		).unwrap()
 	}
 }
