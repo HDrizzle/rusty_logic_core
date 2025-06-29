@@ -4,6 +4,7 @@ use std::{marker::PhantomData, ops, f32::consts::PI};
 use serde::{Serialize, Deserialize};
 use nalgebra::Vector2;
 use eframe::emath;
+use common_macros::hash_map;
 
 pub mod simulator;
 pub mod ui;
@@ -14,7 +15,7 @@ pub mod tests;
 
 #[allow(unused)]
 pub mod prelude {
-	use std::{clone, fmt::Formatter};
+	use std::{clone, collections::HashMap, fmt::Formatter};
 	use super::*;
 	// Name of this app
 	pub const APP_NAME: &str = "Rusty Logic";
@@ -40,6 +41,13 @@ pub mod prelude {
 	pub fn angle_radius_to_v2(angle_deg: f32, radius: f32) -> V2 {
 		let angle_rad = angle_deg * PI / 180.0;
 		V2::new(angle_rad.cos(), angle_rad.sin()) * radius
+	}
+	pub fn vec_to_u64_keyed_hashmap<T>(vec_: Vec<T>) -> HashMap<u64, T> {
+		let mut out = HashMap::<u64, T>::new();
+		for (i, item) in vec_.into_iter().enumerate() {
+			out.insert(i as u64, item);
+		}
+		out
 	}
 	#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 	pub enum FourWayDir {
@@ -361,32 +369,32 @@ pub mod prelude {
 			LogicConnectionPinExternalSource::Global
 		};
 		LogicCircuit::new(
-			vec![
+			vec_to_u64_keyed_hashmap(vec![
 				Box::new(basic_components::GateAnd::new(IntV2(0, 0), "and", FourWayDir::default())).into_box()
-			].into(),
-			vec![
-				(LogicConnectionPin::new(None, Some(ext_conn_source.clone()), IntV2(-4, -1), FourWayDir::W, 1.0), "a"),
-				(LogicConnectionPin::new(None, Some(ext_conn_source.clone()), IntV2(-4, 1), FourWayDir::W, 1.0), "b"),
-				(LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(4, 0), FourWayDir::E, 1.0), "q"),
-			].into(),
-			vec![
+			]),
+			hash_map!{
+				"a".to_owned() => LogicConnectionPin::new(None, Some(ext_conn_source.clone()), IntV2(-4, -1), FourWayDir::W, 1.0),
+				"b".to_owned() => LogicConnectionPin::new(None, Some(ext_conn_source.clone()), IntV2(-4, 1), FourWayDir::W, 1.0),
+				"b".to_owned() => LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(4, 0), FourWayDir::E, 1.0),
+			},
+			vec_to_u64_keyed_hashmap(vec![
 				LogicNet::new(vec![
-					CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0.into(), "a".into())),
+					CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0, "a".into())),
 					CircuitWidePinReference::ExternalConnection("a".into())
 				]),
 				LogicNet::new(vec![
-					CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0.into(), "b".into())),
+					CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0, "b".into())),
 					CircuitWidePinReference::ExternalConnection("b".into())
 				]),
 				LogicNet::new(vec![
-					CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0.into(), "q".into())),
+					CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0, "q".into())),
 					CircuitWidePinReference::ExternalConnection("q".into())
 				]),
-			].into(),
+			]),
 			IntV2(0, 0),
 			"test-circuit".to_string(),
 			1,
-			GenericDataset::new(),
+			HashMap::new(),
 			"test".to_string(),
 			true,
 			false,

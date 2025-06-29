@@ -75,7 +75,7 @@ pub trait GraphicSelectableItem {
 	fn stop_dragging(&mut self, final_pos: V2);
 	fn get_position_before_dragging(&self) -> IntV2;
 	/// Used for the net highlight feature
-	fn is_connected_to_net(&self, net_ref: GenericRef<LogicNet>) -> bool;
+	fn is_connected_to_net(&self, net_id: u64) -> bool;
 }
 
 pub struct ComponentDrawInfo<'a> {

@@ -627,6 +627,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "common_macros"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3f6d59c71e7dc3af60f0af9db32364d96a16e9310f3f5db2b55ed642162dd35"
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2506,6 +2512,7 @@ checksum = "8a0d197bd2c9dc6e53b84da9556a69ba4cdfab8619eb41a8bd1cc2027a0f6b1d"
 name = "rusty_logic"
 version = "0.1.0"
 dependencies = [
+ "common_macros",
  "eframe",
  "nalgebra",
  "serde",

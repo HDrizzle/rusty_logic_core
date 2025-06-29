@@ -1,6 +1,7 @@
 use crate::prelude::*;
 use serde::{Deserialize, Serialize};
 use crate::simulator::{AncestryStack, LogicConnectionPinInternalSource};
+use common_macros::hash_map;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GateAnd(LogicDeviceGeneric);
@@ -12,11 +13,11 @@ impl GateAnd {
 		rotation: FourWayDir
 	) -> Self {
 		Self(LogicDeviceGeneric::new(
-			vec![
-				(LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, -1), FourWayDir::W, 1.0), "a"),
-				(LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, 1), FourWayDir::W, 1.0), "b"),
-				(LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(3, 0), FourWayDir::E, 1.0), "q"),
-			].into(),
+			hash_map!{
+				"a".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, -1), FourWayDir::W, 1.0),
+				"b".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, 1), FourWayDir::W, 1.0),
+				"q".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(3, 0), FourWayDir::E, 1.0),
+			},
 			position_grid,
 			unique_name.to_owned(),
 			1,
@@ -34,7 +35,7 @@ impl LogicDevice for GateAnd {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack) {
-		self.set_pin_internal_state_panic(&"q".into(), (self.get_pin_state_panic(&"a".into()).to_bool() && self.get_pin_state_panic(&"b".into()).to_bool()).into());
+		self.set_pin_internal_state_panic("q", (self.get_pin_state_panic("a").to_bool() && self.get_pin_state_panic("b").to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevicesSave, String> {
 		Ok(EnumAllLogicDevicesSave::GateAnd(self.clone()))
@@ -60,11 +61,11 @@ impl GateNand {
 		rotation: FourWayDir
 	) -> Self {
 		Self(LogicDeviceGeneric::new(
-			vec![
-				(LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, -1), FourWayDir::W, 1.0), "a"),
-				(LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, 1), FourWayDir::W, 1.0), "b"),
-				(LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(4, 0), FourWayDir::E, 1.0), "q"),
-			].into(),
+			hash_map!{
+				"a".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, -1), FourWayDir::W, 1.0),
+				"b".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, 1), FourWayDir::W, 1.0),
+				"q".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(3, 0), FourWayDir::E, 1.0),
+			},
 			position_grid,
 			unique_name.to_owned(),
 			1,
@@ -82,8 +83,8 @@ impl LogicDevice for GateNand {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack) {
-		let and: bool = self.get_pin_state_panic(&"a".into()).to_bool() && self.get_pin_state_panic(&"b".into()).to_bool();
-		self.set_pin_internal_state_panic(&"q".into(), (!and).into());
+		let and: bool = self.get_pin_state_panic("a").to_bool() && self.get_pin_state_panic("b").to_bool();
+		self.set_pin_internal_state_panic("q", (!and).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevicesSave, String> {
 		Ok(EnumAllLogicDevicesSave::GateNand(self.clone()))

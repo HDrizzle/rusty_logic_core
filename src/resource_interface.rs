@@ -24,15 +24,15 @@ pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool) -> Result<
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogicCircuitSave {
 	pub generic_device: LogicDeviceGeneric,
-	pub components: GenericDataset<EnumAllLogicDevicesSave>,
-	pub nets: GenericDataset<LogicNet>,
-	pub wires: GenericDataset<Wire>,
+	pub components: HashMap<u64, EnumAllLogicDevicesSave>,
+	pub nets: HashMap<u64, LogicNet>,
+	pub wires: HashMap<u64, Wire>,
 	pub clock_enabled: bool,
 	pub clock_state: bool,
 	pub clock_freq: f32,
 	/// Inspired by CircuitVerse, block-diagram version of circuit
 	/// (pin ID, relative position (ending), direction)
-	pub block_pin_positions: HashMap<u64, (IntV2, FourWayDir)>
+	pub block_pin_positions: HashMap<String, (IntV2, FourWayDir)>
 }
 
 /// Not great but I can't think of anything else
