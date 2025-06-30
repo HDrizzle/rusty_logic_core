@@ -1,6 +1,6 @@
 use crate::{prelude::*, resource_interface, simulator::AncestryStack};
-use eframe::{egui::{self, Color32, Frame, Painter, Pos2, Sense, Shape, Stroke, Ui, Vec2}, epaint::{CubicBezierShape, PathStroke}};
-use serde::Deserialize;
+use eframe::{egui::{self, Color32, Frame, Painter, Pos2, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, Rect}, epaint::{CubicBezierShape, PathStroke}};
+use serde::{Serialize, Deserialize};
 use serde_json;
 use std::{f32::consts::TAU, collections::HashSet};
 
@@ -17,7 +17,9 @@ pub struct Styles {
     pub color_wire_high: [u8; 3],
     pub color_background: [u8; 3],
     pub color_foreground: [u8; 3],
-    pub color_grid: [u8; 3]
+    pub color_grid: [u8; 3],
+	pub select_rect_color: [u8; 4],
+	pub select_rect_edge_color: [u8; 3]
 }
 
 impl Styles {
@@ -49,7 +51,27 @@ impl Default for Styles {
 			color_wire_high: [0, 255, 0],
 			color_background: [0, 0, 0],
 			color_foreground: [255, 255, 255],
-			color_grid: [64, 64, 64]
+			color_grid: [64, 64, 64],
+			select_rect_color: [7, 252, 244, 128],
+			select_rect_edge_color: [252, 7, 7]
+		}
+	}
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UIData {
+	pub selected: bool,
+	pub position: IntV2,
+	pub position_before_dragging: IntV2,
+	pub dragging_offset: V2,
+	pub local_bb: (V2, V2)
+}
+
+impl UIData {
+	pub fn from_pos(position: IntV2) -> Self {
+		Self {
+			position,
+			..Default::default()
 		}
 	}
 }
@@ -57,25 +79,62 @@ impl Default for Styles {
 pub trait GraphicSelectableItem {
 	/// The implementation if this is responsible for adding it's own position to the offset
 	fn draw<'a>(&self, draw: &ComponentDrawInfo<'a>);
-	fn get_selected(&self) -> bool;
-	fn set_selected(&mut self, selected: bool);
+	fn get_ui_data(&self) -> &UIData;
+	fn get_ui_data_mut(&mut self) -> &mut UIData;
+	/// Used for the net highlight feature
+	fn is_connected_to_net(&self, net_id: u64) -> bool;
+	fn get_properties(&self) -> Vec<SelectProperty>;
+	fn set_property(&mut self, property: SelectProperty);
+	fn get_selected(&self) -> bool {
+		self.get_ui_data().selected
+	}
+	fn set_selected(&mut self, selected: bool) {
+		self.get_ui_data_mut().selected = selected;
+	}
 	/// Relative to Grid and self, return must be wrt global grid, hence why grid offset must be provided
 	/// grid_offset will only correct for positions of nested sub-circuits, not the position of the object that "it knows about"
-	fn bounding_box(&self, grid_offset: V2) -> (V2, V2);
+	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
+		let local_bb = self.get_ui_data().local_bb;
+		(grid_offset + local_bb.0, grid_offset + local_bb.1)
+	}
 	/// Mouse is relative to Grid
 	/// Things with complicated shapes should override this with something better
 	fn is_click_hit(&self, mouse: V2, grid_offset: V2) -> bool {
 		let bb: (V2, V2) = self.bounding_box(grid_offset);
 		mouse.x >= bb.0.x && mouse.x <= bb.1.x && mouse.y >= bb.0.y && mouse.y <= bb.1.y
 	}
-	/// Relative to Grid
-	fn dragging_to(&mut self, current_pos: V2);
-	fn start_dragging(&mut self);
-	/// Relative to Grid
-	fn stop_dragging(&mut self, final_pos: V2);
-	fn get_position_before_dragging(&self) -> IntV2;
-	/// Used for the net highlight feature
-	fn is_connected_to_net(&self, net_id: u64) -> bool;
+	fn start_dragging(&mut self, current_mouse_pos: V2) {
+		let current_pos = self.get_ui_data().position;
+		self.get_ui_data_mut().dragging_offset = current_pos.to_v2() - current_mouse_pos;
+	}
+	fn dragging_to(&mut self, current_mouse_pos: V2) {
+		let dragging_offset = self.get_ui_data().dragging_offset;
+		self.get_ui_data_mut().position = round_v2_to_intv2(current_mouse_pos + dragging_offset);
+	}
+	fn stop_dragging(&mut self, final_mouse_pos: V2) {
+		self.dragging_to(final_mouse_pos);
+	}
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SelectProperty {
+	BitWidth(u32),
+	PositionX(i32),
+	PositionY(i32),
+	GlobalConnectionState(Option<bool>),
+	Direction(FourWayDir)
+}
+
+impl SelectProperty {
+	pub fn ui_name(&self) -> String {
+		match self {
+			Self::BitWidth(_) => "Bit Width".to_owned(),
+			Self::PositionX(_) => "X".to_owned(),
+			Self::PositionY(_) => "Y".to_owned(),
+			Self::GlobalConnectionState(_) => "I/O State".to_owned(),
+			Self::Direction(_) => "Direction".to_owned()
+		}
+	}
 }
 
 pub struct ComponentDrawInfo<'a> {
@@ -111,6 +170,12 @@ impl<'a> ComponentDrawInfo<'a> {
 	pub fn draw_polyline(&self, points: Vec<V2>, stroke: [u8; 3]) {
 		let px_points = points.iter().map(|p| self.grid_to_px(*p)).collect();
 		self.painter.add(Shape::line(px_points, PathStroke::new(self.grid_size * self.styles.line_size_grid, u8_3_to_color32(stroke))));
+	}
+	pub fn draw_rect(&self, start_grid: V2, end_grid: V2, inside_stroke: [u8; 4], border_stroke: [u8; 3]) {
+		let rectified_bb: (V2, V2) = merge_points_to_bb(vec![start_grid, end_grid]);
+		let (start, end) = (self.grid_to_px(rectified_bb.0), self.grid_to_px(rectified_bb.1));
+		self.painter.rect_filled(Rect{min: start, max: end}, 0, u8_4_to_color32(inside_stroke));
+		self.painter.rect_stroke(Rect{min: start, max: end}, 0, Stroke::new(1.0, u8_3_to_color32(border_stroke)), StrokeKind::Outside);
 	}
 	pub fn draw_circle(&self, center: V2, radius: f32, stroke: [u8; 3]) {
 		self.painter.circle_stroke(self.grid_to_px(center), radius * self.grid_size, Stroke::new(self.grid_size * self.styles.line_size_grid, u8_3_to_color32(stroke)));
@@ -190,7 +255,7 @@ impl LogicCircuitToplevelView {
 		let mut recompute_connections = false;
 		let mut propagate = true;// TODO: Change to false when rest of logic is implemented
 		// TODO
-		let (response, painter) = ui.allocate_painter(ui.available_size_before_wrap(), Sense::drag());
+		let (response, painter) = ui.allocate_painter(ui.available_size_before_wrap(), Sense::all());
 		let draw_info = ComponentDrawInfo::new(
 			self.screen_center_wrt_grid,
 			self.grid_size,

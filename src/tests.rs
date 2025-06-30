@@ -67,15 +67,15 @@ fn logic_state_merge() {
 fn basic_sim_and_gate() {
 	let mut circuit = create_simple_circuit(false);
 	// Connections computed correctly
-	assert_eq!(circuit.get_generic().pins.get("a").unwrap().internal_source, Some(LogicConnectionPinInternalSource::Net(0)));
-	assert_eq!(circuit.get_generic().pins.get("b").unwrap().internal_source, Some(LogicConnectionPinInternalSource::Net(1)));
-	assert_eq!(circuit.get_generic().pins.get("q").unwrap().internal_source, Some(LogicConnectionPinInternalSource::Net(2)));
+	assert_eq!(circuit.get_generic().pins.get("a").unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(0)));
+	assert_eq!(circuit.get_generic().pins.get("b").unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(1)));
+	assert_eq!(circuit.get_generic().pins.get("q").unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(2)));
 	{
 		let binding = circuit.components.get(&0).unwrap().borrow();
 		let and_gate = binding.get_generic();
-		assert_eq!(and_gate.pins.get("a").unwrap().external_source, Some(LogicConnectionPinExternalSource::Net(0)));
-		assert_eq!(and_gate.pins.get("b").unwrap().external_source, Some(LogicConnectionPinExternalSource::Net(1)));
-		assert_eq!(and_gate.pins.get("q").unwrap().external_source, Some(LogicConnectionPinExternalSource::Net(2)));
+		assert_eq!(and_gate.pins.get("a").unwrap().borrow().external_source, Some(LogicConnectionPinExternalSource::Net(0)));
+		assert_eq!(and_gate.pins.get("b").unwrap().borrow().external_source, Some(LogicConnectionPinExternalSource::Net(1)));
+		assert_eq!(and_gate.pins.get("q").unwrap().borrow().external_source, Some(LogicConnectionPinExternalSource::Net(2)));
 	}
 	// Set global inputs
 	circuit.set_pin_external_state("a", true.into()).unwrap();
@@ -93,7 +93,7 @@ fn basic_sim_and_gate() {
 	// AND gate output
 	assert_eq!(circuit.get_pin_state_panic("q"), false.into());
 	// Set global inputs
-	circuit.set_pin_external_state("q", true.into()).unwrap();
+	circuit.set_pin_external_state("a", true.into()).unwrap();
 	circuit.set_pin_external_state("b", false.into()).unwrap();
 	// Compute
 	circuit.compute(&AncestryStack::new());

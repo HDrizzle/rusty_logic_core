@@ -1,6 +1,6 @@
 //! Simulation inspired by CircuitVerse, UI based off of KiCad
 
-use std::{marker::PhantomData, ops, f32::consts::PI};
+use std::{marker::PhantomData, cell::RefCell, ops, f32::consts::PI};
 use serde::{Serialize, Deserialize};
 use nalgebra::Vector2;
 use eframe::emath;
@@ -15,7 +15,7 @@ pub mod tests;
 
 #[allow(unused)]
 pub mod prelude {
-	use std::{clone, collections::HashMap, fmt::Formatter};
+	use std::{clone, collections::HashMap, fmt::Formatter, hash::Hash};
 	use super::*;
 	// Name of this app
 	pub const APP_NAME: &str = "Rusty Logic";
@@ -23,11 +23,14 @@ pub mod prelude {
 	pub const CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH: usize = 10;
 	pub type V2 = Vector2<f32>;
 	use eframe::egui::{Color32, CornerRadius};
-	pub use ui::{Styles, LogicCircuitToplevelView, App, ComponentDrawInfo, GraphicSelectableItem};
+	pub use ui::{Styles, LogicCircuitToplevelView, App, ComponentDrawInfo, GraphicSelectableItem, SelectProperty, UIData};
 	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource};
 	pub use resource_interface::{load_file_with_better_error, EnumAllLogicDevicesSave};
 	pub fn u8_3_to_color32(in_: [u8; 3]) -> Color32 {
 		Color32::from_rgb(in_[0], in_[1], in_[2])
+	}
+	pub fn u8_4_to_color32(in_: [u8; 4]) -> Color32 {
+		Color32::from_rgba_unmultiplied(in_[0], in_[1], in_[2], in_[3])
 	}
 	pub fn emath_vec2_to_v2(in_: emath::Vec2) -> V2 {
 		V2::new(in_.x, in_.y)
@@ -49,7 +52,41 @@ pub mod prelude {
 		}
 		out
 	}
-	#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+	pub fn hashmap_into_refcells<K: Eq + Hash, V>(map: HashMap<K, V>) -> HashMap<K, RefCell<V>> {
+		let mut out = HashMap::<K, RefCell<V>>::new();
+		for (k, v) in map.into_iter() {
+			out.insert(k, RefCell::new(v));
+		}
+		out
+	}
+	pub fn merge_points_to_bb(points: Vec<V2>) -> (V2, V2) {// From ChatGPT
+		if points.is_empty() {
+			// Return a degenerate bounding box at the origin if there are no points
+			return (V2::new(0.0, 0.0), V2::new(0.0, 0.0));
+		}
+
+		let mut min_x = points[0].x;
+		let mut min_y = points[0].y;
+		let mut max_x = points[0].x;
+		let mut max_y = points[0].y;
+
+		for p in &points[1..] {
+			if p.x < min_x { min_x = p.x; }
+			if p.y < min_y { min_y = p.y; }
+			if p.x > max_x { max_x = p.x; }
+			if p.y > max_y { max_y = p.y; }
+		}
+
+		(V2::new(min_x, min_y), V2::new(max_x, max_y))
+	}
+	pub fn bbs_overlap(a: (V2, V2), b: (V2, V2)) -> bool {// From ChatGPT
+		let (a_min, a_max) = a;
+		let (b_min, b_max) = b;
+
+		!(a_max.x <= b_min.x || a_min.x >= b_max.x ||
+		a_max.y <= b_min.y || a_min.y >= b_max.y)
+	}
+	#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 	pub enum FourWayDir {
 		E,
 		N,
@@ -375,7 +412,7 @@ pub mod prelude {
 			hash_map!{
 				"a".to_owned() => LogicConnectionPin::new(None, Some(ext_conn_source.clone()), IntV2(-4, -1), FourWayDir::W, 1.0),
 				"b".to_owned() => LogicConnectionPin::new(None, Some(ext_conn_source.clone()), IntV2(-4, 1), FourWayDir::W, 1.0),
-				"b".to_owned() => LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(4, 0), FourWayDir::E, 1.0),
+				"q".to_owned() => LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(4, 0), FourWayDir::E, 1.0),
 			},
 			vec_to_u64_keyed_hashmap(vec![
 				LogicNet::new(vec![
