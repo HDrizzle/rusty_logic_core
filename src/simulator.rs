@@ -1,6 +1,6 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{cell::{Ref, RefCell}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, time::{Duration, Instant}};
+use std::{cell::RefCell, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, time::{Duration, Instant}};
 use serde::{Deserialize, Serialize};
 use crate::{prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
@@ -209,8 +209,8 @@ impl LogicNet {
 		for connection in &self.connections {
 			match self_ancestors.parent() {
 				Some(circuit) => match connection {
-					CircuitWidePinReference::ComponentPin(component_pin_ref) => match circuit.components.get(&component_pin_ref.component_id) {
-						Some(component_cell) => match component_cell.borrow().query_pin_cell(&component_pin_ref.pin_id) {
+					CircuitWidePinReference::ComponentPin(component_pin_ref) => match circuit.components.borrow().get(&component_pin_ref.component_id) {
+						Some(component_cell) => match component_cell.borrow().get_pins_cell().borrow().get(&component_pin_ref.pin_id) {
 							Some(pin) => {
 								// Check what the internal source is
 								if let Some(source) = &pin.borrow().internal_source {
@@ -220,7 +220,7 @@ impl LogicNet {
 											let component = component_cell.borrow();
 											let circuit = component.get_circuit();
 											match circuit.nets.get(&child_circuit_net_id) {
-												Some(child_net) => out.append(&mut child_net.resolve_sources(&self_ancestors.push(circuit), *child_circuit_net_id, &new_caller_history)),
+												Some(child_net) => out.append(&mut child_net.borrow().resolve_sources(&self_ancestors.push(circuit), *child_circuit_net_id, &new_caller_history)),
 												None => panic!("Internal connection in circuit \"{}\" references net {:?} inside sub-circuit \"{}\", the net does not exist", circuit.get_generic().unique_name, &child_circuit_net_id, component_cell.borrow().get_generic().unique_name)
 											}
 										},
@@ -235,7 +235,7 @@ impl LogicNet {
 						},
 						None => panic!("Net references internal pin on component {} circuit \"{}\", which doesn't exist in the circuit", component_pin_ref.component_id, circuit.get_generic().unique_name)
 					},
-					CircuitWidePinReference::ExternalConnection(ext_conn_id) => match circuit.query_pin_cell(&ext_conn_id) {
+					CircuitWidePinReference::ExternalConnection(ext_conn_id) => match circuit.get_pins_cell().borrow().get(ext_conn_id) {
 						Some(pin) => {
 							// Check what the external source is
 							if let Some(source) = &pin.borrow().external_source {
@@ -246,7 +246,7 @@ impl LogicNet {
 										// Check that this net's "grandparent" is a circuit and not toplevel
 										match self_ancestors.grandparent() {
 											Some(parent_circuit) => match parent_circuit.nets.get(parent_circuit_net_id) {
-												Some(parent_circuit_net) => out.append(&mut parent_circuit_net.resolve_sources(&self_ancestors.trim(), *parent_circuit_net_id, &new_caller_history)),
+												Some(parent_circuit_net) => out.append(&mut parent_circuit_net.borrow().resolve_sources(&self_ancestors.trim(), *parent_circuit_net_id, &new_caller_history)),
 												None => panic!("External connection is referencing a net ({}) which does not exist in this circuit's parent", parent_circuit_net_id)
 											},
 											None => panic!("External connection is connected to a net, but the parent of this circuit is toplevel, this shouldn't happen")
@@ -572,7 +572,7 @@ pub struct WireJoint {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogicDeviceGeneric {
-	pub pins: HashMap<String, RefCell<LogicConnectionPin>>,
+	pub pins: RefCell<HashMap<String, RefCell<LogicConnectionPin>>>,
 	pub ui_data: UIData,
 	pub unique_name: String,
 	pub sub_compute_cycles: usize,
@@ -594,7 +594,7 @@ impl LogicDeviceGeneric {
 			return Err("Sub-compute cycles cannot be 0".to_string());
 		}
 		Ok(Self {
-			pins: hashmap_into_refcells(pins),
+			pins: RefCell::new(hashmap_into_refcells(pins)),
 			ui_data: UIData::from_pos(position_grid),
 			unique_name,
 			sub_compute_cycles,
@@ -631,14 +631,15 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 		pin_id: &str,
 		state: LogicState
 	) -> Result<(), String> {
-		let generic: &mut LogicDeviceGeneric = self.get_generic_mut();
-		let pin: &mut LogicConnectionPin = generic.pins.get_mut(pin_id).expect(&format!("Pin ID {} does not work on logic device \"{}\"", pin_id, generic.unique_name)).get_mut();
+		let generic = self.get_generic_mut();
+		let pins = &generic.pins;
+		let mut pins_borrow_mut = pins.borrow_mut();
+		let pin: &mut LogicConnectionPin = pins_borrow_mut.get_mut(pin_id).expect(&format!("Pin ID {} does not work on logic device \"{}\"", pin_id, generic.unique_name)).get_mut();
 		pin.set_drive_external(state);
 		Ok(())
 	}
-	fn query_pin_cell(&self, pin_id: &str) -> Option<&RefCell<LogicConnectionPin>> {
-		let generic = self.get_generic();
-		generic.pins.get(pin_id)
+	fn get_pins_cell(&self) -> &RefCell<HashMap<String, RefCell<LogicConnectionPin>>> {
+		&self.get_generic().pins
 	}
 	/*fn query_pin_mut(&mut self, pin_id: &str) -> Option<&mut LogicConnectionPin> {
 		let generic = self.get_generic_mut();
@@ -654,10 +655,10 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 		Ok(())
 	}
 	fn get_pin_state_panic(&self, pin_query: &str) -> LogicState {
-		self.query_pin_cell(pin_query).expect(&format!("Pin query {:?} for logic device \"{}\" not valid", &pin_query, &self.get_generic().unique_name)).borrow().state()
+		self.get_pins_cell().borrow().get(pin_query).expect(&format!("Pin query {:?} for logic device \"{}\" not valid", &pin_query, &self.get_generic().unique_name)).borrow().state()
 	}
 	fn set_pin_internal_state_panic(&mut self, pin_query: &str, state: LogicState) {
-		self.query_pin_cell(pin_query).expect(&format!("Pin query {:?} not valid", &pin_query)).borrow_mut().internal_state = state;
+		self.get_pins_cell().borrow_mut().get_mut(pin_query).expect(&format!("Pin query {:?} not valid", &pin_query)).borrow_mut().internal_state = state;
 	}
 	fn into_box(self: Box<Self>) -> Box<dyn LogicDevice> where Self: Sized {
 		self as Box<dyn LogicDevice>
@@ -668,7 +669,7 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 impl<T: LogicDevice> GraphicSelectableItem for T {
 	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
 		let draw = draw_parent.add_grid_pos(self.get_generic().ui_data.position);
-		for (_, pin_cell) in self.get_generic().pins.iter() {
+		for (_, pin_cell) in self.get_pins_cell().borrow().iter() {
 			let pin = pin_cell.borrow();
 			draw.draw_polyline(
 				vec![
@@ -824,9 +825,9 @@ impl Default for Tool {
 #[derive(Debug)]
 pub struct LogicCircuit {
 	pub generic_device: LogicDeviceGeneric,
-	pub components: HashMap<u64, RefCell<Box<dyn LogicDevice>>>,
-	pub nets: HashMap<u64, LogicNet>,
-	pub wires: HashMap<u64, RefCell<Wire>>,
+	pub components: RefCell<HashMap<u64, RefCell<Box<dyn LogicDevice>>>>,
+	pub nets: HashMap<u64, RefCell<LogicNet>>,
+	pub wires: RefCell<HashMap<u64, RefCell<Wire>>>,
 	save_path: String,
 	/// The clock is only meant to be used in the toplevel circuit, if you want to use the same clock everywhere, just have an input pin dedicated to it for all sub-circuits.
 	/// Alternatively, a sub-circuit can have its own internal clock which would be different from the outside clock
@@ -870,9 +871,9 @@ impl LogicCircuit {
 				FourWayDir::E,
 				(V2::zeros(), V2::zeros())
 			)?,
-			components,
-			nets,
-			wires: hashmap_into_refcells(wires),
+			components: RefCell::new(components),
+			nets: hashmap_into_refcells(nets),
+			wires: RefCell::new(hashmap_into_refcells(wires)),
 			save_path,
 			clock_enabled,
 			clock_state,
@@ -894,9 +895,9 @@ impl LogicCircuit {
 		}
 		Ok(Self {
 			generic_device: save.generic_device,
-			components,
-			nets: save.nets,
-			wires: hashmap_into_refcells(save.wires),
+			components: RefCell::new(components),
+			nets: hashmap_into_refcells(save.nets),
+			wires: RefCell::new(hashmap_into_refcells(save.wires)),
 			save_path,
 			clock_enabled: save.clock_enabled,
 			clock_state: save.clock_state,
@@ -911,7 +912,7 @@ impl LogicCircuit {
 		// Bounding box & layout, like in CircuitVerse
 		let mut count_pins_not_clock: i32 = 0;
 		let mut block_pin_positions: HashMap<String, (IntV2, FourWayDir)> = HashMap::new();
-		for (pin_ref, pin_cell) in self.generic_device.pins.iter() {
+		for (pin_ref, pin_cell) in self.get_pins_cell().borrow().iter() {
 			if let Some(ext_source) = &pin_cell.borrow().external_source {
 				if let LogicConnectionPinExternalSource::Clock = ext_source {
 					continue;
@@ -934,10 +935,10 @@ impl LogicCircuit {
 		let mut net_to_pin_connections_to_drop = Vec::<(u64, Vec<usize>)>::new();// (net ID, index into net's connections vec)
 		for (net_id, net) in self.nets.iter() {
 			let mut this_net_to_pin_connections_to_drop = Vec::<usize>::new();
-			for (conn_i, net_connection) in net.connections.iter().enumerate() {
+			for (conn_i, net_connection) in net.borrow().connections.iter().enumerate() {
 				match net_connection {
-					CircuitWidePinReference::ComponentPin(component_pin_ref) => match self.components.get_mut(&component_pin_ref.component_id) {
-						Some(component) => match component.borrow_mut().query_pin_cell(&component_pin_ref.pin_id) {
+					CircuitWidePinReference::ComponentPin(component_pin_ref) => match self.components.borrow_mut().get_mut(&component_pin_ref.component_id) {
+						Some(component) => match component.borrow_mut().get_pins_cell().borrow_mut().get_mut(&component_pin_ref.pin_id) {
 							Some(pin_cell) => {
 								pin_cell.borrow_mut().external_source = Some(LogicConnectionPinExternalSource::Net(*net_id));
 							}
@@ -945,7 +946,7 @@ impl LogicCircuit {
 						},
 						None => this_net_to_pin_connections_to_drop.push(conn_i)
 					},
-					CircuitWidePinReference::ExternalConnection(ext_conn_query) => match self.generic_device.pins.get_mut(ext_conn_query) {
+					CircuitWidePinReference::ExternalConnection(ext_conn_query) => match self.get_pins_cell().borrow_mut().get_mut(ext_conn_query) {
 						Some(pin_cell) => {
 							pin_cell.borrow_mut().internal_source = Some(LogicConnectionPinInternalSource::Net(*net_id));
 						},
@@ -958,18 +959,18 @@ impl LogicCircuit {
 		// Remove broken connections
 		for (net_id, conns) in net_to_pin_connections_to_drop {
 			for conn_i in conns.iter().rev() {// Very important to reverse list of indices to delete, because deleting lower indices first would shift the array and make later ones invalid
-				self.nets.get_mut(&net_id).unwrap().connections.remove(*conn_i);
+				self.nets.get(&net_id).unwrap().borrow_mut().connections.remove(*conn_i);
 			}
 		}
 		// Component pin -> Net
 		let mut pin_to_net_connections_to_drop = Vec::<CircuitWidePinReference>::new();
-		for (comp_id, comp) in self.components.iter() {
-			for (pin_id, pin) in comp.borrow().get_generic().pins.iter() {
+		for (comp_id, comp) in self.components.borrow().iter() {
+			for (pin_id, pin) in comp.borrow().get_pins_cell().borrow().iter() {
 				if let Some(source) = &pin.borrow().external_source {
 					match source {
 						LogicConnectionPinExternalSource::Global => panic!("Pin {:?} of component {:?} has external source 'Global' which doesn't make sense", &pin_id, &comp_id),
 						LogicConnectionPinExternalSource::Net(net_id) => match self.nets.get_mut(&net_id) {
-							Some(net) => net.add_component_connection_if_missing(*comp_id, pin_id),
+							Some(net) => net.borrow_mut().add_component_connection_if_missing(*comp_id, pin_id),
 							None => pin_to_net_connections_to_drop.push(CircuitWidePinReference::ComponentPin(ComponentPinReference::new(*comp_id, pin_id.to_owned()))),
 						},
 						LogicConnectionPinExternalSource::Clock => {}
@@ -978,12 +979,12 @@ impl LogicCircuit {
 			}
 		}
 		// External pin -> Net
-		for (pin_id, pin) in self.generic_device.pins.iter() {
+		for (pin_id, pin) in self.get_pins_cell().borrow().iter() {
 			if let Some(source) = &pin.borrow().internal_source {
 				match source {
 					LogicConnectionPinInternalSource::ComponentInternal => panic!("External connection pin {} of circuit {:?} has internal source 'ComponentInternal' which doesn't make sense", pin_id, &self.generic_device.unique_name),
-					LogicConnectionPinInternalSource::Net(net_query) => match self.nets.get_mut(&net_query) {
-						Some(net) => net.add_external_connection_if_missing(pin_id),
+					LogicConnectionPinInternalSource::Net(net_query) => match self.nets.get(&net_query) {
+						Some(net) => net.borrow_mut().add_external_connection_if_missing(pin_id),
 						None => pin_to_net_connections_to_drop.push(CircuitWidePinReference::ExternalConnection(pin_id.to_owned())),
 					}
 				}
@@ -993,22 +994,24 @@ impl LogicCircuit {
 		for pin_ref in pin_to_net_connections_to_drop {
 			match pin_ref {
 				CircuitWidePinReference::ComponentPin(component_pin_ref) => {
-					self.components.get_mut(&component_pin_ref.component_id).expect(&format!("Component ID {} from net connections to delete is invalid", component_pin_ref.component_id)).borrow_mut().query_pin_cell(&component_pin_ref.pin_id).expect(&format!("Pin ID {} for component {} from net connections to delete is invalid", component_pin_ref.pin_id, component_pin_ref.component_id)).borrow_mut().external_source = None;
+					self.components.borrow().get(&component_pin_ref.component_id).expect(&format!("Component ID {} from net connections to delete is invalid", component_pin_ref.component_id)).borrow().get_pins_cell().borrow().get(&component_pin_ref.pin_id).expect(&format!("Pin ID {} for component {} from net connections to delete is invalid", component_pin_ref.pin_id, component_pin_ref.component_id)).borrow_mut().external_source = None;
 				},
 				CircuitWidePinReference::ExternalConnection(ext_conn_query) => {
-					self.generic_device.pins.get_mut(&ext_conn_query).expect(&format!("External connection ID {} from net connections to delete is invalid", &ext_conn_query)).borrow_mut().internal_source = None;
+					self.get_pins_cell().borrow_mut().get_mut(&ext_conn_query).expect(&format!("External connection ID {} from net connections to delete is invalid", &ext_conn_query)).borrow_mut().internal_source = None;
 				}
 			}
 		}
 	}
-	pub fn toplevel_ui_interact<'a>(&mut self, response: Response, draw: &ComponentDrawInfo<'a>, mut input_state: egui::InputState) {
+	/// Returns: whether to recompute the circuit
+	pub fn toplevel_ui_interact<'a>(&mut self, response: Response, draw: &ComponentDrawInfo<'a>, mut input_state: egui::InputState) -> bool {
+		let mut return_recompute_connections = false;
 		match self.tool.borrow_mut().deref_mut() {
 			Tool::Select{selected_graphics, selected_graphics_state} => {
 				match selected_graphics_state {
 					SelectionState::Fixed => {
 						if response.drag_started_by(PointerButton::Primary) {
 							let begining_mouse_pos_grid: V2 = draw.mouse_pos2_to_grid(response.hover_pos().expect("Hover pos should work when dragging"));
-							*selected_graphics_state = SelectionState::Dragging(begining_mouse_pos_grid, emath_vec2_to_v2(response.drag_delta()) / draw.grid_size);
+							*selected_graphics_state =  SelectionState::Dragging(begining_mouse_pos_grid, emath_vec2_to_v2(response.drag_delta()) / draw.grid_size);
 							for item_ref in selected_graphics.iter() {
 								self.run_function_on_graphic_item_mut(item_ref.clone(), |graphic_item| {
 									graphic_item.start_dragging(begining_mouse_pos_grid);
@@ -1079,7 +1082,8 @@ impl LogicCircuit {
 											graphic_item.stop_dragging(*start_grid + *delta_grid);
 										})
 									}
-									*selected_graphics_state = SelectionState::Fixed
+									*selected_graphics_state = SelectionState::Fixed;
+									return_recompute_connections = true;
 								}
 							}
 						}
@@ -1107,7 +1111,10 @@ impl LogicCircuit {
 				}
 				// Delete
 				if input_state.consume_key(Modifiers::NONE, Key::Delete) {
-					// TODO
+					for item_ref in selected_graphics.iter() {
+						self.remove_graphic_item(item_ref);
+					}
+					return_recompute_connections = true;
 				}
 			},
 			Tool::HighlightNet(net_id) => {
@@ -1123,6 +1130,7 @@ impl LogicCircuit {
 				// TODO
 			}
 		}
+		return_recompute_connections
 	}
 	fn was_anything_clicked<'a>(&self, grid_pos: V2) -> Option<GraphicSelectableItemRef> {
 		let mut selected_opt = Option::<GraphicSelectableItemRef>::None;
@@ -1135,23 +1143,28 @@ impl LogicCircuit {
 		}
 		selected_opt
 	}
-	fn remove_graphic_item(&mut self, ref_: GraphicSelectableItemRef) {
-		// TODO
+	fn remove_graphic_item(&self, ref_: &GraphicSelectableItemRef) {
+		let error_msg = format!("Graphic item reference {:?} cannot be found", &ref_);
+		match ref_ {
+			GraphicSelectableItemRef::Component(comp_id) => {self.components.borrow_mut().remove(comp_id).expect(&error_msg);},
+			GraphicSelectableItemRef::Wire(wire_id) => {self.wires.borrow_mut().remove(wire_id).expect(&error_msg);},
+			GraphicSelectableItemRef::Pin(pin_id) => {self.generic_device.pins.borrow_mut().remove(pin_id).expect(&error_msg);},
+		}
 	}
 	fn run_function_on_graphic_item<T>(&self, ref_: GraphicSelectableItemRef, mut func: impl FnMut(Box<&dyn GraphicSelectableItem>) -> T) -> T {
 		let error_msg = format!("Graphic item reference {:?} cannot be found", &ref_);
 		match ref_ {
-			GraphicSelectableItemRef::Component(comp_id) => func(Box::new(logic_device_to_graphic_item(self.components.get(&(comp_id.into())).expect(&error_msg).borrow().deref().as_ref()))),
-			GraphicSelectableItemRef::Wire(wire_id) => func(Box::new(self.wires.get(&(wire_id.into())).expect(&error_msg).borrow().deref())),
-			GraphicSelectableItemRef::Pin(pin_id) => func(Box::new(self.generic_device.pins.get(&pin_id).expect(&error_msg).borrow().deref())),
+			GraphicSelectableItemRef::Component(comp_id) => func(Box::new(logic_device_to_graphic_item(self.components.borrow().get(&comp_id).expect(&error_msg).borrow().deref().as_ref()))),
+			GraphicSelectableItemRef::Wire(wire_id) => func(Box::new(self.wires.borrow().get(&wire_id).expect(&error_msg).borrow().deref())),
+			GraphicSelectableItemRef::Pin(pin_id) => func(Box::new(self.generic_device.pins.borrow().get(&pin_id).expect(&error_msg).borrow().deref())),
 		}
 	}
 	fn run_function_on_graphic_item_mut<T>(&self, ref_: GraphicSelectableItemRef, mut func: impl FnMut(Box<&mut dyn GraphicSelectableItem>) -> T) -> T {
 		let error_msg = format!("Graphic item reference {:?} cannot be found", &ref_);
 		match ref_ {
-			GraphicSelectableItemRef::Component(comp_id) => func(Box::new(logic_device_to_graphic_item_mut(self.components.get(&(comp_id.into())).expect(&error_msg).borrow_mut().deref_mut().as_mut()))),
-			GraphicSelectableItemRef::Wire(wire_id) => func(Box::new(self.wires.get(&(wire_id.into())).expect(&error_msg).borrow_mut().deref_mut())),
-			GraphicSelectableItemRef::Pin(pin_id) => func(Box::new(self.generic_device.pins.get(&pin_id).expect(&error_msg).borrow_mut().deref_mut())),
+			GraphicSelectableItemRef::Component(comp_id) => func(Box::new(logic_device_to_graphic_item_mut(self.components.borrow().get(&comp_id).expect(&error_msg).borrow_mut().deref_mut().as_mut()))),
+			GraphicSelectableItemRef::Wire(wire_id) => func(Box::new(self.wires.borrow().get(&wire_id).expect(&error_msg).borrow_mut().deref_mut())),
+			GraphicSelectableItemRef::Pin(pin_id) => func(Box::new(self.generic_device.pins.borrow().get(&pin_id).expect(&error_msg).borrow_mut().deref_mut())),
 		}
 	}
 	/*fn delete_graphic_item(&mut self, ref_: GraphicSelectableItem) {
@@ -1164,13 +1177,13 @@ impl LogicCircuit {
 	}*/
 	fn get_all_graphics_references(&self) -> Vec<GraphicSelectableItemRef> {
 		let mut out = Vec::<GraphicSelectableItemRef>::new();
-		for (ref_, _) in self.components.iter() {
+		for (ref_, _) in self.components.borrow().iter() {
 			out.push(GraphicSelectableItemRef::Component(*ref_));
 		}
-		for (ref_, _) in self.wires.iter() {
+		for (ref_, _) in self.wires.borrow().iter() {
 			out.push(GraphicSelectableItemRef::Wire(*ref_));
 		}
-		for (ref_, _) in self.generic_device.pins.iter() {
+		for (ref_, _) in self.generic_device.pins.borrow().iter() {
 			out.push(GraphicSelectableItemRef::Pin(ref_.clone()));
 		}
 		// TODO: Text boxes once I implement them
@@ -1195,26 +1208,26 @@ impl LogicDevice for LogicCircuit {
 		// Update net states
 		let mut new_net_states = HashMap::<u64, (LogicState, Vec<GlobalSourceReference>)>::new();
 		for (net_id, net) in self.nets.iter() {
-			new_net_states.insert(*net_id, net.update_state(&ancestors, *net_id));
+			new_net_states.insert(*net_id, net.borrow_mut().update_state(&ancestors, *net_id));
 		}
 		drop(ancestors);
 		for (net_id, (state, sources)) in new_net_states.into_iter() {
-			let net_mut_ref = self.nets.get_mut(&net_id).unwrap();
+			let mut net_mut_ref = self.nets.get(&net_id).unwrap().borrow_mut();
 			net_mut_ref.state = state;
 			net_mut_ref.sources = sources;
 		}
 		// Update pin & wire states from nets
 		// Wires
-		for (wire_id, wire_cell) in self.wires.iter_mut() {
+		for (wire_id, wire_cell) in self.wires.borrow_mut().iter_mut() {
 			let net_id = wire_cell.borrow().net;
-			wire_cell.borrow_mut().state = self.nets.get(&net_id).expect(&format!("Wire {} has invalid net ID {}", wire_id, net_id)).state;
+			wire_cell.borrow_mut().state = self.nets.get(&net_id).expect(&format!("Wire {} has invalid net ID {}", wire_id, net_id)).borrow().state;
 		}
 		// External connection pins
-		for (pin_id, pin_cell) in self.generic_device.pins.iter_mut() {
+		for (pin_id, pin_cell) in self.generic_device.pins.borrow_mut().iter_mut() {
 			let int_source_opt = pin_cell.borrow().internal_source.clone();
 			if let Some(source) = int_source_opt {
 				match source {
-					LogicConnectionPinInternalSource::Net(net_id) => pin_cell.borrow_mut().set_drive_internal(self.nets.get(&net_id).expect(&format!("External connection pin {} has invalid net query {}", pin_id, net_id)).state),
+					LogicConnectionPinInternalSource::Net(net_id) => pin_cell.borrow_mut().set_drive_internal(self.nets.get(&net_id).expect(&format!("External connection pin {} has invalid net query {}", pin_id, net_id)).borrow().state),
 					LogicConnectionPinInternalSource::ComponentInternal => panic!("External connection pin {} for circuit \"{}\" has the internal source as ComponentInternal which shouldn't happen", pin_id, &self.generic_device.unique_name)
 				}
 			}
@@ -1226,14 +1239,14 @@ impl LogicDevice for LogicCircuit {
 			}
 		}
 		// Component pins, and propagate through components
-		for (comp_id, comp) in self.components.iter() {
-			for (pin_id, pin_cell) in comp.borrow_mut().get_generic_mut().pins.iter_mut() {
+		for (comp_id, comp) in self.components.borrow().iter() {
+			for (pin_id, pin_cell) in comp.borrow_mut().get_generic_mut().pins.borrow_mut().iter_mut() {
 				let ext_source_opt = pin_cell.borrow().external_source.clone();
 				if let Some(source) = ext_source_opt {
 					match source {
 						LogicConnectionPinExternalSource::Global => panic!("Pin {} of component {} has external source 'Global' which doesn't make sense", pin_id, comp_id),
 						LogicConnectionPinExternalSource::Net(net_id) => {
-							pin_cell.borrow_mut().external_state = self.nets.get_mut(&net_id).expect(&format!("Pin {} of component {} references net {} which doesn't exist", pin_id, comp_id, net_id)).state;
+							pin_cell.borrow_mut().external_state = self.nets.get_mut(&net_id).expect(&format!("Pin {} of component {} references net {} which doesn't exist", pin_id, comp_id, net_id)).borrow().state;
 						},
 						LogicConnectionPinExternalSource::Clock => {}// A clock-connected pin is handled by the sub-circuit itself
 					}
@@ -1242,26 +1255,26 @@ impl LogicDevice for LogicCircuit {
 		}
 		// THIS GOES LAST, has to be seperate loop then before
 		let ancestors = ancestors_above.push(&self);
-		for (_, comp) in self.components.iter() {
+		for (_, comp) in self.components.borrow().iter() {
 			comp.borrow_mut().compute(&ancestors);
 		}
 	}
 	fn save(&self) -> Result<EnumAllLogicDevicesSave, String> {
 		// Convert components to enum variants to be serialized
 		let mut components_save = HashMap::<u64, EnumAllLogicDevicesSave>::new();
-		for (ref_, component) in self.components.iter() {
+		for (ref_, component) in self.components.borrow().iter() {
 			components_save.insert(*ref_, component.borrow().save()?);
 		}
 		// Un-RefCell Wires
 		let mut wires_save = HashMap::<u64, Wire>::new();
-		for (ref_, wire) in self.wires.iter() {
+		for (ref_, wire) in self.wires.borrow().iter() {
 			wires_save.insert(*ref_, wire.borrow().clone());
 		}
 		// First, actually save this circuit
 		let save = LogicCircuitSave {
 			generic_device: self.generic_device.clone(),
 			components: components_save,
-			nets: self.nets.clone(),
+			nets: hashmap_unwrap_refcells(self.nets.clone()),
 			wires: wires_save,
 			clock_enabled: self.clock_enabled,
 			clock_state: self.clock_state,

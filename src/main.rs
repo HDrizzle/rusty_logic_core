@@ -59,6 +59,13 @@ pub mod prelude {
 		}
 		out
 	}
+	pub fn hashmap_unwrap_refcells<K: Eq + Hash, V>(map: HashMap<K, RefCell<V>>) -> HashMap<K, V> {
+		let mut out = HashMap::<K, V>::new();
+		for (k, v) in map.into_iter() {
+			out.insert(k, v.into_inner());
+		}
+		out
+	}
 	pub fn merge_points_to_bb(points: Vec<V2>) -> (V2, V2) {// From ChatGPT
 		if points.is_empty() {
 			// Return a degenerate bounding box at the origin if there are no points

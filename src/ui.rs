@@ -252,7 +252,6 @@ impl LogicCircuitToplevelView {
 		}
 	}
 	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles) {
-		let mut recompute_connections = false;
 		let mut propagate = true;// TODO: Change to false when rest of logic is implemented
 		// TODO
 		let (response, painter) = ui.allocate_painter(ui.available_size_before_wrap(), Sense::all());
@@ -266,7 +265,10 @@ impl LogicCircuitToplevelView {
 		);
 		// First, detect user unput
 		let input_state = ui.ctx().input(|i| i.clone());
-		self.circuit.toplevel_ui_interact(response, &draw_info, input_state);
+		let recompute_connections: bool = self.circuit.toplevel_ui_interact(response, &draw_info, input_state);
+		if recompute_connections {
+			self.circuit.recompute_connections();
+		}
 		// Update
 		if recompute_connections || propagate {
 			self.logic_loop_error = self.propagate_until_stable(PROPAGATION_LIMIT);
