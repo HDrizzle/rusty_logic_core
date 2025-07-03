@@ -109,6 +109,14 @@ pub mod prelude {
 				Self::S => V2::new(0.0, -1.0)
 			}
 		}
+		pub fn to_unit_int(&self) -> IntV2 {
+			match &self {
+				Self::E => IntV2(1, 0),
+				Self::N => IntV2(0, 1),
+				Self::W => IntV2(-1, 0),
+				Self::S => IntV2(0, -1)
+			}
+		}
 		pub fn to_dir_deg(&self) -> f32 {
 			match &self {
 				Self::E => 0.0,
@@ -123,6 +131,22 @@ pub mod prelude {
 				Self::N => "North".to_string(),
 				Self::W => "West".to_string(),
 				Self::S => "South".to_string()
+			}
+		}
+		pub fn is_horizontal(&self) -> bool {
+			match &self {
+				Self::E => true,
+				Self::N => false,
+				Self::W => true,
+				Self::S => false
+			}
+		}
+		pub fn opposite_direction(&self) -> Self {
+			match &self {
+				Self::E => Self::W,
+				Self::N => Self::S,
+				Self::W => Self::E,
+				Self::S => Self::N
 			}
 		}
 	}
@@ -375,6 +399,25 @@ pub mod prelude {
 		pub fn to_v2(&self) -> V2 {
 			V2::new(self.0 as f32, self.1 as f32)
 		}
+		pub fn is_along_axis(&self) -> Option<FourWayDir> {
+			if self.0 == 0 {
+				if self.1 > 0 {
+					return Some(FourWayDir::N);
+				}
+				else {
+					return Some(FourWayDir::S);
+				}
+			}
+			if self.1 == 0 {
+				if self.0 > 0 {
+					return Some(FourWayDir::E);
+				}
+				else {
+					return Some(FourWayDir::W);
+				}
+			}
+			None
+		}
 	}
 
 	impl ops::Add<IntV2> for IntV2 {
@@ -438,7 +481,11 @@ pub mod prelude {
 			IntV2(0, 0),
 			"test-circuit".to_string(),
 			1,
-			HashMap::new(),
+			vec_to_u64_keyed_hashmap(vec![
+				Wire::new(IntV2(-4, -1), 1, FourWayDir::E, 1, 0),
+				Wire::new(IntV2(-4, 1), 1, FourWayDir::E, 1, 1),
+				Wire::new(IntV2(4, 0), 1, FourWayDir::W, 1, 2)
+			]),
 			"test".to_string(),
 			true,
 			false,

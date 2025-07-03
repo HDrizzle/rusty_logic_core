@@ -267,7 +267,7 @@ impl LogicCircuitToplevelView {
 		let input_state = ui.ctx().input(|i| i.clone());
 		let recompute_connections: bool = self.circuit.toplevel_ui_interact(response, &draw_info, input_state);
 		if recompute_connections {
-			self.circuit.recompute_connections();
+			self.circuit.update_pin_to_wire_connections();
 		}
 		// Update
 		if recompute_connections || propagate {
