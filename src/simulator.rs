@@ -418,7 +418,8 @@ impl LogicConnectionPin {
 
 /// ONLY meant to be used on external pins on the toplevel circuit, all other pins are just rendered as part of the component
 impl GraphicSelectableItem for LogicConnectionPin {
-	fn draw<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
+		let draw = draw_parent.add_grid_pos(self.ui_data.position);
 		draw.draw_polyline(
 			vec![
 				V2::new(-0.9, -0.9),
@@ -426,7 +427,14 @@ impl GraphicSelectableItem for LogicConnectionPin {
 				V2::new(0.9, 0.9),
 				V2::new(0.9, -0.9),
 				V2::new(-0.9, -0.9)
-			].iter().map(|p| p + self.ui_data.position.to_v2() + (self.direction.to_unit() * 2.0)).collect(),
+			].iter().map(|p| p + (self.direction.to_unit() * 2.0)).collect(),
+			draw.styles.color_from_logic_state(self.state())
+		);
+		draw.draw_polyline(
+			vec![
+				V2::zeros(),
+				self.direction.to_unit()
+			],
 			draw.styles.color_from_logic_state(self.state())
 		);
 		if let Some(ext_source) = &self.external_source {
@@ -440,7 +448,7 @@ impl GraphicSelectableItem for LogicConnectionPin {
 						V2::new(0.0, -clk_scale),
 						V2::new(clk_scale, -clk_scale),
 						V2::new(clk_scale, 0.0)
-					].iter().map(|p| p + self.ui_data.position.to_v2() + (self.direction.to_unit() * 2.0)).collect(),
+					].iter().map(|p| p + (self.direction.to_unit() * 2.0)).collect(),
 					draw.styles.color_foreground
 				);
 			}
@@ -692,6 +700,7 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn get_bit_width(&self) -> Option<u32> {Some(1)}
 	#[allow(unused)]
 	fn set_bit_width(&mut self, bit_width: u32) {}
+	fn is_toplevel_circuit(&self) -> bool {false}
 	fn compute(&mut self, ancestors: &AncestryStack) {
 		for _ in 0..self.get_generic().sub_compute_cycles {
 			self.compute_step(ancestors);
@@ -746,15 +755,17 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 impl<T: LogicDevice> GraphicSelectableItem for T {
 	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
 		let draw = draw_parent.add_grid_pos(self.get_generic().ui_data.position);
-		for (_, pin_cell) in self.get_pins_cell().borrow().iter() {
-			let pin = pin_cell.borrow();
-			draw.draw_polyline(
-				vec![
-					pin.ui_data.position.to_v2(),
-					pin.ui_data.position.to_v2() - (pin.direction.to_unit() * pin.length)
-				],
-				draw.styles.color_from_logic_state(pin.state())
-			);
+		if !self.is_toplevel_circuit() {
+			for (_, pin_cell) in self.get_pins_cell().borrow().iter() {
+				let pin = pin_cell.borrow();
+				draw.draw_polyline(
+					vec![
+						pin.ui_data.position.to_v2(),
+						pin.ui_data.position.to_v2() - (pin.direction.to_unit() * pin.length)
+					],
+					draw.styles.color_from_logic_state(pin.state())
+				);
+			}
 		}
 		self.draw_except_pins(&draw);
 	}
@@ -1332,21 +1343,22 @@ impl LogicCircuit {
 	/// TODO: Update wire connections
 	pub fn update_pin_to_wire_connections(&self) {
 		// Component pins
-		for (comp_id, comp) in self.components.borrow().iter() {
-			for (pin_id, pin_cell) in comp.borrow().get_pins_cell().borrow().iter() {
+		for (comp_id, comp_cell) in self.components.borrow().iter() {
+			let comp = comp_cell.borrow();
+			for (pin_id, pin_cell) in comp.get_pins_cell().borrow().iter() {
 				let mut pin = pin_cell.borrow_mut();
 				if pin.is_ext_source_clock() {// Don't mess with
 					continue;
 				}
-				let pin_pos: IntV2 = pin.ui_data.position;
+				let pin_pos: IntV2 = pin.ui_data.position + comp.get_ui_data().position;
+				// Fist check if pin is already connected to another net and remove from that net's connection list in case it's a different net
+				if let Some(source) = &pin.external_source {
+					if let LogicConnectionPinExternalSource::Net(old_net_id) = source {
+						self.nets.get(old_net_id).expect("Net ID invalid").borrow_mut().edit_component_connection(false, *comp_id, pin_id);
+					}
+				}
 				match self.is_connection_point(pin_pos, true) {
 					(_, Some(new_net_id)) => {
-						// Fist check if pin is already connected to another net and remove from that net's connection list in case it's a different net
-						if let Some(source) = &pin.external_source {
-							if let LogicConnectionPinExternalSource::Net(old_net_id) = source {
-								self.nets.get(old_net_id).expect("Net ID invalid").borrow_mut().edit_component_connection(false, *comp_id, pin_id);
-							}
-						}
 						pin.external_source = Some(LogicConnectionPinExternalSource::Net(new_net_id));
 						self.nets.get(&new_net_id).expect("Net ID invalid").borrow_mut().edit_component_connection(true, *comp_id, pin_id);
 					},
@@ -1360,14 +1372,14 @@ impl LogicCircuit {
 		for (pin_id, pin_cell) in self.get_pins_cell().borrow().iter() {
 			let mut pin = pin_cell.borrow_mut();
 			let pin_pos: IntV2 = pin.ui_data.position;
+			// Fist check if pin is already connected to another net and remove from that net's connection list in case it's a different net
+			if let Some(source) = &pin.internal_source {
+				if let LogicConnectionPinInternalSource::Net(old_net_id) = source {
+					self.nets.get(old_net_id).expect("Net ID invalid").borrow_mut().edit_external_connection(false, &pin_id);
+				}
+			}
 			match self.is_connection_point(pin_pos, true) {
 				(_, Some(new_net_id)) => {
-					// Fist check if pin is already connected to another net and remove from that net's connection list in case it's a different net
-					if let Some(source) = &pin.internal_source {
-						if let LogicConnectionPinInternalSource::Net(old_net_id) = source {
-							self.nets.get(old_net_id).expect("Net ID invalid").borrow_mut().edit_external_connection(false, &pin_id);
-						}
-					}
 					pin.internal_source = Some(LogicConnectionPinInternalSource::Net(new_net_id));
 					self.nets.get(&new_net_id).expect("Net ID invalid").borrow_mut().edit_external_connection(true, &pin_id);
 				},
@@ -1476,10 +1488,13 @@ impl LogicDevice for LogicCircuit {
 					LogicConnectionPinInternalSource::ComponentInternal => panic!("External connection pin {} for circuit \"{}\" has the internal source as ComponentInternal which shouldn't happen", pin_id, &self.generic_device.unique_name)
 				}
 			}
+			else {
+				pin_cell.borrow_mut().set_drive_internal(LogicState::Floating);
+			}
 			let ext_source_opt = pin_cell.borrow().external_source.clone();
 			if let Some(ext_source) = ext_source_opt {
 				if let LogicConnectionPinExternalSource::Clock = ext_source {
-					pin_cell.borrow_mut().external_state = self.clock_state.into();
+					pin_cell.borrow_mut().set_drive_external(self.clock_state.into());
 				}
 			}
 		}
@@ -1491,10 +1506,13 @@ impl LogicDevice for LogicCircuit {
 					match source {
 						LogicConnectionPinExternalSource::Global => panic!("Pin {} of component {} has external source 'Global' which doesn't make sense", pin_id, comp_id),
 						LogicConnectionPinExternalSource::Net(net_id) => {
-							pin_cell.borrow_mut().external_state = self.nets.get_mut(&net_id).expect(&format!("Pin {} of component {} references net {} which doesn't exist", pin_id, comp_id, net_id)).borrow().state;
+							pin_cell.borrow_mut().set_drive_external(self.nets.get_mut(&net_id).expect(&format!("Pin {} of component {} references net {} which doesn't exist", pin_id, comp_id, net_id)).borrow().state);
 						},
 						LogicConnectionPinExternalSource::Clock => {}// A clock-connected pin is handled by the sub-circuit itself
 					}
+				}
+				else {
+					pin_cell.borrow_mut().set_drive_external(LogicState::Floating);
 				}
 			}
 		}
@@ -1561,5 +1579,8 @@ impl LogicDevice for LogicCircuit {
 	}
 	fn get_circuit_mut(&mut self) -> &mut Self {
 		self
+	}
+	fn is_toplevel_circuit(&self) -> bool {
+		true
 	}
 }
