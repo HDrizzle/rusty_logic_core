@@ -19,7 +19,8 @@ pub struct Styles {
     pub color_foreground: [u8; 3],
     pub color_grid: [u8; 3],
 	pub select_rect_color: [u8; 4],
-	pub select_rect_edge_color: [u8; 3]
+	pub select_rect_edge_color: [u8; 3],
+	pub color_wire_in_progress: [u8; 3]
 }
 
 impl Styles {
@@ -53,7 +54,8 @@ impl Default for Styles {
 			color_foreground: [255, 255, 255],
 			color_grid: [64, 64, 64],
 			select_rect_color: [7, 252, 244, 128],
-			select_rect_edge_color: [252, 7, 7]
+			select_rect_edge_color: [252, 7, 7],
+			color_wire_in_progress: [2, 156, 99]
 		}
 	}
 }
@@ -146,7 +148,8 @@ pub struct ComponentDrawInfo<'a> {
 	/// Includes component's own position, 
 	pub offset_grid: IntV2,
 	pub styles: &'a Styles,
-	pub rect_center: V2
+	pub rect_center: V2,
+	rect_size_px: V2
 }
 
 impl<'a> ComponentDrawInfo<'a> {
@@ -156,7 +159,8 @@ impl<'a> ComponentDrawInfo<'a> {
 		painter: &'a Painter,
 		offset_grid: IntV2,
 		styles: &'a Styles,
-		rect_center: V2
+		rect_center: V2,
+		rect_size_px: V2
 	) -> Self {
 		Self {
 			screen_center_wrt_grid,
@@ -164,7 +168,8 @@ impl<'a> ComponentDrawInfo<'a> {
 			painter,
 			offset_grid,
 			styles,
-			rect_center
+			rect_center,
+			rect_size_px
 		}
 	}
 	pub fn draw_polyline(&self, points: Vec<V2>, stroke: [u8; 3]) {
@@ -227,7 +232,8 @@ impl<'a> ComponentDrawInfo<'a> {
 			painter: self.painter,
 			offset_grid: self.offset_grid + new_grid_pos,
 			styles: self.styles,
-			rect_center: self.rect_center
+			rect_center: self.rect_center,
+			rect_size_px: self.rect_size_px
 		}
 	}
 }
@@ -252,30 +258,36 @@ impl LogicCircuitToplevelView {
 		}
 	}
 	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles) {
-		let mut propagate = true;// TODO: Change to false when rest of logic is implemented
-		// TODO
-		let (response, painter) = ui.allocate_painter(ui.available_size_before_wrap(), Sense::all());
-		let draw_info = ComponentDrawInfo::new(
-			self.screen_center_wrt_grid,
-			self.grid_size,
-			&painter,
-			IntV2(0, 0),
-			styles,
-			emath_pos2_to_v2(response.rect.center())
-		);
-		// First, detect user unput
-		let input_state = ui.ctx().input(|i| i.clone());
-		let recompute_connections: bool = self.circuit.toplevel_ui_interact(response, &draw_info, input_state);
-		if recompute_connections {
-			self.circuit.update_pin_to_wire_connections();
-		}
-		// Update
-		if recompute_connections || propagate {
-			self.logic_loop_error = self.propagate_until_stable(PROPAGATION_LIMIT);
-		}
-        // graphics help from https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/painting.rs
-		// Draw circuit
-		self.circuit.draw(&draw_info);
+		Frame::canvas(ui.style()).show(ui, |ui| {
+			let mut propagate = true;// TODO: Change to false when rest of logic is implemented
+			// TODO
+			let canvas_size = ui.available_size_before_wrap();
+			let (response, painter) = ui.allocate_painter(canvas_size, Sense::all());
+			let draw_info = ComponentDrawInfo::new(
+				self.screen_center_wrt_grid,
+				self.grid_size,
+				&painter,
+				IntV2(0, 0),
+				styles,
+				emath_pos2_to_v2(response.rect.center()),
+				emath_vec2_to_v2(canvas_size)
+			);
+			// First, detect user unput
+			let input_state = ui.ctx().input(|i| i.clone());
+			let recompute_connections: bool = self.circuit.toplevel_ui_interact(response, &draw_info, input_state);
+			if recompute_connections {
+				self.circuit.update_pin_to_wire_connections();
+			}
+			// Update
+			if recompute_connections || propagate {
+				self.logic_loop_error = self.propagate_until_stable(PROPAGATION_LIMIT);
+			}
+			// graphics help from https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/painting.rs
+			// Draw circuit
+			self.circuit.draw(&draw_info);
+			// Right side toolbar
+			self.circuit.tool.borrow().tool_select_ui(&draw_info);
+		});
 	}
 	/// Runs `compute_step()` repeatedly on the circuit until there are no changes, there must be a limit because there are circuits (ex. NOT gate connected to itself) where this would otherwise never end
 	pub fn propagate_until_stable(&mut self, propagation_limit: usize) -> bool {
@@ -341,9 +353,7 @@ impl eframe::App for App {
 					// This function by default is only run upon user interaction, so copied this from https://users.rust-lang.org/t/issues-while-writing-a-clock-with-egui/102752
 					ui.ctx().request_repaint();
 					ui.label(&circuit_toplevel.circuit.generic_device.unique_name);
-					Frame::canvas(ui.style()).show(ui, |ui| {
-						circuit_toplevel.draw(ui, &self.styles);
-					});
+					circuit_toplevel.draw(ui, &self.styles);
 				});
             }
         }

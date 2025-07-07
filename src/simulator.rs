@@ -1,10 +1,10 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{cell::RefCell, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, time::{Duration, Instant}};
+use std::{cell::RefCell, rc::Rc, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, time::{Duration, Instant}};
 use serde::{Deserialize, Serialize};
 use crate::{prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
-use eframe::egui::{self, response::Response, Key, KeyboardShortcut, Modifiers, PointerButton};
+use eframe::egui::{self, ahash::AHashMap, response::Response, Key, KeyboardShortcut, Modifiers, PointerButton};
 
 fn logic_device_to_graphic_item(x: &dyn LogicDevice) -> &dyn GraphicSelectableItem {
 	x
@@ -219,10 +219,10 @@ impl LogicNet {
 										LogicConnectionPinInternalSource::Net(child_circuit_net_id) => {
 											let component = component_cell.borrow();
 											let circuit = component.get_circuit();
-											match circuit.nets.get(&child_circuit_net_id) {
+											match circuit.nets.borrow().get(&child_circuit_net_id) {
 												Some(child_net) => out.append(&mut child_net.borrow().resolve_sources(&self_ancestors.push(circuit), *child_circuit_net_id, &new_caller_history)),
 												None => panic!("Internal connection in circuit \"{}\" references net {:?} inside sub-circuit \"{}\", the net does not exist", circuit.get_generic().unique_name, &child_circuit_net_id, component_cell.borrow().get_generic().unique_name)
-											}
+											};
 										},
 										// Check if pin is driven by a regular component
 										LogicConnectionPinInternalSource::ComponentInternal => {
@@ -245,7 +245,7 @@ impl LogicNet {
 										// External pin is connected to a net in a circuit that contains the circuit that this net is a part of
 										// Check that this net's "grandparent" is a circuit and not toplevel
 										match self_ancestors.grandparent() {
-											Some(parent_circuit) => match parent_circuit.nets.get(parent_circuit_net_id) {
+											Some(parent_circuit) => match parent_circuit.nets.borrow().get(parent_circuit_net_id) {
 												Some(parent_circuit_net) => out.append(&mut parent_circuit_net.borrow().resolve_sources(&self_ancestors.trim(), *parent_circuit_net_id, &new_caller_history)),
 												None => panic!("External connection is referencing a net ({}) which does not exist in this circuit's parent", parent_circuit_net_id)
 											},
@@ -506,7 +506,7 @@ impl GraphicSelectableItem for LogicConnectionPin {
 }
 
 /// Everything within a circuit
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum CircuitWidePinReference {
 	ComponentPin(ComponentPinReference),
 	ExternalConnection(String)
@@ -523,7 +523,7 @@ impl CircuitWidePinReference {
 	}
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ComponentPinReference {
 	/// Has to be a query for something else (()), not <Box<dyn LogicDevice>> so it will work with serde
 	component_id: u64,
@@ -543,12 +543,12 @@ impl ComponentPinReference {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Wire {
 	ui_data: UIData,
-	length: u32,
-	direction: FourWayDir,
-	net: u64,
+	pub length: u32,
+	pub direction: FourWayDir,
+	pub net: u64,
 	state: LogicState,
-	start_connections: Vec<WireConnection>,
-	end_connections: Vec<WireConnection>,
+	pub start_connections: Rc<RefCell<HashSet<WireConnection>>>,
+	pub end_connections: Rc<RefCell<HashSet<WireConnection>>>,
 	start_selected: bool,
 	end_selected: bool,
 	position_before_dragging: IntV2,
@@ -561,7 +561,9 @@ impl Wire {
 		length: u32,
 		direction: FourWayDir,
 		bit_width: u32,
-		net: u64
+		net: u64,
+		start_connections: Rc<RefCell<HashSet<WireConnection>>>,
+		end_connections: Rc<RefCell<HashSet<WireConnection>>>
 	) -> Self {
 		Self {
 			ui_data: UIData::from_pos(pos),
@@ -569,8 +571,8 @@ impl Wire {
 			direction,
 			net,
 			state: LogicState::Floating,
-			start_connections: Vec::new(),
-			end_connections: Vec::new(),
+			start_connections,
+			end_connections,
 			start_selected: false,
 			end_selected: false,
 			position_before_dragging: pos,
@@ -596,6 +598,63 @@ impl Wire {
 		}
 		// None
 		(false, false, false)
+	}
+	pub fn perpindicular_pair_to_segments(perp_pair: &(IntV2, FourWayDir), end_pos: IntV2) -> Vec<(IntV2, FourWayDir, u32)> {
+		// Check if along straight line
+		let v = end_pos - perp_pair.0;
+		if v.taxicab() == 0 {
+			return vec![];
+		}
+		if let Some(_) = v.is_along_axis() {
+			return vec![(
+				perp_pair.0,
+				perp_pair.1,
+				v.taxicab()
+			)];
+		}
+		let pair: [(IntV2, FourWayDir, u32); 2] = match perp_pair.1.is_horizontal() {
+			true => if v.0 > 0 {
+				let first: (IntV2, FourWayDir, u32) = (perp_pair.0, perp_pair.1, v.0 as u32);
+				let second: (IntV2, FourWayDir, u32) = if v.1 > 0 {
+					(perp_pair.0 + IntV2(v.0, 0), FourWayDir::N, v.1 as u32)
+				}
+				else {
+					(perp_pair.0 + IntV2(v.0, 0), FourWayDir::S, -v.1 as u32)
+				};
+				[first, second]
+			}
+			else {
+				let first: (IntV2, FourWayDir, u32) = (perp_pair.0, perp_pair.1, -v.0 as u32);
+				let second: (IntV2, FourWayDir, u32) = if v.1 > 0 {
+					(perp_pair.0 + IntV2(v.0, 0), FourWayDir::N, v.1 as u32)
+				}
+				else {
+					(perp_pair.0 + IntV2(v.0, 0), FourWayDir::S, -v.1 as u32)
+				};
+				[first, second]
+			},
+			false => if v.1 > 0 {
+				let first: (IntV2, FourWayDir, u32) = (perp_pair.0, perp_pair.1, v.1 as u32);
+				let second: (IntV2, FourWayDir, u32) = if v.0 > 0 {
+					(perp_pair.0 + IntV2(0, v.1), FourWayDir::E, v.0 as u32)
+				}
+				else {
+					(perp_pair.0 + IntV2(0, v.1), FourWayDir::W, -v.0 as u32)
+				};
+				[first, second]
+			}
+			else {
+				let first: (IntV2, FourWayDir, u32) = (perp_pair.0, perp_pair.1, -v.1 as u32);
+				let second: (IntV2, FourWayDir, u32) = if v.0 > 0 {
+					(perp_pair.0 + IntV2(0, v.1), FourWayDir::E, v.0 as u32)
+				}
+				else {
+					(perp_pair.0 + IntV2(0, v.1), FourWayDir::W, -v.0 as u32)
+				};
+				[first, second]
+			}
+		};
+		vec![pair[0], pair[1]]
 	}
 }
 
@@ -647,12 +706,12 @@ impl GraphicSelectableItem for Wire {
 
 /// What could the end of a be wire connected to?
 /// Up to 3 of these
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum WireConnection {
 	/// Component or external pin
 	Pin(CircuitWidePinReference),
 	/// Another straight wire segment
-	Wire(GenericQuery<Wire>)
+	Wire(u64)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -889,7 +948,7 @@ pub enum SelectionState {
 	/// (Start, Delta)
 	Dragging(V2, V2),
 	/// After Paste operation, the pasted stuff will remain selected and following the mouse until a left click
-	FollowingMouse
+	FollowingMouse(V2)
 }
 
 #[derive(Debug, Clone)]
@@ -914,6 +973,26 @@ pub enum Tool {
 	PlacePin
 }
 
+impl Tool {
+	/// The tool buttons side bar cannot always be enabled, for example when the component placement ui is active
+	pub fn tool_select_allowed(&self) -> bool {
+		match &self {
+			Self::Select{selected_graphics: _, selected_graphics_state} => match selected_graphics_state {
+				SelectionState::Fixed => true,
+				SelectionState::Dragging(_, _) => false,
+				SelectionState::FollowingMouse(_) => false
+			},
+			Self::HighlightNet(_) => true,
+			Self::PlaceComponnet => false,
+			Self::PlaceWire{perp_pairs: _, start_net_opt: _} => false,
+			Self::PlacePin => false
+		}
+	}
+	pub fn tool_select_ui(&self, draw: &ComponentDrawInfo) {
+		// TODO
+	}
+}
+
 impl Default for Tool {
 	fn default() -> Self {
 		Self::Select{selected_graphics: HashSet::new(), selected_graphics_state: SelectionState::default()}
@@ -924,7 +1003,7 @@ impl Default for Tool {
 pub struct LogicCircuit {
 	pub generic_device: LogicDeviceGeneric,
 	pub components: RefCell<HashMap<u64, RefCell<Box<dyn LogicDevice>>>>,
-	pub nets: HashMap<u64, RefCell<LogicNet>>,
+	pub nets: RefCell<HashMap<u64, RefCell<LogicNet>>>,
 	pub wires: RefCell<HashMap<u64, RefCell<Wire>>>,
 	save_path: String,
 	/// The clock is only meant to be used in the toplevel circuit, if you want to use the same clock everywhere, just have an input pin dedicated to it for all sub-circuits.
@@ -938,7 +1017,7 @@ pub struct LogicCircuit {
 	block_pin_positions: HashMap<String, (IntV2, FourWayDir)>,
 	displayed_as_block: bool,
 	/// For UI
-	tool: RefCell<Tool>
+	pub tool: RefCell<Tool>
 }
 
 impl LogicCircuit {
@@ -970,7 +1049,7 @@ impl LogicCircuit {
 				(V2::zeros(), V2::zeros())
 			)?,
 			components: RefCell::new(components),
-			nets: hashmap_into_refcells(nets),
+			nets: RefCell::new(hashmap_into_refcells(nets)),
 			wires: RefCell::new(hashmap_into_refcells(wires)),
 			save_path,
 			clock_enabled,
@@ -994,7 +1073,7 @@ impl LogicCircuit {
 		Ok(Self {
 			generic_device: save.generic_device,
 			components: RefCell::new(components),
-			nets: hashmap_into_refcells(save.nets),
+			nets: RefCell::new(hashmap_into_refcells(save.nets)),
 			wires: RefCell::new(hashmap_into_refcells(save.wires)),
 			save_path,
 			clock_enabled: save.clock_enabled,
@@ -1033,7 +1112,7 @@ impl LogicCircuit {
 	pub fn recompute_connections(&mut self) {
 		// Net -> Pin
 		let mut net_to_pin_connections_to_drop = Vec::<(u64, Vec<usize>)>::new();// (net ID, index into net's connections vec)
-		for (net_id, net) in self.nets.iter() {
+		for (net_id, net) in self.nets.borrow().iter() {
 			let mut this_net_to_pin_connections_to_drop = Vec::<usize>::new();
 			for (conn_i, net_connection) in net.borrow().connections.iter().enumerate() {
 				match net_connection {
@@ -1059,7 +1138,7 @@ impl LogicCircuit {
 		// Remove broken connections
 		for (net_id, conns) in net_to_pin_connections_to_drop {
 			for conn_i in conns.iter().rev() {// Very important to reverse list of indices to delete, because deleting lower indices first would shift the array and make later ones invalid
-				self.nets.get(&net_id).unwrap().borrow_mut().connections.remove(*conn_i);
+				self.nets.borrow().get(&net_id).unwrap().borrow_mut().connections.remove(*conn_i);
 			}
 		}
 		// Component pin -> Net
@@ -1069,7 +1148,7 @@ impl LogicCircuit {
 				if let Some(source) = &pin.borrow().external_source {
 					match source {
 						LogicConnectionPinExternalSource::Global => panic!("Pin {:?} of component {:?} has external source 'Global' which doesn't make sense", &pin_id, &comp_id),
-						LogicConnectionPinExternalSource::Net(net_id) => match self.nets.get_mut(&net_id) {
+						LogicConnectionPinExternalSource::Net(net_id) => match self.nets.borrow_mut().get_mut(&net_id) {
 							Some(net) => net.borrow_mut().edit_component_connection(true, *comp_id, pin_id),
 							None => pin_to_net_connections_to_drop.push(CircuitWidePinReference::ComponentPin(ComponentPinReference::new(*comp_id, pin_id.to_owned()))),
 						},
@@ -1083,7 +1162,7 @@ impl LogicCircuit {
 			if let Some(source) = &pin.borrow().internal_source {
 				match source {
 					LogicConnectionPinInternalSource::ComponentInternal => panic!("External connection pin {} of circuit {:?} has internal source 'ComponentInternal' which doesn't make sense", pin_id, &self.generic_device.unique_name),
-					LogicConnectionPinInternalSource::Net(net_query) => match self.nets.get(&net_query) {
+					LogicConnectionPinInternalSource::Net(net_query) => match self.nets.borrow().get(&net_query) {
 						Some(net) => net.borrow_mut().edit_external_connection(true, pin_id),
 						None => pin_to_net_connections_to_drop.push(CircuitWidePinReference::ExternalConnection(pin_id.to_owned())),
 					}
@@ -1105,6 +1184,7 @@ impl LogicCircuit {
 	/// Returns: whether to recompute the circuit
 	pub fn toplevel_ui_interact<'a>(&mut self, response: Response, draw: &ComponentDrawInfo<'a>, mut input_state: egui::InputState) -> bool {
 		let mut return_recompute_connections = false;
+		let mut new_tool_opt = Option::<Tool>::None;
 		match self.tool.borrow_mut().deref_mut() {
 			Tool::Select{selected_graphics, selected_graphics_state} => {
 				match selected_graphics_state {
@@ -1149,6 +1229,10 @@ impl LogicCircuit {
 						if input_state.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::A)) {
 							*selected_graphics = HashSet::from_iter(self.get_all_graphics_references());
 						}
+						// W for Wire
+						if input_state.consume_key(Modifiers::NONE, Key::W) {
+							new_tool_opt = Some(Tool::PlaceWire{perp_pairs: vec![], start_net_opt: None});
+						}
 					},
 					SelectionState::Dragging(start_grid, delta_grid) => {
 						*delta_grid += emath_vec2_to_v2(response.drag_delta()) / draw.grid_size;
@@ -1188,7 +1272,7 @@ impl LogicCircuit {
 							}
 						}
 					},
-					SelectionState::FollowingMouse => {
+					SelectionState::FollowingMouse(start_grid) => {
 						// TODO
 					}
 				}
@@ -1238,11 +1322,12 @@ impl LogicCircuit {
 							}
 							if response.clicked_by(PointerButton::Primary) {
 								// First, check if this is a wire termination point
-								let (is_term_point, net_opt) = self.is_connection_point(mouse_pos_grid_rounded, false);
+								let (is_term_point, net_opt) = self.is_connection_point(mouse_pos_grid_rounded);
 								if is_term_point {
 									// End wire
 									self.add_wire_geometry(perp_pairs.clone(), mouse_pos_grid_rounded, *start_net_opt, net_opt);
 									return_recompute_connections = true;
+									new_tool_opt = Some(Tool::default());
 								}
 								else {
 									perp_pairs.push((
@@ -1251,11 +1336,28 @@ impl LogicCircuit {
 									));
 								}
 							}
+							// Display in-progress wire
+							for (i, pair) in perp_pairs.iter().enumerate() {
+								let end_pos = if i == perp_pairs.len() - 1 {
+									mouse_pos_grid_rounded
+								}
+								else {
+									perp_pairs[i+1].0
+								};
+								let segments = Wire::perpindicular_pair_to_segments(pair, end_pos);
+								for segment in segments {
+									draw.draw_polyline(vec![
+										segment.0.to_v2(),
+										segment.0.to_v2() + (segment.1.to_unit() * (segment.2 as f32))
+									], draw.styles.color_wire_in_progress);
+								}
+							}
 						}
 						// Wire not started
 						else {
 							if response.clicked_by(PointerButton::Primary) {
-								let (_, net_opt) = self.is_connection_point(mouse_pos_grid_rounded, false);
+								println!("Starting wire");
+								let (_, net_opt) = self.is_connection_point(mouse_pos_grid_rounded);
 								perp_pairs.push((
 									mouse_pos_grid_rounded,
 									FourWayDir::E
@@ -1268,30 +1370,24 @@ impl LogicCircuit {
 						// TODO: Maybe delete this and turn match into if let?
 					}
 				}
-				// Draw
-				// TODO
-				// End of wire (click)
-				// TODO
-				// Cancel wire (escape)
-				// TODO
+				if input_state.consume_key(Modifiers::NONE, Key::Escape) {
+					new_tool_opt = Some(Tool::default());
+				}
 			},
 			Tool::PlacePin => {
 				// TODO
 			}
 		}
+		if let Some(new_tool) = new_tool_opt {
+			*self.tool.borrow_mut() = new_tool;
+		}
 		return_recompute_connections
 	}
 	/// Checks: All wires, external pins, component pins
-	/// Returns: (Is termination point, )
-	fn is_connection_point(&self, point: IntV2, only_wires: bool) -> (bool, Option<u64>) {
-		for (_, wire) in self.wires.borrow().iter() {
-			let bool_triple = wire.borrow().contains_point(point);
-			if bool_triple.0 || bool_triple.1 || bool_triple.2 {
-				return (true, Some(wire.borrow().net));
-			}
-		}
-		if only_wires {
-			return (false, None);
+	/// Returns: (Is termination point, Optional net)
+	fn is_connection_point(&self, point: IntV2) -> (bool, Option<u64>) {
+		if let Some((wire_id, _)) = self.is_point_on_wire(point) {
+			return (true, Some(wire_id));
 		}
 		for (_, pin) in self.get_pins_cell().borrow().iter() {
 			if pin.borrow().ui_data.position == point {
@@ -1306,9 +1402,10 @@ impl LogicCircuit {
 				return (true, None);
 			}
 		}
-		for (_, comp) in self.components.borrow().iter() {
-			for (_, pin) in comp.borrow().get_pins_cell().borrow().iter() {
-				if pin.borrow().ui_data.position == point {
+		for (_, comp_cell) in self.components.borrow().iter() {
+			let comp = comp_cell.borrow();
+			for (_, pin) in comp.get_pins_cell().borrow().iter() {
+				if pin.borrow().ui_data.position + comp.get_ui_data().position == point {
 					if let Some(source) = &pin.borrow().external_source {
 						match source {
 							LogicConnectionPinExternalSource::Net(net_id) => {
@@ -1323,10 +1420,56 @@ impl LogicCircuit {
 		}
 		(false, None)
 	}
+	fn is_point_on_wire(&self, point: IntV2) -> Option<(u64, (bool, bool, bool))> {
+		for (wire_id, wire) in self.wires.borrow().iter() {
+			let bool_triple = wire.borrow().contains_point(point);
+			if bool_triple.0 || bool_triple.1 || bool_triple.2 {
+				return Some((*wire_id, bool_triple));
+			}
+		}
+		None
+	}
 	/// Adds new wires to circuit, `perp_segment_pairs` works the same as described in `Tool::PlaceWire`
-	/// It is assumed that there are no intermediate waypoints that are at a wire termination point, but there could be elbow joints between them that are because the UI doesn't check for that
-	fn add_wire_geometry(&self, perp_segment_pairs: Vec<(IntV2, FourWayDir)>, ending_pos: IntV2, start_net: Option<u64>, end_net: Option<u64>) {
+	fn add_wire_geometry(&self, perp_segment_pairs: Vec<(IntV2, FourWayDir)>, ending_pos: IntV2, start_net: Option<u64>, end_net: Option<u64>, wire_string_end_connection: WireConnection) {
+		// Get net to use or make a new one
+		let (new_wires_net, have_to_merge): (u64, bool) = match start_net {
+			Some(net_id) => (net_id, match end_net {
+				Some(end_id) => net_id != end_id,
+				None => false
+			}),
+			None => match end_net {
+				Some(net_id) => (net_id, false),
+				None => {// Create new net
+					let mut nets = self.nets.borrow_mut();
+					let new_id = lowest_unused_key(nets.deref());
+					nets.insert(new_id, RefCell::new(LogicNet::new(vec![])));
+					(new_id, false)
+				}
+			}
+		};
+		// Create vec of bare wire geometries and create wire IDs
+		let mut wires = self.wires.borrow_mut();
+		let mut new_wire_segment_geometries_and_ids = Vec::<((IntV2, FourWayDir, u32), u64)>::new();
+		for (i, pair) in perp_segment_pairs.iter().enumerate() {
+			let new_wire_id: u64 = lowest_unused_key(&*wires);
+			Wire::perpindicular_pair_to_segments(pair, end_pos);
+			for segment in segments {
+				new_wire_segment_geometries_and_ids.push((segment, new_wire_id));
+			}
+		}
 		// Place down as actual wires
+		for (i, (segment, new_wire_id)) in new_wire_segment_geometries_and_ids.iter().enumerate() {
+			let (end_pos, end_connection) = if i == perp_segment_pairs.len() - 1 {
+				(ending_pos, wire_string_end_connection)
+			}
+			else {
+				(new_wire_segment_geometries_and_ids[i+1].0.0, WireConnection::Wire(new_wire_segment_geometries_and_ids[i+1].1))
+			};
+			let new_wire = Wire::new(segment.0, segment.2, segment.1, 1, new_wires_net, , );
+			let new_wire_id: u64 = lowest_unused_key(&*wires);
+			wires.insert(new_wire_id, RefCell::new(new_wire));
+		}
+		// Combine overlapping but seperate end connections
 		// TODO
 		// Find overlapping wires and correct them, make sure to preserve connections
 		// TODO
@@ -1340,7 +1483,6 @@ impl LogicCircuit {
 	/// Last step in recomputing circuit connections after the circuit is edited
 	/// If any pins (component or external) touch any wire, update the pin's net to the wire's net
 	/// Also make sure pins not touching have no connection
-	/// TODO: Update wire connections
 	pub fn update_pin_to_wire_connections(&self) {
 		// Component pins
 		for (comp_id, comp_cell) in self.components.borrow().iter() {
@@ -1354,15 +1496,21 @@ impl LogicCircuit {
 				// Fist check if pin is already connected to another net and remove from that net's connection list in case it's a different net
 				if let Some(source) = &pin.external_source {
 					if let LogicConnectionPinExternalSource::Net(old_net_id) = source {
-						self.nets.get(old_net_id).expect("Net ID invalid").borrow_mut().edit_component_connection(false, *comp_id, pin_id);
+						self.nets.borrow().get(old_net_id).expect(&format!("Net ID {} invalid when removing pin \"{}\" from its connection list", old_net_id, pin_id)).borrow_mut().edit_component_connection(false, *comp_id, pin_id);
 					}
 				}
-				match self.is_connection_point(pin_pos, true) {
-					(_, Some(new_net_id)) => {
-						pin.external_source = Some(LogicConnectionPinExternalSource::Net(new_net_id));
-						self.nets.get(&new_net_id).expect("Net ID invalid").borrow_mut().edit_component_connection(true, *comp_id, pin_id);
+				match self.is_point_on_wire(pin_pos) {
+					Some((wire_id, wire_intercept_triple)) => {
+						{// Make sure wire reference is dropped before calling `self.add_connection_to_wire`
+							let wire = self.wires.borrow_mut();
+							let new_net_id: u64 = wire.get(&wire_id).expect(&format!("self.is_point_on_wire() returned invalid wire ID {}", wire_id)).borrow().net;
+							pin.external_source = Some(LogicConnectionPinExternalSource::Net(new_net_id));
+							self.nets.borrow().get(&new_net_id).expect("Net ID invalid").borrow_mut().edit_component_connection(true, *comp_id, pin_id);
+						}
+						// Update wire connection
+						self.add_connection_to_wire(WireConnection::Pin(CircuitWidePinReference::ComponentPin(ComponentPinReference::new(*comp_id, pin_id.clone()))), wire_id, pin_pos, wire_intercept_triple);
 					},
-					(_, None) => {
+					None => {
 						pin.external_source = None;
 					}
 				}
@@ -1375,18 +1523,50 @@ impl LogicCircuit {
 			// Fist check if pin is already connected to another net and remove from that net's connection list in case it's a different net
 			if let Some(source) = &pin.internal_source {
 				if let LogicConnectionPinInternalSource::Net(old_net_id) = source {
-					self.nets.get(old_net_id).expect("Net ID invalid").borrow_mut().edit_external_connection(false, &pin_id);
+					self.nets.borrow().get(old_net_id).expect("Net ID invalid").borrow_mut().edit_external_connection(false, &pin_id);
 				}
 			}
-			match self.is_connection_point(pin_pos, true) {
-				(_, Some(new_net_id)) => {
-					pin.internal_source = Some(LogicConnectionPinInternalSource::Net(new_net_id));
-					self.nets.get(&new_net_id).expect("Net ID invalid").borrow_mut().edit_external_connection(true, &pin_id);
+			match self.is_point_on_wire(pin_pos) {
+				Some((wire_id, wire_intercept_triple)) => {
+					{// Make sure wire reference is dropped before calling `self.add_connection_to_wire`
+						let wire = self.wires.borrow_mut();
+						let new_net_id: u64 = wire.get(&wire_id).expect(&format!("self.is_point_on_wire() returned invalid wire ID {}", wire_id)).borrow().net;
+						pin.internal_source = Some(LogicConnectionPinInternalSource::Net(new_net_id));
+						self.nets.borrow().get(&new_net_id).expect("Net ID invalid").borrow_mut().edit_external_connection(true, &pin_id);
+					}
+					// Update wire connection
+					self.add_connection_to_wire(WireConnection::Pin(CircuitWidePinReference::ExternalConnection(pin_id.clone())), wire_id, pin_pos, wire_intercept_triple);
 				},
-				(_, None) => {
+				None => {
 					pin.internal_source = None;
 				}
 			}
+		}
+	}
+	/// Will split a wire into two sections if the joint is somewhere in the middle, otherwise just adds it at one end
+	fn add_connection_to_wire(&self, connection: WireConnection, wire_id: u64, position: IntV2, wire_intercept_triple: (bool, bool, bool)) {
+		match wire_intercept_triple {
+			(true, false, false) => {self.wires.borrow().get(&wire_id).unwrap().borrow().start_connections.borrow_mut().insert(connection);},
+			(false, true, false) => {// Break wire in two
+				let new_wire_id: u64 = lowest_unused_key(&*self.wires.borrow());
+				// Get info from original wire (which stays in same position, length reduced)
+				let (middle_conns, end_conns, direction, new_length, bit_width, net): (Rc<RefCell<HashSet<WireConnection>>>, Rc<RefCell<HashSet<WireConnection>>>, FourWayDir, u32, u32, u64) = {
+					let binding = self.wires.borrow();
+					let mut wire = binding.get(&wire_id).unwrap().borrow_mut();
+					// Change old wire's connections to just itself, the new wire, and the new connection
+					let end_conns = Rc::clone(&wire.end_connections);
+					wire.end_connections = Rc::new(RefCell::new(HashSet::from_iter(vec![
+						WireConnection::Wire(wire_id),
+						WireConnection::Wire(new_wire_id),
+						connection.clone()
+					].into_iter())));
+					(Rc::clone(&wire.end_connections), end_conns, wire.direction.clone(), (position - wire.ui_data.position).taxicab(), wire.bit_width, wire.net)
+				};
+				// Create new wire
+				self.wires.borrow_mut().insert(new_wire_id, RefCell::new(Wire::new(position, new_length, direction, bit_width, net, middle_conns, end_conns)));
+			},
+			(false, false, true) => {self.wires.borrow().get(&wire_id).unwrap().borrow().end_connections.borrow_mut().insert(connection);},
+			other => panic!("LogicCircuit.add_connection_to_wire() provided with invalid wire intercept triple: {:?}", other)
 		}
 	}
 	fn was_anything_clicked<'a>(&self, grid_pos: V2) -> Option<GraphicSelectableItemRef> {
@@ -1464,12 +1644,13 @@ impl LogicDevice for LogicCircuit {
 		let ancestors = ancestors_above.push(&self);
 		// Update net states
 		let mut new_net_states = HashMap::<u64, (LogicState, Vec<GlobalSourceReference>)>::new();
-		for (net_id, net) in self.nets.iter() {
+		for (net_id, net) in self.nets.borrow().iter() {
 			new_net_states.insert(*net_id, net.borrow_mut().update_state(&ancestors, *net_id));
 		}
 		drop(ancestors);
 		for (net_id, (state, sources)) in new_net_states.into_iter() {
-			let mut net_mut_ref = self.nets.get(&net_id).unwrap().borrow_mut();
+			let binding = self.nets.borrow();
+			let mut net_mut_ref = binding.get(&net_id).unwrap().borrow_mut();
 			net_mut_ref.state = state;
 			net_mut_ref.sources = sources;
 		}
@@ -1477,14 +1658,14 @@ impl LogicDevice for LogicCircuit {
 		// Wires
 		for (wire_id, wire_cell) in self.wires.borrow_mut().iter_mut() {
 			let net_id = wire_cell.borrow().net;
-			wire_cell.borrow_mut().state = self.nets.get(&net_id).expect(&format!("Wire {} has invalid net ID {}", wire_id, net_id)).borrow().state;
+			wire_cell.borrow_mut().state = self.nets.borrow().get(&net_id).expect(&format!("Wire {} has invalid net ID {}", wire_id, net_id)).borrow().state;
 		}
 		// External connection pins
 		for (pin_id, pin_cell) in self.generic_device.pins.borrow_mut().iter_mut() {
 			let int_source_opt = pin_cell.borrow().internal_source.clone();
 			if let Some(source) = int_source_opt {
 				match source {
-					LogicConnectionPinInternalSource::Net(net_id) => pin_cell.borrow_mut().set_drive_internal(self.nets.get(&net_id).expect(&format!("External connection pin {} has invalid net query {}", pin_id, net_id)).borrow().state),
+					LogicConnectionPinInternalSource::Net(net_id) => pin_cell.borrow_mut().set_drive_internal(self.nets.borrow().get(&net_id).expect(&format!("External connection pin {} has invalid net query {}", pin_id, net_id)).borrow().state),
 					LogicConnectionPinInternalSource::ComponentInternal => panic!("External connection pin {} for circuit \"{}\" has the internal source as ComponentInternal which shouldn't happen", pin_id, &self.generic_device.unique_name)
 				}
 			}
@@ -1506,7 +1687,7 @@ impl LogicDevice for LogicCircuit {
 					match source {
 						LogicConnectionPinExternalSource::Global => panic!("Pin {} of component {} has external source 'Global' which doesn't make sense", pin_id, comp_id),
 						LogicConnectionPinExternalSource::Net(net_id) => {
-							pin_cell.borrow_mut().set_drive_external(self.nets.get_mut(&net_id).expect(&format!("Pin {} of component {} references net {} which doesn't exist", pin_id, comp_id, net_id)).borrow().state);
+							pin_cell.borrow_mut().set_drive_external(self.nets.borrow_mut().get_mut(&net_id).expect(&format!("Pin {} of component {} references net {} which doesn't exist", pin_id, comp_id, net_id)).borrow().state);
 						},
 						LogicConnectionPinExternalSource::Clock => {}// A clock-connected pin is handled by the sub-circuit itself
 					}
@@ -1537,7 +1718,7 @@ impl LogicDevice for LogicCircuit {
 		let save = LogicCircuitSave {
 			generic_device: self.generic_device.clone(),
 			components: components_save,
-			nets: hashmap_unwrap_refcells(self.nets.clone()),
+			nets: hashmap_unwrap_refcells(self.nets.borrow().clone()),
 			wires: wires_save,
 			clock_enabled: self.clock_enabled,
 			clock_state: self.clock_state,

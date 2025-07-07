@@ -93,6 +93,13 @@ pub mod prelude {
 		!(a_max.x <= b_min.x || a_min.x >= b_max.x ||
 		a_max.y <= b_min.y || a_min.y >= b_max.y)
 	}
+	pub fn lowest_unused_key<V>(map: &HashMap<u64, V>) -> u64 {
+		let mut i: u64 = 0;
+		while map.contains_key(&i) {
+			i += 1;
+		}
+		i
+	}
 	#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 	pub enum FourWayDir {
 		E,
@@ -417,6 +424,9 @@ pub mod prelude {
 				}
 			}
 			None
+		}
+		pub fn taxicab(&self) -> u32 {
+			(self.0.abs() + self.1.abs()) as u32
 		}
 	}
 
