@@ -11,6 +11,7 @@ pub struct Styles {
 	pub show_grid: bool,
 	/// Fraction of grid size that lines are drawn, 0.1 is probably good
 	pub line_size_grid: f32,
+	pub connection_dot_grid_size: f32,
     pub color_wire_floating: [u8; 3],
     pub color_wire_contested: [u8; 3],
     pub color_wire_low: [u8; 3],
@@ -46,6 +47,7 @@ impl Default for Styles {
 		Self {
 			show_grid: true,
 			line_size_grid: 0.1,
+			connection_dot_grid_size: 0.3,
 			color_wire_floating: [128, 128, 128],
 			color_wire_contested: [255, 0, 0],
 			color_wire_low: [0, 0, 255],
@@ -185,6 +187,9 @@ impl<'a> ComponentDrawInfo<'a> {
 	pub fn draw_circle(&self, center: V2, radius: f32, stroke: [u8; 3]) {
 		self.painter.circle_stroke(self.grid_to_px(center), radius * self.grid_size, Stroke::new(self.grid_size * self.styles.line_size_grid, u8_3_to_color32(stroke)));
 	}
+	pub fn draw_circle_filled(&self, center: V2, radius: f32, stroke: [u8; 3]) {
+		self.painter.circle_filled(self.grid_to_px(center), radius * self.grid_size, u8_3_to_color32(stroke));
+	}
 	/// With help from https://github.com/emilk/egui/issues/4188
 	pub fn draw_arc(&self, center_grid: V2, radius_grid: f32, start_deg: f32, end_deg: f32, stroke: [u8; 3]) {
 		let center = self.grid_to_px(center_grid);
@@ -276,7 +281,7 @@ impl LogicCircuitToplevelView {
 			let input_state = ui.ctx().input(|i| i.clone());
 			let recompute_connections: bool = self.circuit.toplevel_ui_interact(response, &draw_info, input_state);
 			if recompute_connections {
-				self.circuit.update_pin_to_wire_connections();
+				self.circuit.check_wire_geometry_and_connections();
 			}
 			// Update
 			if recompute_connections || propagate {

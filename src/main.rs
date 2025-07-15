@@ -15,7 +15,7 @@ pub mod tests;
 
 #[allow(unused)]
 pub mod prelude {
-	use std::{clone, collections::HashMap, fmt::Formatter, hash::Hash};
+	use std::{clone, collections::{HashMap, HashSet}, fmt::Formatter, hash::Hash, rc::Rc};
 	use super::*;
 	// Name of this app
 	pub const APP_NAME: &str = "Rusty Logic";
@@ -99,6 +99,24 @@ pub mod prelude {
 			i += 1;
 		}
 		i
+	}
+	pub fn batch_unused_keys<V>(map: &HashMap<u64, V>, n: usize) -> Vec<u64> {
+		let mut out = Vec::<u64>::new();
+		let mut i: u64 = 0;
+		while out.len() < n {
+			while map.contains_key(&i) {
+				i += 1;
+			}
+			out.push(i);
+			i += 1;
+		}
+		out
+	}
+	pub fn clone_option_rc<T>(rc_opt: &Option<Rc<T>>) -> Option<Rc<T>> {
+		match rc_opt {
+			Some(rc) => Some(Rc::clone(rc)),
+			None => None
+		}
 	}
 	#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 	pub enum FourWayDir {
@@ -492,9 +510,9 @@ pub mod prelude {
 			"test-circuit".to_string(),
 			1,
 			vec_to_u64_keyed_hashmap(vec![
-				Wire::new(IntV2(-4, -1), 1, FourWayDir::E, 1, 0),
-				Wire::new(IntV2(-4, 1), 1, FourWayDir::E, 1, 1),
-				Wire::new(IntV2(4, 0), 1, FourWayDir::W, 1, 2)
+				Wire::new(IntV2(-4, -1), 1, FourWayDir::E, 1, 0, Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new()))),
+				Wire::new(IntV2(-4, 1), 1, FourWayDir::E, 1, 1, Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new()))),
+				Wire::new(IntV2(4, 0), 1, FourWayDir::W, 1, 2, Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new())))
 			]),
 			"test".to_string(),
 			true,

@@ -580,24 +580,24 @@ impl Wire {
 		}
 	}
 	/// Returns: (Start, Middle, End)
-	pub fn contains_point(&self, point: IntV2) -> (bool, bool, bool) {
+	pub fn contains_point(&self, point: IntV2) -> ((bool, bool, bool), Option<Rc<RefCell<HashSet<WireConnection>>>>) {
 		// Start
 		if point == self.ui_data.position {
-			return (true, false, false);
+			return ((true, false, false), Some(Rc::clone(&self.start_connections)));
 		}
 		// End
 		if point == self.ui_data.position + self.direction.to_unit_int().mult(self.length as i32) {
-			return (false, false, true);
+			return ((false, false, true), Some(Rc::clone(&self.end_connections)));
 		}
 		// Middle
 		let this_to_point_v = point - self.ui_data.position;
 		if let Some(test_dir) = this_to_point_v.is_along_axis() {
 			if test_dir == self.direction && this_to_point_v.to_v2().magnitude() < self.length as f32 {
-				return (false, true, false);
+				return ((false, true, false), None);
 			}
 		}
 		// None
-		(false, false, false)
+		((false, false, false), None)
 	}
 	pub fn perpindicular_pair_to_segments(perp_pair: &(IntV2, FourWayDir), end_pos: IntV2) -> Vec<(IntV2, FourWayDir, u32)> {
 		// Check if along straight line
@@ -660,13 +660,22 @@ impl Wire {
 
 impl GraphicSelectableItem for Wire {
 	fn draw<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+		let start_pos = self.ui_data.position.to_v2();
+		let end_pos = start_pos + (self.direction.to_unit() * (self.length as f32));
+		let stroke = draw.styles.color_from_logic_state(self.state);
 		draw.draw_polyline(
 			vec![
-				self.ui_data.position.to_v2(),
-				self.ui_data.position.to_v2() + (self.direction.to_unit() * (self.length as f32))
+				start_pos,
+				end_pos
 			],
-			draw.styles.color_from_logic_state(self.state)
+			stroke
 		);
+		if self.start_connections.borrow().len() >= 3 {
+			draw.draw_circle_filled(start_pos, draw.styles.connection_dot_grid_size, stroke);
+		}
+		if self.end_connections.borrow().len() >= 3 {
+			draw.draw_circle_filled(end_pos, draw.styles.connection_dot_grid_size, stroke);
+		}
 	}
 	fn get_ui_data(&self) -> &UIData {
 		&self.ui_data
@@ -968,7 +977,8 @@ pub enum Tool {
 		/// When the actual wires are created, consecutive segments in the same direction will be combined
 		perp_pairs: Vec<(IntV2, FourWayDir)>,
 		/// If this wire was started somewhere with a connection (a "Wire termination point") include the net to make later net calculations simpler
-		start_net_opt: Option<u64>
+		start_net_opt: Option<u64>,
+		start_wire_connections_opt: Option<Rc<RefCell<HashSet<WireConnection>>>>
 	},
 	PlacePin
 }
@@ -984,7 +994,7 @@ impl Tool {
 			},
 			Self::HighlightNet(_) => true,
 			Self::PlaceComponnet => false,
-			Self::PlaceWire{perp_pairs: _, start_net_opt: _} => false,
+			Self::PlaceWire{perp_pairs: _, start_net_opt: _, start_wire_connections_opt: _} => false,
 			Self::PlacePin => false
 		}
 	}
@@ -1061,7 +1071,7 @@ impl LogicCircuit {
 			tool: RefCell::new(Tool::default())
 		};
 		new.recompute_default_layout();
-		new.update_pin_to_wire_connections();
+		new.check_wire_geometry_and_connections();
 		Ok(new)
 	}
 	pub fn from_save(save: LogicCircuitSave, save_path: String, displayed_as_block: bool) -> Result<Self, String> {
@@ -1231,7 +1241,7 @@ impl LogicCircuit {
 						}
 						// W for Wire
 						if input_state.consume_key(Modifiers::NONE, Key::W) {
-							new_tool_opt = Some(Tool::PlaceWire{perp_pairs: vec![], start_net_opt: None});
+							new_tool_opt = Some(Tool::PlaceWire{perp_pairs: vec![], start_net_opt: None, start_wire_connections_opt: None});
 						}
 					},
 					SelectionState::Dragging(start_grid, delta_grid) => {
@@ -1307,7 +1317,7 @@ impl LogicCircuit {
 			Tool::PlaceComponnet => {
 				// TODO
 			},
-			Tool::PlaceWire{perp_pairs, start_net_opt} => {
+			Tool::PlaceWire{perp_pairs, start_net_opt, start_wire_connections_opt} => {
 				match response.hover_pos() {
 					Some(mouse_pos_px) => {
 						let mouse_pos_grid_rounded: IntV2 = round_v2_to_intv2(draw.mouse_pos2_to_grid(mouse_pos_px));
@@ -1322,10 +1332,10 @@ impl LogicCircuit {
 							}
 							if response.clicked_by(PointerButton::Primary) {
 								// First, check if this is a wire termination point
-								let (is_term_point, net_opt) = self.is_connection_point(mouse_pos_grid_rounded);
+								let (is_term_point, net_opt, end_connections_opt) = self.is_connection_point(mouse_pos_grid_rounded);
 								if is_term_point {
 									// End wire
-									self.add_wire_geometry(perp_pairs.clone(), mouse_pos_grid_rounded, *start_net_opt, net_opt);
+									self.add_wire_geometry(perp_pairs.clone(), mouse_pos_grid_rounded, *start_net_opt, net_opt, clone_option_rc(start_wire_connections_opt), end_connections_opt);
 									return_recompute_connections = true;
 									new_tool_opt = Some(Tool::default());
 								}
@@ -1357,12 +1367,13 @@ impl LogicCircuit {
 						else {
 							if response.clicked_by(PointerButton::Primary) {
 								println!("Starting wire");
-								let (_, net_opt) = self.is_connection_point(mouse_pos_grid_rounded);
+								let (_, net_opt, start_opt) = self.is_connection_point(mouse_pos_grid_rounded);
 								perp_pairs.push((
 									mouse_pos_grid_rounded,
 									FourWayDir::E
 								));
 								*start_net_opt = net_opt;
+								*start_wire_connections_opt = start_opt;
 							}
 						}
 					}
@@ -1384,22 +1395,22 @@ impl LogicCircuit {
 		return_recompute_connections
 	}
 	/// Checks: All wires, external pins, component pins
-	/// Returns: (Is termination point, Optional net)
-	fn is_connection_point(&self, point: IntV2) -> (bool, Option<u64>) {
-		if let Some((wire_id, _)) = self.is_point_on_wire(point) {
-			return (true, Some(wire_id));
+	/// Returns: (Is termination point, Optional net, Optional shared wire connection set)
+	fn is_connection_point(&self, point: IntV2) -> (bool, Option<u64>, Option<Rc<RefCell<HashSet<WireConnection>>>>) {
+		if let Some((wire_id, _, connections_opt)) = self.is_point_on_wire(point) {
+			return (true, Some(wire_id), connections_opt);
 		}
 		for (_, pin) in self.get_pins_cell().borrow().iter() {
 			if pin.borrow().ui_data.position == point {
 				if let Some(source) = &pin.borrow().internal_source {
 					match source {
 						LogicConnectionPinInternalSource::Net(net_id) => {
-							return (true, Some(*net_id));
+							return (true, Some(*net_id), None);
 						},
 						LogicConnectionPinInternalSource::ComponentInternal => panic!("Circuit external connection should not have ComponentInternal source")
 					}
 				}
-				return (true, None);
+				return (true, None, None);
 			}
 		}
 		for (_, comp_cell) in self.components.borrow().iter() {
@@ -1409,28 +1420,28 @@ impl LogicCircuit {
 					if let Some(source) = &pin.borrow().external_source {
 						match source {
 							LogicConnectionPinExternalSource::Net(net_id) => {
-								return (true, Some(*net_id));
+								return (true, Some(*net_id), None);
 							},
 							_ => panic!("Component connection should be to a Net and not something else")
 						}
 					}
-					return (true, None);
+					return (true, None, None);
 				}
 			}
 		}
-		(false, None)
+		(false, None, None)
 	}
-	fn is_point_on_wire(&self, point: IntV2) -> Option<(u64, (bool, bool, bool))> {
+	fn is_point_on_wire(&self, point: IntV2) -> Option<(u64, (bool, bool, bool), Option<Rc<RefCell<HashSet<WireConnection>>>>)> {
 		for (wire_id, wire) in self.wires.borrow().iter() {
-			let bool_triple = wire.borrow().contains_point(point);
+			let (bool_triple, wire_connections_opt) = wire.borrow().contains_point(point);
 			if bool_triple.0 || bool_triple.1 || bool_triple.2 {
-				return Some((*wire_id, bool_triple));
+				return Some((*wire_id, bool_triple, wire_connections_opt));
 			}
 		}
 		None
 	}
 	/// Adds new wires to circuit, `perp_segment_pairs` works the same as described in `Tool::PlaceWire`
-	fn add_wire_geometry(&self, perp_segment_pairs: Vec<(IntV2, FourWayDir)>, ending_pos: IntV2, start_net: Option<u64>, end_net: Option<u64>, wire_string_end_connection: WireConnection) {
+	fn add_wire_geometry(&self, perp_segment_pairs: Vec<(IntV2, FourWayDir)>, ending_pos: IntV2, start_net: Option<u64>, end_net: Option<u64>, wire_string_start_connections_opt: Option<Rc<RefCell<HashSet<WireConnection>>>>, wire_string_end_connections_opt: Option<Rc<RefCell<HashSet<WireConnection>>>>) {
 		// Get net to use or make a new one
 		let (new_wires_net, have_to_merge): (u64, bool) = match start_net {
 			Some(net_id) => (net_id, match end_net {
@@ -1447,43 +1458,192 @@ impl LogicCircuit {
 				}
 			}
 		};
-		// Create vec of bare wire geometries and create wire IDs
+		// Create vec of bare wire geometries
 		let mut wires = self.wires.borrow_mut();
-		let mut new_wire_segment_geometries_and_ids = Vec::<((IntV2, FourWayDir, u32), u64)>::new();
+		let mut new_wire_segment_geometries = Vec::<(IntV2, FourWayDir, u32)>::new();
 		for (i, pair) in perp_segment_pairs.iter().enumerate() {
-			let new_wire_id: u64 = lowest_unused_key(&*wires);
-			Wire::perpindicular_pair_to_segments(pair, end_pos);
-			for segment in segments {
-				new_wire_segment_geometries_and_ids.push((segment, new_wire_id));
-			}
-		}
-		// Place down as actual wires
-		for (i, (segment, new_wire_id)) in new_wire_segment_geometries_and_ids.iter().enumerate() {
-			let (end_pos, end_connection) = if i == perp_segment_pairs.len() - 1 {
-				(ending_pos, wire_string_end_connection)
+			let end_pos = if i == perp_segment_pairs.len() - 1 {
+				ending_pos
 			}
 			else {
-				(new_wire_segment_geometries_and_ids[i+1].0.0, WireConnection::Wire(new_wire_segment_geometries_and_ids[i+1].1))
+				perp_segment_pairs[i+1].0
 			};
-			let new_wire = Wire::new(segment.0, segment.2, segment.1, 1, new_wires_net, , );
-			let new_wire_id: u64 = lowest_unused_key(&*wires);
+			let segments = Wire::perpindicular_pair_to_segments(pair, end_pos);
+			for segment in segments {
+				new_wire_segment_geometries.push(segment);
+			}
+		}
+		// Create new wire IDs now that the number of wire segments is known
+		let new_wire_ids: Vec<u64> = batch_unused_keys(&*wires, new_wire_segment_geometries.len());
+		// Place down as actual wires
+		for (i, segment) in new_wire_segment_geometries.iter().enumerate() {
+			let new_wire_id: u64 = new_wire_ids[i];
+			let end_connections: Rc<RefCell<HashSet<WireConnection>>> = if i == new_wire_segment_geometries.len() - 1 {
+				match &wire_string_end_connections_opt {
+					Some(end_connections) => Rc::clone(end_connections),
+					None => Rc::new(RefCell::new(HashSet::new()))
+				}
+			}
+			else {
+				Rc::new(RefCell::new(HashSet::from_iter(vec![WireConnection::Wire(new_wire_ids[i+1])].into_iter())))
+			};
+			let start_connections: Rc<RefCell<HashSet<WireConnection>>> = if i == 0 {
+				match &wire_string_start_connections_opt {
+					Some(start_connections) => Rc::clone(start_connections),
+					None => Rc::new(RefCell::new(HashSet::new()))
+				}
+			}
+			else {
+				// There is a previus segment in the new chain, clone that one's end connectins Rc
+				Rc::clone(&wires.get(&new_wire_ids[i-1]).unwrap().borrow().end_connections)
+			};
+			let this_wire_connection = WireConnection::Wire(new_wire_id);
+			end_connections.borrow_mut().insert(this_wire_connection.clone());
+			start_connections.borrow_mut().insert(this_wire_connection);
+			let new_wire = Wire::new(
+				segment.0, segment.2,
+				segment.1,
+				1,
+				new_wires_net,
+				start_connections,
+				end_connections
+			);
 			wires.insert(new_wire_id, RefCell::new(new_wire));
 		}
-		// Combine overlapping but seperate end connections
-		// TODO
+		drop(wires);
+		self.check_wire_geometry_and_connections();
+	}
+	/// Fixes everything, should be run when a new circuit is created or when anything is moved, deleted, or placed
+	pub fn check_wire_geometry_and_connections(&self) {
+		// Wires connect to themselves
+		self.check_wires_connected_to_themselves();
 		// Find overlapping wires and correct them, make sure to preserve connections
 		// TODO
-		// Look for wires that have seperate net connections at the ends, make sure to merge them
+		// Combine overlapping but seperate end connection HashSets, also T-connections
+		// TODO
+		// Split up end connection HashSets of they are no longer connected or a WireConnection is invalid
+		// TODO
+		// Traverse wires by end connections, check that they are all on the same net, possibly merge nets
+		self.check_all_connected_wires_on_same_net();
+		// Check if any net spans multiple "islands" of wires, split the net
+		self.split_disjoint_nets();
+		// Everything so far just deals with wires, now update pin connections to the wires, possibly changing pin nets
+		self.update_pin_to_wire_connections();
+		// Combine consecutive segments in the same direction
 		// TODO
 	}
-	/// Only acts on wires, self.update_pin_to_wire_connections() shoulf be called AFTER this
-	fn merge_nets(&self, net1: u64, net2: u64) {
+	fn check_wires_connected_to_themselves(&self) {
+		let wires = self.wires.borrow();
+		for (wire_id, wire_cell) in wires.iter() {
+			let this_connection = WireConnection::Wire(*wire_id);
+			let wire = wire_cell.borrow();
+			wire.start_connections.borrow_mut().insert(this_connection.clone());
+			wire.end_connections.borrow_mut().insert(this_connection.clone());
+		}
+	}
+	/// How it works:
+	/// For each wire ("Wire 1") and each wire ("Wire 2") connected to Wire 1:
+	/// 	create flags to optionally change one wire's net to the same as the other wire
+	/// 	create flag to optionally migrate one net to another by modifying both `visited_wires` and `net_wire_associations`
+	/// 	Compare the wire's nets:
+	/// 		Same => {}
+	/// 		Different => Check which wires are included in `visited_wires`:
+	/// 			Neither => Set flag to set wire 2's net to wire 1's net (or other way, this is arbitrary)
+	/// 			One => Set flag of unincluded wire to use net of included wire
+	/// 			Two => Set flag to set wire 2's net to wire 1's net. Also set flag to update all of net 2 to net 1
+	/// 	Add both wires to `visited_wires` and `net_wire_associations`
+	/// 	If the net migrate flag is set:
+	/// 		Move all net wire associations from the old net to the new one and change all of the associated wire's nets
+	/// 	If the change wire net flag is set:
+	/// 		Change wire net to that of wire other wire
+	/// 		Add wire to `net_wire_associations` again with net of other wire
+	/// 	else:
+	/// 		Add wires to `net_wire_associations` normally
+	fn check_all_connected_wires_on_same_net(&self) {
+		// {Wire ID, ...}
+		let mut visited_wires = HashSet::<u64>::new();
+		// {Net ID: {Wire ID, ...}}
+		// For keeping track of what wires are on a net so they can be updated when nets have to be merged
+		let mut net_wire_associations = HashMap::<u64, HashSet<u64>>::new();
+		let wires = self.wires.borrow();
+		for (wire_1_id, wire_1_cell) in wires.iter() {
+			let mut wire_1 = wire_1_cell.borrow_mut();
+			let wire_1_connections: Vec<WireConnection> = wire_1.start_connections.borrow().iter().chain(wire_1.end_connections.borrow().iter()).map(|conn_ref| conn_ref.clone()).collect();
+			for wire_connection in &wire_1_connections {
+				match wire_connection {
+					WireConnection::Wire(wire_2_id) => {
+						if wire_1_id != wire_2_id {// Don't compare to itself because dynamic borrow error!
+							let mut wire_2 = wires.get(wire_2_id).unwrap().borrow_mut();
+							// (Net ID to assign to both wires, Optional net migration (Old net, New net))
+							let (both_wires_eventual_net, net_migration): (u64, Option<(u64, u64)>) = match wire_1.net == wire_2.net {
+								true => (wire_1.net, None),
+								false => {// Check which wires are included in `visited_wires`
+									let wire_1_visited = visited_wires.contains(wire_1_id);
+									let wire_2_visited = visited_wires.contains(wire_2_id);
+									if wire_1_visited && wire_2_visited {// Two => Set flag to set wire 2's net to wire 1's net. Also set flag to update all of net 2 to net 1
+										(wire_1.net, Some((wire_2.net, wire_1.net)))
+									}
+									else {
+										if wire_1_visited || wire_2_visited {// One => Set flag of unincluded wire to use net of included wire
+											if wire_1_visited {
+												(wire_1.net, None)
+											}
+											else {
+												(wire_2.net, None)
+											}
+										}
+										else {// Neither => Set flag to set wire 2's net to wire 1's net (or other way, this is arbitrary)
+											(wire_1.net, None)
+										}
+									}
+								}
+							};
+							// Add both wires to `visited_wires` and `net_wire_associations`
+							visited_wires.insert(*wire_1_id);
+							visited_wires.insert(*wire_2_id);
+							if let Some(wire_assoc_set) = net_wire_associations.get_mut(&both_wires_eventual_net) {
+								wire_assoc_set.insert(*wire_1_id);
+								wire_assoc_set.insert(*wire_2_id);
+							}
+							else {
+								let mut wire_assoc_set = HashSet::<u64>::new();
+								wire_assoc_set.insert(*wire_1_id);
+								wire_assoc_set.insert(*wire_2_id);
+								net_wire_associations.insert(both_wires_eventual_net, wire_assoc_set);
+							}
+							// Possible net migration
+							if let Some((old_net, new_net)) = net_migration {
+								let net_missing_err = "Net migration is only supposed to happen if both wires are already visited, meaning they're net should be in `net_wire_associations`";
+								let old_net_wires = net_wire_associations.get(&old_net).expect(net_missing_err).clone();
+								let mut new_net_wires = net_wire_associations.get_mut(&new_net).expect(net_missing_err);
+								for wire_id in &old_net_wires {
+									// Update wire's net ref
+									if !(wire_id == wire_1_id || wire_id == wire_2_id) {
+										wires.get(wire_id).unwrap().borrow_mut().net = new_net;
+									}
+									// Add wire to new net wire association set
+									new_net_wires.insert(*wire_id);
+								}
+							}
+							// Assign common net ID to wires
+							wire_1.net = both_wires_eventual_net;
+							wire_2.net = both_wires_eventual_net;
+						}
+					},
+					WireConnection::Pin(_) => {}
+				}
+			}
+		}
+	}
+	/// Called AFTER `self.check_all_connected_wires_on_same_net()`
+	fn split_disjoint_nets(&self) {
 		// TODO
 	}
-	/// Last step in recomputing circuit connections after the circuit is edited
+	/// Almost last step in recomputing circuit connections after the circuit is edited
 	/// If any pins (component or external) touch any wire, update the pin's net to the wire's net
 	/// Also make sure pins not touching have no connection
-	pub fn update_pin_to_wire_connections(&self) {
+	/// Consecutive-wires-in-same-direction check should happen after this so that any triple-joints that have been abandoned get merged back to a signle wire
+	fn update_pin_to_wire_connections(&self) {
 		// Component pins
 		for (comp_id, comp_cell) in self.components.borrow().iter() {
 			let comp = comp_cell.borrow();
@@ -1500,7 +1660,7 @@ impl LogicCircuit {
 					}
 				}
 				match self.is_point_on_wire(pin_pos) {
-					Some((wire_id, wire_intercept_triple)) => {
+					Some((wire_id, wire_intercept_triple, _)) => {
 						{// Make sure wire reference is dropped before calling `self.add_connection_to_wire`
 							let wire = self.wires.borrow_mut();
 							let new_net_id: u64 = wire.get(&wire_id).expect(&format!("self.is_point_on_wire() returned invalid wire ID {}", wire_id)).borrow().net;
@@ -1527,7 +1687,7 @@ impl LogicCircuit {
 				}
 			}
 			match self.is_point_on_wire(pin_pos) {
-				Some((wire_id, wire_intercept_triple)) => {
+				Some((wire_id, wire_intercept_triple, _)) => {
 					{// Make sure wire reference is dropped before calling `self.add_connection_to_wire`
 						let wire = self.wires.borrow_mut();
 						let new_net_id: u64 = wire.get(&wire_id).expect(&format!("self.is_point_on_wire() returned invalid wire ID {}", wire_id)).borrow().net;
