@@ -24,7 +24,7 @@ pub mod prelude {
 	pub type V2 = Vector2<f32>;
 	use eframe::egui::{Color32, CornerRadius};
 	pub use ui::{Styles, LogicCircuitToplevelView, App, ComponentDrawInfo, GraphicSelectableItem, SelectProperty, UIData};
-	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource};
+	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection};
 	pub use resource_interface::{load_file_with_better_error, EnumAllLogicDevicesSave};
 	pub fn u8_3_to_color32(in_: [u8; 3]) -> Color32 {
 		Color32::from_rgb(in_[0], in_[1], in_[2])
@@ -116,6 +116,17 @@ pub mod prelude {
 		match rc_opt {
 			Some(rc) => Some(Rc::clone(rc)),
 			None => None
+		}
+	}
+	/// Adds all of `other` into `base`
+	pub fn merge_wire_end_connection_sets(base_cell: &Rc<RefCell<HashSet<WireConnection>>>, other_cell: &Rc<RefCell<HashSet<WireConnection>>>) {
+		if Rc::ptr_eq(base_cell, other_cell) {
+			return;
+		}
+		let mut base = base_cell.borrow_mut();
+		let other = other_cell.borrow();
+		for other_item in other.iter() {
+			base.insert(other_item.clone());
 		}
 	}
 	#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
