@@ -1533,12 +1533,12 @@ impl LogicCircuit {
 		self.check_all_connected_wires_on_same_net();
 		// Check if any net spans multiple "islands" of wires, split the net
 		self.split_disjoint_nets();
-		// Everything so far just deals with wires, now update pin connections to the wires, possibly changing pin nets
-		self.update_pin_to_wire_connections();
 		// Remove pins from nets where the pin doesn't reference it
 		// TODO
+		// Everything so far just deals with wires, now update pin connections to the wires, possibly changing pin nets
+		self.update_pin_to_wire_connections();
 		// Combine consecutive segments in the same direction
-		// TODO
+		self.merge_consecutive_wires();
 	}
 	fn check_wires_connected_to_just_themselves(&self) {
 		let wires = self.wires.borrow();
@@ -1704,13 +1704,116 @@ impl LogicCircuit {
 			}
 		}
 	}
+	/// From Gemini
 	/// Called AFTER `self.check_all_connected_wires_on_same_net()`
 	/// This function uses the wire end connections (no spacial checking needed) to determine if a single net spans multiple "islands" of wires
 	/// Only needs to update the net fields of wires, so do not care about updating connected pins because that will happen later
 	/// May add new nets
-	/*fn split_disjoint_nets(&self) {
-		// TODO
-	}*/
+	fn split_disjoint_nets(&self) {
+		let wires = self.wires.borrow();
+		let mut nets = self.nets.borrow_mut();
+
+		// 1. Group all wires by their net ID.
+		// {Net ID: {Wire ID, ...}}
+		let mut wires_by_net = HashMap::<u64, HashSet<u64>>::new();
+		for (wire_id, wire_cell) in wires.iter() {
+			let wire = wire_cell.borrow();
+			wires_by_net.entry(wire.net).or_default().insert(*wire_id);
+		}
+
+		// A vec to store net modifications to avoid borrowing issues.
+		// vec<(Wire IDs in the new island, original net ID))
+		let mut islands_to_create_nets_for = Vec::<(HashSet<u64>, u64)>::new();
+
+		// 2. Iterate through each net group to find disjoint islands.
+		for (net_id, all_wires_in_net) in wires_by_net.iter() {
+			if all_wires_in_net.is_empty() {
+				continue;
+			}
+
+			let mut visited_wires_in_net = HashSet::<u64>::new();
+			let mut is_first_island = true;
+
+			while visited_wires_in_net.len() < all_wires_in_net.len() {
+				// Find a starting wire for the next island search that hasn't been visited.
+				let start_wire_id = *all_wires_in_net
+					.iter()
+					.find(|wire_id| !visited_wires_in_net.contains(wire_id))
+					.unwrap();
+
+				// 3. Use BFS to find all connected wires in the current island.
+				let current_island = self.find_wire_island(start_wire_id, &wires);
+				
+				visited_wires_in_net.extend(&current_island);
+
+				// 4. The first island stays on the original net. Subsequent islands need a new net.
+				if is_first_island {
+					is_first_island = false;
+				} else {
+					islands_to_create_nets_for.push((current_island, *net_id));
+				}
+			}
+		}
+		
+		// 5. Create new nets and re-assign wires for the found islands.
+		for (island_wires, original_net_id) in islands_to_create_nets_for {
+			// Now it's safe to get a new net ID and then mutate `nets`.
+			let new_net_id = lowest_unused_key(&nets);
+			let new_net = LogicNet::new(Vec::new());
+			nets.insert(new_net_id, RefCell::new(new_net));
+
+			// Re-assign all wires in the island to the new net.
+			for wire_id in island_wires {
+				if let Some(wire_cell) = wires.get(&wire_id) {
+					wire_cell.borrow_mut().net = new_net_id;
+				}
+			}
+		}
+	}
+	/// From Gemini
+	/// Helper function to find a connected "island" of wires using BFS.
+	///
+	/// # Arguments
+	/// * `start_wire_id` - The ID of the wire to start the search from.
+	/// * `wires` - A reference to the circuit's wires HashMap.
+	///
+	/// # Returns
+	/// A HashSet containing the IDs of all wires in the connected island.
+	fn find_wire_island(
+		&self,
+		start_wire_id: u64,
+		wires: &HashMap<u64, RefCell<Wire>>,
+	) -> HashSet<u64> {
+		let mut q = VecDeque::new();
+		let mut island_wires = HashSet::new();
+
+		q.push_back(start_wire_id);
+		island_wires.insert(start_wire_id);
+
+		while let Some(current_wire_id) = q.pop_front() {
+			let current_wire_cell = wires.get(&current_wire_id).unwrap();
+			let current_wire = current_wire_cell.borrow();
+
+			// Check both ends of the wire for connections
+			let connections = current_wire
+				.start_connections
+				.borrow()
+				.iter()
+				.chain(current_wire.end_connections.borrow().iter())
+				.cloned()
+				.collect::<Vec<WireConnection>>();
+
+			for connection in connections {
+				if let WireConnection::Wire(connected_wire_id) = connection {
+					if !island_wires.contains(&connected_wire_id) {
+						island_wires.insert(connected_wire_id);
+						q.push_back(connected_wire_id);
+					}
+				}
+			}
+		}
+		island_wires
+	}
 	/// Almost last step in recomputing circuit connections after the circuit is edited
 	/// If any pins (component or external) touch any wire, update the pin's net to the wire's net
 	/// Also make sure pins not touching have no connection
@@ -1774,6 +1877,13 @@ impl LogicCircuit {
 				}
 			}
 		}
+	}
+	/// Checks for consecutive wire segments that are in the same direction and are only connected to each other. Wires like this can be merged into one wire segment
+	/// It also takes care of updating the end connections
+	/// Should be run AFTER the pin update and wire connection update functions
+	/// Does not deal with overlapping wires
+	fn merge_consecutive_wires(&self) {
+		// TODO
 	}
 	/// Will split a wire into two sections if the joint is somewhere in the middle, otherwise just adds it at one end
 	/// Returns: The shared connection set that should be used in case a wire is what is being connected
@@ -2015,126 +2125,5 @@ impl LogicDevice for LogicCircuit {
 	}
 	fn is_toplevel_circuit(&self) -> bool {
 		true
-	}
-}
-
-// Begin the Slop
-impl LogicCircuit {
-	/// Called AFTER `self.check_all_connected_wires_on_same_net()`
-	/// This function uses the wire end connections (no spacial checking needed) to determine if a single net spans multiple "islands" of wires
-	/// Only needs to update the net fields of wires, so do not care about updating connected pins because that will happen later
-	/// May add new nets
-	fn split_disjoint_nets(&self) {
-		let wires = self.wires.borrow();
-		let mut nets = self.nets.borrow_mut();
-
-		// 1. Group all wires by their net ID.
-		let mut wires_by_net = HashMap::<u64, HashSet<u64>>::new();
-		for (wire_id, wire_cell) in wires.iter() {
-			let wire = wire_cell.borrow();
-			wires_by_net.entry(wire.net).or_default().insert(*wire_id);
-		}
-
-		// A vec to store net modifications to avoid borrowing issues.
-		// (Vec of wire IDs in the new island, original net ID)
-		let mut islands_to_create_nets_for = Vec::<(HashSet<u64>, u64)>::new();
-
-		// 2. Iterate through each net group to find disjoint islands.
-		for (net_id, all_wires_in_net) in wires_by_net.iter() {
-			if all_wires_in_net.is_empty() {
-				continue;
-			}
-
-			let mut visited_wires_in_net = HashSet::<u64>::new();
-			let mut is_first_island = true;
-
-			while visited_wires_in_net.len() < all_wires_in_net.len() {
-				// Find a starting wire for the next island search that hasn't been visited.
-				let start_wire_id = *all_wires_in_net
-					.iter()
-					.find(|wire_id| !visited_wires_in_net.contains(wire_id))
-					.unwrap();
-
-				// 3. Use BFS to find all connected wires in the current island.
-				let current_island = self.find_wire_island(start_wire_id, &wires);
-				
-				visited_wires_in_net.extend(&current_island);
-
-				// 4. The first island stays on the original net. Subsequent islands need a new net.
-				if is_first_island {
-					is_first_island = false;
-				} else {
-					islands_to_create_nets_for.push((current_island, *net_id));
-				}
-			}
-		}
-		
-		// 5. Create new nets and re-assign wires for the found islands.
-		for (island_wires, original_net_id) in islands_to_create_nets_for {
-			// To fix the borrow error, we must release the immutable borrow on `nets` before
-			// we try to get a mutable borrow with `nets.insert()`.
-			// We do this by getting the needed data within a temporary scope.
-			let connections_clone = {
-				let original_net = nets.get(&original_net_id).unwrap().borrow();
-				original_net.connections.clone()
-			}; // The immutable borrow from `original_net` is dropped here.
-
-			// Now it's safe to get a new net ID and then mutate `nets`.
-			let new_net_id = lowest_unused_key(&nets);
-			let new_net = LogicNet::new(connections_clone);
-			nets.insert(new_net_id, RefCell::new(new_net));
-
-			// Re-assign all wires in the island to the new net.
-			for wire_id in island_wires {
-				if let Some(wire_cell) = wires.get(&wire_id) {
-					wire_cell.borrow_mut().net = new_net_id;
-				}
-			}
-		}
-	}
-
-	/// Helper function to find a connected "island" of wires using BFS.
-	///
-	/// # Arguments
-	/// * `start_wire_id` - The ID of the wire to start the search from.
-	/// * `wires` - A reference to the circuit's wires HashMap.
-	///
-	/// # Returns
-	/// A HashSet containing the IDs of all wires in the connected island.
-	fn find_wire_island(
-		&self,
-		start_wire_id: u64,
-		wires: &HashMap<u64, RefCell<Wire>>,
-	) -> HashSet<u64> {
-		let mut q = VecDeque::new();
-		let mut island_wires = HashSet::new();
-
-		q.push_back(start_wire_id);
-		island_wires.insert(start_wire_id);
-
-		while let Some(current_wire_id) = q.pop_front() {
-			if let Some(current_wire_cell) = wires.get(&current_wire_id) {
-				let current_wire = current_wire_cell.borrow();
-
-				// Check both ends of the wire for connections
-				let connections = current_wire
-					.start_connections
-					.borrow()
-					.iter()
-					.chain(current_wire.end_connections.borrow().iter())
-					.cloned()
-					.collect::<Vec<WireConnection>>();
-
-				for connection in connections {
-					if let WireConnection::Wire(connected_wire_id) = connection {
-						if !island_wires.contains(&connected_wire_id) {
-							island_wires.insert(connected_wire_id);
-							q.push_back(connected_wire_id);
-						}
-					}
-				}
-			}
-		}
-		island_wires
 	}
 }
