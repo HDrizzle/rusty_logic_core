@@ -37,8 +37,8 @@ impl LogicDevice for GateAnd {
 	fn compute_step(&mut self, _ancestors: &AncestryStack) {
 		self.set_pin_internal_state_panic("q", (self.get_pin_state_panic("a").to_bool() && self.get_pin_state_panic("b").to_bool()).into());
 	}
-	fn save(&self) -> Result<EnumAllLogicDevicesSave, String> {
-		Ok(EnumAllLogicDevicesSave::GateAnd(self.clone()))
+	fn save(&self) -> Result<EnumAllLogicDevices, String> {
+		Ok(EnumAllLogicDevices::GateAnd(self.clone()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(vec![
@@ -86,8 +86,8 @@ impl LogicDevice for GateNand {
 		let and: bool = self.get_pin_state_panic("a").to_bool() && self.get_pin_state_panic("b").to_bool();
 		self.set_pin_internal_state_panic("q", (!and).into());
 	}
-	fn save(&self) -> Result<EnumAllLogicDevicesSave, String> {
-		Ok(EnumAllLogicDevicesSave::GateNand(self.clone()))
+	fn save(&self) -> Result<EnumAllLogicDevices, String> {
+		Ok(EnumAllLogicDevices::GateNand(self.clone()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(vec![
@@ -97,6 +97,5 @@ impl LogicDevice for GateNand {
 			V2::new(0.0, 2.0)
 		], draw.styles.color_foreground);
 		draw.draw_arc(V2::zeros(), 2.0, -90.0, 90.0, draw.styles.color_foreground);
-		draw.draw_circle(V2::new(2.5, 0.0), 0.5, draw.styles.color_foreground);
 	}
 }

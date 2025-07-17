@@ -23,9 +23,9 @@ pub mod prelude {
 	pub const CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH: usize = 10;
 	pub type V2 = Vector2<f32>;
 	use eframe::egui::{Color32, CornerRadius};
-	pub use ui::{Styles, LogicCircuitToplevelView, App, ComponentDrawInfo, GraphicSelectableItem, SelectProperty, UIData};
+	pub use ui::{Styles, LogicCircuitToplevelView, App, ComponentDrawInfo, GraphicSelectableItem, SelectProperty, UIData, CopiedGraphicItem, CopiedItemSet};
 	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection};
-	pub use resource_interface::{load_file_with_better_error, EnumAllLogicDevicesSave};
+	pub use resource_interface::{load_file_with_better_error, EnumAllLogicDevices};
 	pub fn u8_3_to_color32(in_: [u8; 3]) -> Color32 {
 		Color32::from_rgb(in_[0], in_[1], in_[2])
 	}
@@ -111,6 +111,13 @@ pub mod prelude {
 			i += 1;
 		}
 		out
+	}
+	pub fn new_pin_name(pins: &HashMap<String, RefCell<LogicConnectionPin>>) -> String {
+		let mut i: u64 = 0;
+		while pins.contains_key(&format!("pin_{}", i)) {
+			i += 1;
+		}
+		format!("pin_{}", i)
 	}
 	pub fn clone_option_rc<T>(rc_opt: &Option<Rc<T>>) -> Option<Rc<T>> {
 		match rc_opt {

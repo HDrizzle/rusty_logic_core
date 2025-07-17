@@ -89,6 +89,13 @@ pub trait GraphicSelectableItem {
 	fn is_connected_to_net(&self, net_id: u64) -> bool;
 	fn get_properties(&self) -> Vec<SelectProperty>;
 	fn set_property(&mut self, property: SelectProperty);
+	fn copy_override(&self) -> CopiedGraphicItem;
+	// TODO
+	fn copy(&self) -> CopiedGraphicItem {
+		//let result_ = bb_center - self.get_ui_data().position;
+		//self.get_ui_data_mut().position_before_dragging = result_;
+		self.copy_override()
+	}
 	fn get_selected(&self) -> bool {
 		self.get_ui_data().selected
 	}
@@ -117,6 +124,33 @@ pub trait GraphicSelectableItem {
 	}
 	fn stop_dragging(&mut self, final_mouse_pos: V2) {
 		self.dragging_to(final_mouse_pos);
+	}
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum CopiedGraphicItem {
+	Component(EnumAllLogicDevices),
+	Wire((IntV2, FourWayDir, u32)),
+	ExternalConnection(LogicConnectionPin)
+}
+
+/// This is what will be serialized as JSON and put onto the clipboard
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CopiedItemSet {
+	pub items: Vec<CopiedGraphicItem>,
+	/// So that everything will be shown at the same displacement wrt the mouse when paste is hit
+	pub bb_center: IntV2
+}
+
+impl CopiedItemSet {
+	pub fn new(
+		items: Vec<CopiedGraphicItem>,
+		bb_center: IntV2
+	) -> Self {
+		Self {
+			items,
+			bb_center
+		}
 	}
 }
 
@@ -190,36 +224,17 @@ impl<'a> ComponentDrawInfo<'a> {
 	pub fn draw_circle_filled(&self, center: V2, radius: f32, stroke: [u8; 3]) {
 		self.painter.circle_filled(self.grid_to_px(center), radius * self.grid_size, u8_3_to_color32(stroke));
 	}
-	/// With help from https://github.com/emilk/egui/issues/4188
+	/// Egui doen't have an arc feature so I will use a polyline :(
+	/// The end angle must be a larger number then the start angle
 	pub fn draw_arc(&self, center_grid: V2, radius_grid: f32, start_deg: f32, end_deg: f32, stroke: [u8; 3]) {
-		let center = self.grid_to_px(center_grid);
-		let radius = radius_grid * self.grid_size;
-		let start_rad = start_deg * TAU / 360.0;
-		let end_rad = end_deg * TAU / 360.0;
-		// Center of the circle
-		let xc = center.x;
-		let yc = center.y;
-
-		// First control point
-		let p1 = center + radius * Vec2::new(start_rad.cos(), -start_rad.sin());
-
-		// Last control point
-		let p4 = center + radius * Vec2::new(end_rad.cos(), -end_rad.sin());
-
-		let a = p1 - center;
-		let b = p4 - center;
-		let q1 = a.length_sq();
-		let q2 = q1 + a.dot(b);
-		let k2 = (4.0 / 3.0) * ((2.0 * q1 * q2).sqrt() - q2) / (a.x * b.y - a.y * b.x);
-
-		let p2 = Pos2::new(xc + a.x - k2 * a.y, yc + a.y + k2 * a.x);
-		let p3 = Pos2::new(xc + b.x + k2 * b.y, yc + b.y - k2 * b.x);
-		self.painter.add(Shape::CubicBezier(CubicBezierShape{
-			points: [p1, p2, p3, p4],
-			closed: false,
-			fill: Color32::TRANSPARENT,
-			stroke: PathStroke::new(self.grid_size * self.styles.line_size_grid, u8_3_to_color32(stroke))
-		}));
+		let mut polyline = Vec::<V2>::new();
+		let seg_size: f32 = 5.0;
+		let n_segs = ((end_deg - start_deg) / seg_size) as usize;
+		for i in 0..n_segs+1 {
+			let angle_rad = ((i as f32 * seg_size) + start_deg) * TAU / 360.0;
+			polyline.push(V2::new(angle_rad.cos() * radius_grid, angle_rad.sin() * radius_grid));
+		}
+		self.draw_polyline(polyline, stroke);
 	}
 	pub fn grid_to_px(&self, grid: V2) -> egui::Pos2 {
 		// TODO
@@ -279,7 +294,7 @@ impl LogicCircuitToplevelView {
 			);
 			// First, detect user unput
 			let input_state = ui.ctx().input(|i| i.clone());
-			let recompute_connections: bool = self.circuit.toplevel_ui_interact(response, &draw_info, input_state);
+			let recompute_connections: bool = self.circuit.toplevel_ui_interact(response, ui.ctx(), &draw_info, input_state);
 			if recompute_connections {
 				self.circuit.check_wire_geometry_and_connections();
 			}

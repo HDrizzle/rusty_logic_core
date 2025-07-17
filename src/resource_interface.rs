@@ -24,7 +24,7 @@ pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool) -> Result<
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogicCircuitSave {
 	pub generic_device: LogicDeviceGeneric,
-	pub components: HashMap<u64, EnumAllLogicDevicesSave>,
+	pub components: HashMap<u64, EnumAllLogicDevices>,
 	pub nets: HashMap<u64, LogicNet>,
 	pub wires: HashMap<u64, Wire>,
 	pub clock_enabled: bool,
@@ -36,15 +36,15 @@ pub struct LogicCircuitSave {
 }
 
 /// Not great but I can't think of anything else
-#[derive(Debug, Serialize, Deserialize)]
-pub enum EnumAllLogicDevicesSave {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EnumAllLogicDevices {
 	/// (Relative path of circuit, Whether to use block diagram)
 	SubCircuit(String, bool),
 	GateAnd(basic_components::GateAnd),
 	GateNand(basic_components::GateNand)
 }
 
-impl EnumAllLogicDevicesSave {
+impl EnumAllLogicDevices {
 	pub fn to_dynamic(self_instance: Self) -> Result<Box<dyn LogicDevice>, String> {
 		match self_instance {
 			Self::SubCircuit(circuit_rel_path, displayed_as_block) => Ok(Box::new(load_circuit(&circuit_rel_path, displayed_as_block)?)),

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
 use eframe::egui::{self, response::Response, Key, KeyboardShortcut, Modifiers, PointerButton};
+use arboard;
 
 fn logic_device_to_graphic_item(x: &dyn LogicDevice) -> &dyn GraphicSelectableItem {
 	x
@@ -503,6 +504,9 @@ impl GraphicSelectableItem for LogicConnectionPin {
 			}
 		}
 	}
+	fn copy_override(&self) -> CopiedGraphicItem {
+		CopiedGraphicItem::ExternalConnection(self.clone())
+	}
 }
 
 /// Everything within a circuit
@@ -714,6 +718,9 @@ impl GraphicSelectableItem for Wire {
 			panic!("Wire doesn't use property {:?}", property)
 		}
 	}
+	fn copy_override(&self) -> CopiedGraphicItem {
+		CopiedGraphicItem::Wire((self.ui_data.position, self.direction, self.length))
+	}
 }
 
 /// What could the end of a be wire connected to?
@@ -765,7 +772,7 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn get_generic(&self) -> &LogicDeviceGeneric;
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric;
 	fn compute_step(&mut self, ancestors: &AncestryStack);
-	fn save(&self) -> Result<EnumAllLogicDevicesSave, String>;
+	fn save(&self) -> Result<EnumAllLogicDevices, String>;
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>);
 	/// In CircuitVerse there can be for example one AND gate that acts like 8 gates, with 8-bit busses going in and out of it
 	fn get_bit_width(&self) -> Option<u32> {Some(1)}
@@ -882,6 +889,9 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 			SelectProperty::GlobalConnectionState(_) => {}
 		}
 	}
+	fn copy_override(&self) -> CopiedGraphicItem {
+		CopiedGraphicItem::Component(self.save().unwrap())
+	}
 }
 
 #[derive(Clone)]
@@ -960,7 +970,8 @@ pub enum SelectionState {
 	/// (Start, Delta)
 	Dragging(V2, V2),
 	/// After Paste operation, the pasted stuff will remain selected and following the mouse until a left click
-	FollowingMouse(V2)
+	/// (Original BB center, current or most recent mouse pos)
+	FollowingMouse(IntV2, V2)
 }
 
 #[derive(Debug, Clone)]
@@ -993,7 +1004,7 @@ impl Tool {
 			Self::Select{selected_graphics: _, selected_graphics_state} => match selected_graphics_state {
 				SelectionState::Fixed => true,
 				SelectionState::Dragging(_, _) => false,
-				SelectionState::FollowingMouse(_) => false
+				SelectionState::FollowingMouse(_, _) => false
 			},
 			Self::HighlightNet(_) => true,
 			Self::PlaceComponnet => false,
@@ -1081,7 +1092,7 @@ impl LogicCircuit {
 		// Init compnents
 		let mut components = HashMap::<u64, RefCell<Box<dyn LogicDevice>>>::new();
 		for (ref_, save_comp) in save.components.into_iter() {
-			components.insert(ref_, RefCell::new(EnumAllLogicDevicesSave::to_dynamic(save_comp)?));
+			components.insert(ref_, RefCell::new(EnumAllLogicDevices::to_dynamic(save_comp)?));
 		}
 		Ok(Self {
 			generic_device: save.generic_device,
@@ -1195,15 +1206,19 @@ impl LogicCircuit {
 		}
 	}
 	/// Returns: whether to recompute the circuit
-	pub fn toplevel_ui_interact<'a>(&mut self, response: Response, draw: &ComponentDrawInfo<'a>, mut input_state: egui::InputState) -> bool {
+	pub fn toplevel_ui_interact<'a>(&mut self, response: Response, context: &egui::Context, draw: &ComponentDrawInfo<'a>, mut input_state: egui::InputState) -> bool {
 		let mut return_recompute_connections = false;
 		let mut new_tool_opt = Option::<Tool>::None;
+		let mouse_pos_grid_opt: Option<V2> = match response.hover_pos() {
+			Some(pos_px) => Some(draw.mouse_pos2_to_grid(pos_px)),
+			None => None
+		};
 		match self.tool.borrow_mut().deref_mut() {
 			Tool::Select{selected_graphics, selected_graphics_state} => {
 				match selected_graphics_state {
 					SelectionState::Fixed => {
 						if response.drag_started_by(PointerButton::Primary) {
-							let begining_mouse_pos_grid: V2 = draw.mouse_pos2_to_grid(response.hover_pos().expect("Hover pos should work when dragging"));
+							let begining_mouse_pos_grid: V2 = mouse_pos_grid_opt.expect("Hover pos should work when dragging");
 							*selected_graphics_state =  SelectionState::Dragging(begining_mouse_pos_grid, emath_vec2_to_v2(response.drag_delta()) / draw.grid_size);
 							for item_ref in selected_graphics.iter() {
 								self.run_function_on_graphic_item_mut(item_ref.clone(), |graphic_item| {
@@ -1285,11 +1300,20 @@ impl LogicCircuit {
 							}
 						}
 					},
-					SelectionState::FollowingMouse(start_grid) => {
-						// TODO
+					SelectionState::FollowingMouse(og_bb_center, mouse_pos) => {
+						if let Some(new_mouse_pos) = mouse_pos_grid_opt {// In case the mouse goes off the edge or something idk
+							*mouse_pos = new_mouse_pos;
+						}
+						for item_ref in selected_graphics.iter() {
+							self.run_function_on_graphic_item_mut(item_ref.clone(), |item_box| {item_box.get_ui_data_mut().position = round_v2_to_intv2(*mouse_pos) + item_box.get_ui_data().position_before_dragging;});
+						}
+						if response.clicked_by(PointerButton::Primary) {
+							return_recompute_connections = true;
+							new_tool_opt = Some(Tool::default());
+						}
 					}
 				}
-				// Selected items BB
+				// Draw selected items BB
 				if selected_graphics.len() >= 1 {
 					let mut points = Vec::<V2>::new();
 					for item_ref in selected_graphics.iter() {
@@ -1302,9 +1326,46 @@ impl LogicCircuit {
 					let bb = merge_points_to_bb(points);
 					draw.draw_rect(bb.0, bb.1, [0, 0, 0, 0], draw.styles.select_rect_edge_color);
 				}
+				// Copy and Paste will use a plain-text JSON array of instances of the `CopiedGraphicItem` enum
 				// Copy
-				if input_state.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::C)) {
-					// TODO
+				if input_state.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::C)) {// TODO
+					let mut copied_items = Vec::<CopiedGraphicItem>::new();
+					// Get combined BB center
+					let mut bb_opt = Option::<(V2, V2)>::None;
+					for item_ref in selected_graphics.iter() {
+						let bb_float = self.run_function_on_graphic_item::<(V2, V2)>(item_ref.clone(), |item_box| item_box.bounding_box(V2::zeros()));
+						bb_opt = Some(match bb_opt.clone() {
+							Some(bb) => {
+								merge_points_to_bb(vec![bb_float.0, bb_float.1, bb.0, bb.1])
+							}
+							None => bb_float
+						});
+					}
+					// If there is a BB then at least one selected item to copy, otherwise do nothing
+					if let Some(bb) = bb_opt {
+						let bb_center: V2 = (bb.1 + bb.0) / 2.0;
+						//let bb_int = (IntV2(bb_float.0.x as i32, bb_float.0.y as i32), IntV2(bb_float.1.x as i32, bb_float.1.y as i32));
+						for item_ref in selected_graphics.iter() {
+							copied_items.push(self.copy_graphic_item(item_ref.clone()));
+						}
+						let item_set = CopiedItemSet::new(copied_items, round_v2_to_intv2(bb_center));
+						let raw_string = serde_json::to_string(&item_set).unwrap();
+						println!("{}", &raw_string);
+						context.copy_text(raw_string);
+					}
+				}
+				// Vaste
+				if input_state.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::V)) {// TODO
+					// Attempt to decode from clipboard
+					let mut clipboard = arboard::Clipboard::new().unwrap();
+					let string_raw = clipboard.get_text().unwrap();
+					match serde_json::from_str::<CopiedItemSet>(&string_raw) {
+						Ok(item_set) => {
+							let pasted_selected_graphics = self.paste(&item_set);
+							new_tool_opt = Some(Tool::Select{selected_graphics: HashSet::from_iter(pasted_selected_graphics.into_iter()), selected_graphics_state: SelectionState::FollowingMouse(item_set.bb_center, mouse_pos_grid_opt.unwrap())});
+						},
+						Err(_) => {}
+					}
 				}
 				// Delete
 				if input_state.consume_key(Modifiers::NONE, Key::Delete) {
@@ -1397,6 +1458,34 @@ impl LogicCircuit {
 		}
 		return_recompute_connections
 	}
+	fn paste(&self, item_set: &CopiedItemSet) -> Vec<GraphicSelectableItemRef> {
+		let mut out = Vec::<GraphicSelectableItemRef>::new();
+		for pasted_item in &item_set.items {
+			out.push(match pasted_item {
+				CopiedGraphicItem::Component(comp_save) => {
+					let mut components = self.components.borrow_mut();
+					let new_comp_id = lowest_unused_key(&components);
+					components.insert(new_comp_id, RefCell::new(EnumAllLogicDevices::to_dynamic(comp_save.clone()).unwrap()));
+					GraphicSelectableItemRef::Component(new_comp_id)
+				},
+				CopiedGraphicItem::ExternalConnection(pin) => {
+					let mut pins = self.generic_device.pins.borrow_mut();
+					let name = new_pin_name(&*pins);
+					pins.insert(name.clone(), RefCell::new(pin.clone()));
+					GraphicSelectableItemRef::Pin(name)
+				},
+				CopiedGraphicItem::Wire((pos, dir, len)) => {
+					let wire_ids = self.add_wire_geometry(vec![(*pos, *dir)], *pos + dir.to_unit_int().mult(*len as i32), None, None, None, None);
+					GraphicSelectableItemRef::Wire(wire_ids[0])// There shoud be exactly one
+				}
+			});
+		}
+		// Set each item's pre-drag position to the difference from the BB center it it's position
+		for item_ref in &out {
+			self.run_function_on_graphic_item_mut(item_ref.clone(), |item_box| {item_box.get_ui_data_mut().position_before_dragging = item_box.get_ui_data().position - item_set.bb_center;});
+		}
+		out
+	}
 	/// Checks: All wires, external pins, component pins
 	/// Returns: (Is termination point, Optional net, Optional shared wire connection set)
 	fn is_connection_point(&self, point: IntV2) -> (bool, Option<u64>, Option<Rc<RefCell<HashSet<WireConnection>>>>) {
@@ -1450,7 +1539,15 @@ impl LogicCircuit {
 		None
 	}
 	/// Adds new wires to circuit, `perp_segment_pairs` works the same as described in `Tool::PlaceWire`
-	fn add_wire_geometry(&self, perp_segment_pairs: Vec<(IntV2, FourWayDir)>, ending_pos: IntV2, start_net: Option<u64>, end_net: Option<u64>, wire_string_start_connections_opt: Option<Rc<RefCell<HashSet<WireConnection>>>>, wire_string_end_connections_opt: Option<Rc<RefCell<HashSet<WireConnection>>>>) {
+	/// Returns: Vec of new wire IDs
+	fn add_wire_geometry(
+		&self,
+		perp_segment_pairs: Vec<(IntV2, FourWayDir)>,
+		ending_pos: IntV2, start_net: Option<u64>,
+		end_net: Option<u64>,
+		wire_string_start_connections_opt: Option<Rc<RefCell<HashSet<WireConnection>>>>,
+		wire_string_end_connections_opt: Option<Rc<RefCell<HashSet<WireConnection>>>>
+	) -> Vec<u64> {
 		// Get net to use or make a new one
 		let new_wires_net: u64 = match start_net {
 			Some(net_id) => net_id,
@@ -1518,8 +1615,7 @@ impl LogicCircuit {
 			);
 			wires.insert(new_wire_id, RefCell::new(new_wire));
 		}
-		drop(wires);
-		self.check_wire_geometry_and_connections();
+		new_wire_ids
 	}
 	/// Fixes everything, should be run when a new circuit is created or when anything is moved, deleted, or placed
 	pub fn check_wire_geometry_and_connections(&self) {
@@ -1966,6 +2062,15 @@ impl LogicCircuit {
 			GraphicSelectableItemRef::Pin(pin_id) => func(Box::new(self.generic_device.pins.borrow().get(&pin_id).expect(&error_msg).borrow_mut().deref_mut())),
 		}
 	}
+	/// Copy something(s) that have been selected and return a `CopiedGraphicItem` that can be put onto the clipboard as JSON
+	fn copy_graphic_item(&self, ref_: GraphicSelectableItemRef) -> CopiedGraphicItem {
+		let error_msg = format!("Graphic item reference {:?} cannot be found", &ref_);
+		match ref_ {
+			GraphicSelectableItemRef::Component(comp_id) => self.components.borrow().get(&comp_id).expect(&error_msg).borrow().copy(),
+			GraphicSelectableItemRef::Wire(wire_id) => self.wires.borrow().get(&wire_id).expect(&error_msg).borrow().copy(),
+			GraphicSelectableItemRef::Pin(pin_id) => self.generic_device.pins.borrow().get(&pin_id).expect(&error_msg).borrow().copy(),
+		}
+	}
 	/*fn delete_graphic_item(&mut self, ref_: GraphicSelectableItem) {
 		let error_msg = format!("Graphic item reference {:?} cannot be found", &ref_);
 		match ref_ {
@@ -2065,9 +2170,9 @@ impl LogicDevice for LogicCircuit {
 			comp.borrow_mut().compute(&ancestors);
 		}
 	}
-	fn save(&self) -> Result<EnumAllLogicDevicesSave, String> {
+	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		// Convert components to enum variants to be serialized
-		let mut components_save = HashMap::<u64, EnumAllLogicDevicesSave>::new();
+		let mut components_save = HashMap::<u64, EnumAllLogicDevices>::new();
 		for (ref_, component) in self.components.borrow().iter() {
 			components_save.insert(*ref_, component.borrow().save()?);
 		}
@@ -2090,7 +2195,7 @@ impl LogicDevice for LogicCircuit {
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_path), &raw_string))?;
 		// Path to save file
-		Ok(EnumAllLogicDevicesSave::SubCircuit(self.save_path.clone(), self.displayed_as_block))
+		Ok(EnumAllLogicDevices::SubCircuit(self.save_path.clone(), self.displayed_as_block))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		if self.displayed_as_block {
