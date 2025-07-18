@@ -1,8 +1,8 @@
-use crate::{prelude::*, resource_interface, simulator::AncestryStack};
-use eframe::{egui::{self, Color32, Frame, Painter, Pos2, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, Rect}, epaint::{CubicBezierShape, PathStroke}};
+use crate::{basic_components, prelude::*, resource_interface, simulator::{AncestryStack, Tool, SelectionState}};
+use eframe::{egui::{self, containers::Popup, Align2, Color32, Frame, Painter, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, Ui, Vec2}, epaint::{CubicBezierShape, PathStroke}};
 use serde::{Serialize, Deserialize};
 use serde_json;
-use std::{f32::consts::TAU, collections::HashSet};
+use std::{f32::consts::TAU, collections::HashSet, fs};
 
 /// Style for the UI, loaded from /resources/styles.json
 #[derive(Clone, Deserialize)]
@@ -89,13 +89,7 @@ pub trait GraphicSelectableItem {
 	fn is_connected_to_net(&self, net_id: u64) -> bool;
 	fn get_properties(&self) -> Vec<SelectProperty>;
 	fn set_property(&mut self, property: SelectProperty);
-	fn copy_override(&self) -> CopiedGraphicItem;
-	// TODO
-	fn copy(&self) -> CopiedGraphicItem {
-		//let result_ = bb_center - self.get_ui_data().position;
-		//self.get_ui_data_mut().position_before_dragging = result_;
-		self.copy_override()
-	}
+	fn copy(&self) -> CopiedGraphicItem;
 	fn get_selected(&self) -> bool {
 		self.get_ui_data().selected
 	}
@@ -265,7 +259,10 @@ pub struct LogicCircuitToplevelView {
 	screen_center_wrt_grid: V2,
 	/// Pixels per grid increment
 	grid_size: f32,
-	logic_loop_error: bool
+	logic_loop_error: bool,
+	showing_component_popup: bool,
+	component_search_text: String,
+	all_logic_devices_search: Vec<EnumAllLogicDevices>
 }
 
 impl LogicCircuitToplevelView {
@@ -274,11 +271,14 @@ impl LogicCircuitToplevelView {
 			circuit,
 			screen_center_wrt_grid: V2::zeros(),
 			grid_size: 15.0,
-			logic_loop_error: false
+			logic_loop_error: false,
+			showing_component_popup: false,
+			component_search_text: String::new(),
+			all_logic_devices_search: Vec::new()
 		}
 	}
 	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles) {
-		Frame::canvas(ui.style()).show(ui, |ui| {
+		let inner_response = Frame::canvas(ui.style()).show(ui, |ui| {
 			let mut propagate = true;// TODO: Change to false when rest of logic is implemented
 			// TODO
 			let canvas_size = ui.available_size_before_wrap();
@@ -308,6 +308,48 @@ impl LogicCircuitToplevelView {
 			// Right side toolbar
 			self.circuit.tool.borrow().tool_select_ui(&draw_info);
 		});
+		// Top: general controls
+		Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::LEFT_TOP, child: Align2::LEFT_TOP}).id("top-left controls".into()).show(|ui| {
+			if ui.button("Save").clicked() {
+				// TODO
+			}
+			if ui.button("+ Component / Subcircuit").clicked() {
+				// Update component search list
+				self.all_logic_devices_search = basic_components::list_all_basic_components();
+				for dir_entry_result in fs::read_dir(resource_interface::CIRCUITS_DIR).expect("Cannot find circuits directory") {
+					let dir_entry = dir_entry_result.unwrap();
+					if dir_entry.metadata().unwrap().is_file() {
+						self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(dir_entry.file_name().into_string().unwrap(), false));
+					}
+				}
+				self.showing_component_popup = true;
+			}
+		});
+		if self.showing_component_popup {
+			Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
+				ui.horizontal(|ui| {
+					ui.label("Add Component / Sub-circuit");
+					if ui.button("Cancel").clicked() {
+						self.showing_component_popup = false;
+					}
+				});
+				ui.text_edit_singleline(&mut self.component_search_text).request_focus();
+				ScrollArea::vertical().show(ui, |ui| {
+					for device_save in &self.all_logic_devices_search {
+						if device_save.type_name().to_ascii_lowercase().contains(&self.component_search_text.to_ascii_lowercase()) {
+							if ui.button(device_save.type_name()).clicked() {
+								self.showing_component_popup = false;
+								let handle = self.circuit.insert_component(device_save);
+								*self.circuit.tool.borrow_mut() = Tool::Select{
+									selected_graphics: HashSet::from_iter(vec![handle].into_iter()),
+									selected_graphics_state: SelectionState::FollowingMouse(IntV2(0, 0), V2::zeros())
+								};
+							}
+						}
+					}
+				});
+			});
+		}
 	}
 	/// Runs `compute_step()` repeatedly on the circuit until there are no changes, there must be a limit because there are circuits (ex. NOT gate connected to itself) where this would otherwise never end
 	pub fn propagate_until_stable(&mut self, propagation_limit: usize) -> bool {
@@ -348,9 +390,17 @@ pub struct App {
 
 impl App {
 	pub fn new() -> Self {
+		// Load styles
+		let styles: Styles = match Styles::load() {
+			Ok(styles) => styles,
+			Err(e) => {
+				println!("Could not load styles: {}, resorting to default", e);
+				Styles::default()
+			}
+		};
 		Self {
 			state: AppState::default(),
-			styles: Styles::default()
+			styles
 		}
 	}
 }

@@ -1,7 +1,14 @@
-use crate::prelude::*;
+use crate::{prelude::*, simulator::{AncestryStack, LogicConnectionPinInternalSource}};
 use serde::{Deserialize, Serialize};
-use crate::simulator::{AncestryStack, LogicConnectionPinInternalSource};
 use common_macros::hash_map;
+
+/// For the component search popup
+pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
+	vec![
+		GateAnd::new(IntV2(0, 0), "", FourWayDir::default()).save().unwrap(),
+		GateNand::new(IntV2(0, 0), "", FourWayDir::default()).save().unwrap()
+	]
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GateAnd(LogicDeviceGeneric);
@@ -64,7 +71,7 @@ impl GateNand {
 			hash_map!{
 				"a".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, -1), FourWayDir::W, 1.0),
 				"b".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, 1), FourWayDir::W, 1.0),
-				"q".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(3, 0), FourWayDir::E, 1.0),
+				"q".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(4, 0), FourWayDir::E, 1.0),
 			},
 			position_grid,
 			unique_name.to_owned(),
@@ -97,5 +104,6 @@ impl LogicDevice for GateNand {
 			V2::new(0.0, 2.0)
 		], draw.styles.color_foreground);
 		draw.draw_arc(V2::zeros(), 2.0, -90.0, 90.0, draw.styles.color_foreground);
+		draw.draw_circle(V2::new(2.5, 0.0), 0.5, draw.styles.color_foreground);
 	}
 }

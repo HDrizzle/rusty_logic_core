@@ -504,7 +504,7 @@ impl GraphicSelectableItem for LogicConnectionPin {
 			}
 		}
 	}
-	fn copy_override(&self) -> CopiedGraphicItem {
+	fn copy(&self) -> CopiedGraphicItem {
 		CopiedGraphicItem::ExternalConnection(self.clone())
 	}
 }
@@ -718,7 +718,7 @@ impl GraphicSelectableItem for Wire {
 			panic!("Wire doesn't use property {:?}", property)
 		}
 	}
-	fn copy_override(&self) -> CopiedGraphicItem {
+	fn copy(&self) -> CopiedGraphicItem {
 		CopiedGraphicItem::Wire((self.ui_data.position, self.direction, self.length))
 	}
 }
@@ -889,7 +889,7 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 			SelectProperty::GlobalConnectionState(_) => {}
 		}
 	}
-	fn copy_override(&self) -> CopiedGraphicItem {
+	fn copy(&self) -> CopiedGraphicItem {
 		CopiedGraphicItem::Component(self.save().unwrap())
 	}
 }
@@ -981,7 +981,6 @@ pub enum Tool {
 		selected_graphics_state: SelectionState
 	},
 	HighlightNet(Option<u64>),
-	PlaceComponnet,
 	/// Wire initially horizontal/vertical rules:
 	/// When the firt perpindicular pair is placed it defauts to Horizontal (horiz), meaning the first segment is horizontal and then a vertical one from the end of that to the mouse
 	/// Whenever the most recent pair is completely horiz or vert, its initial direction is set to that direction
@@ -993,8 +992,7 @@ pub enum Tool {
 		/// If this wire was started somewhere with a connection (a "Wire termination point") include the net to make later net calculations simpler
 		start_net_opt: Option<u64>,
 		start_wire_connections_opt: Option<Rc<RefCell<HashSet<WireConnection>>>>
-	},
-	PlacePin
+	}
 }
 
 impl Tool {
@@ -1007,9 +1005,7 @@ impl Tool {
 				SelectionState::FollowingMouse(_, _) => false
 			},
 			Self::HighlightNet(_) => true,
-			Self::PlaceComponnet => false,
 			Self::PlaceWire{perp_pairs: _, start_net_opt: _, start_wire_connections_opt: _} => false,
-			Self::PlacePin => false
 		}
 	}
 	pub fn tool_select_ui(&self, draw: &ComponentDrawInfo) {
@@ -1205,7 +1201,7 @@ impl LogicCircuit {
 			}
 		}
 	}
-	/// Returns: whether to recompute the circuit
+	/// Returns: (Whether to recompute the circuit, Whether to upen the component select popup)
 	pub fn toplevel_ui_interact<'a>(&mut self, response: Response, context: &egui::Context, draw: &ComponentDrawInfo<'a>, mut input_state: egui::InputState) -> bool {
 		let mut return_recompute_connections = false;
 		let mut new_tool_opt = Option::<Tool>::None;
@@ -1350,7 +1346,6 @@ impl LogicCircuit {
 						}
 						let item_set = CopiedItemSet::new(copied_items, round_v2_to_intv2(bb_center));
 						let raw_string = serde_json::to_string(&item_set).unwrap();
-						println!("{}", &raw_string);
 						context.copy_text(raw_string);
 					}
 				}
@@ -1369,6 +1364,7 @@ impl LogicCircuit {
 				}
 				// Delete
 				if input_state.consume_key(Modifiers::NONE, Key::Delete) {
+					println!("Delete");// TODO: Make this work
 					for item_ref in selected_graphics.iter() {
 						self.remove_graphic_item(item_ref);
 					}
@@ -1376,9 +1372,6 @@ impl LogicCircuit {
 				}
 			},
 			Tool::HighlightNet(net_id) => {
-				// TODO
-			},
-			Tool::PlaceComponnet => {
 				// TODO
 			},
 			Tool::PlaceWire{perp_pairs, start_net_opt, start_wire_connections_opt} => {
@@ -1430,7 +1423,6 @@ impl LogicCircuit {
 						// Wire not started
 						else {
 							if response.clicked_by(PointerButton::Primary) {
-								println!("Starting wire");
 								let (_, net_opt, start_opt) = self.is_connection_point(mouse_pos_grid_rounded);
 								perp_pairs.push((
 									mouse_pos_grid_rounded,
@@ -1448,9 +1440,6 @@ impl LogicCircuit {
 				if input_state.consume_key(Modifiers::NONE, Key::Escape) {
 					new_tool_opt = Some(Tool::default());
 				}
-			},
-			Tool::PlacePin => {
-				// TODO
 			}
 		}
 		if let Some(new_tool) = new_tool_opt {
@@ -1462,12 +1451,7 @@ impl LogicCircuit {
 		let mut out = Vec::<GraphicSelectableItemRef>::new();
 		for pasted_item in &item_set.items {
 			out.push(match pasted_item {
-				CopiedGraphicItem::Component(comp_save) => {
-					let mut components = self.components.borrow_mut();
-					let new_comp_id = lowest_unused_key(&components);
-					components.insert(new_comp_id, RefCell::new(EnumAllLogicDevices::to_dynamic(comp_save.clone()).unwrap()));
-					GraphicSelectableItemRef::Component(new_comp_id)
-				},
+				CopiedGraphicItem::Component(comp_save) => self.insert_component(comp_save),
 				CopiedGraphicItem::ExternalConnection(pin) => {
 					let mut pins = self.generic_device.pins.borrow_mut();
 					let name = new_pin_name(&*pins);
@@ -1485,6 +1469,12 @@ impl LogicCircuit {
 			self.run_function_on_graphic_item_mut(item_ref.clone(), |item_box| {item_box.get_ui_data_mut().position_before_dragging = item_box.get_ui_data().position - item_set.bb_center;});
 		}
 		out
+	}
+	pub fn insert_component(&self, comp_save: &EnumAllLogicDevices) -> GraphicSelectableItemRef {
+		let mut components = self.components.borrow_mut();
+		let new_comp_id = lowest_unused_key(&components);
+		components.insert(new_comp_id, RefCell::new(EnumAllLogicDevices::to_dynamic(comp_save.clone()).unwrap()));
+		GraphicSelectableItemRef::Component(new_comp_id)
 	}
 	/// Checks: All wires, external pins, component pins
 	/// Returns: (Is termination point, Optional net, Optional shared wire connection set)
@@ -1629,8 +1619,8 @@ impl LogicCircuit {
 		self.check_all_connected_wires_on_same_net();
 		// Check if any net spans multiple "islands" of wires, split the net
 		self.split_disjoint_nets();
-		// Remove pins from nets where the pin doesn't reference it
-		// TODO
+		// Remove all connections from nets, the legit ones will be added back later
+		self.remove_net_connections();
 		// Everything so far just deals with wires, now update pin connections to the wires, possibly changing pin nets
 		self.update_pin_to_wire_connections();
 		// Combine consecutive segments in the same direction
@@ -1909,6 +1899,13 @@ impl LogicCircuit {
 			}
 		}
 		island_wires
+	}
+	fn remove_net_connections(&self) {
+		let nets = self.nets.borrow();
+		for (_, net_cell) in nets.iter() {
+			let mut net = net_cell.borrow_mut();
+			net.connections = Vec::new();
+		}
 	}
 	/// Almost last step in recomputing circuit connections after the circuit is edited
 	/// If any pins (component or external) touch any wire, update the pin's net to the wire's net

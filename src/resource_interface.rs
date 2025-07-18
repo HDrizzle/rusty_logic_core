@@ -52,6 +52,14 @@ impl EnumAllLogicDevices {
 			Self::GateNand(gate) => Ok(Box::new(gate))
 		}
 	}
+	/// Example: "AND Gate" or "D Latch", for the component search UI
+	pub fn type_name(&self) -> String {
+		match self {
+			Self::SubCircuit(circuit_rel_path, displayed_as_block) => circuit_rel_path.clone(),
+			Self::GateAnd(gate) => "AND Gate".to_owned(),
+			Self::GateNand(gate) => "NAND Gate".to_owned()
+		}
+	}
 }
 
 pub fn get_circuit_file_path(circuit_rel_path: &str) -> String {
