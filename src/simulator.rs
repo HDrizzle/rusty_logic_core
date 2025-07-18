@@ -1025,7 +1025,7 @@ pub struct LogicCircuit {
 	pub components: RefCell<HashMap<u64, RefCell<Box<dyn LogicDevice>>>>,
 	pub nets: RefCell<HashMap<u64, RefCell<LogicNet>>>,
 	pub wires: RefCell<HashMap<u64, RefCell<Wire>>>,
-	save_path: String,
+	pub save_path: String,
 	/// The clock is only meant to be used in the toplevel circuit, if you want to use the same clock everywhere, just have an input pin dedicated to it for all sub-circuits.
 	/// Alternatively, a sub-circuit can have its own internal clock which would be different from the outside clock
 	pub clock_enabled: bool,
@@ -1083,6 +1083,25 @@ impl LogicCircuit {
 		new.recompute_default_layout();
 		new.check_wire_geometry_and_connections();
 		Ok(new)
+	}
+	pub fn new_mostly_default(
+		name: String,
+		save_path: String
+	) -> Self {
+		Self::new(
+			HashMap::new(),
+			HashMap::new(),
+			HashMap::new(),
+			IntV2(0, 0),
+			name,
+			1,
+			HashMap::new(),
+			save_path,
+			false,
+			false,
+			1.0,
+			true
+		).unwrap()
 	}
 	pub fn from_save(save: LogicCircuitSave, save_path: String, displayed_as_block: bool) -> Result<Self, String> {
 		// Init compnents
@@ -2167,6 +2186,7 @@ impl LogicDevice for LogicCircuit {
 			comp.borrow_mut().compute(&ancestors);
 		}
 	}
+	/// Writes self to file, then returns handle to file for inclusion in other circuits
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		// Convert components to enum variants to be serialized
 		let mut components_save = HashMap::<u64, EnumAllLogicDevices>::new();

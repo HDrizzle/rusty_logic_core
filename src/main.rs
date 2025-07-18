@@ -19,7 +19,7 @@ pub mod prelude {
 	use super::*;
 	// Name of this app
 	pub const APP_NAME: &str = "Rusty Logic";
-	pub const PROPAGATION_LIMIT: usize = 100;
+	pub const PROPAGATION_LIMIT: usize = 1;
 	pub const CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH: usize = 10;
 	pub type V2 = Vector2<f32>;
 	use eframe::egui::{Color32, CornerRadius};

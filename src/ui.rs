@@ -1,5 +1,5 @@
 use crate::{basic_components, prelude::*, resource_interface, simulator::{AncestryStack, Tool, SelectionState}};
-use eframe::{egui::{self, containers::Popup, Align2, Color32, Frame, Painter, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, Ui, Vec2}, epaint::{CubicBezierShape, PathStroke}};
+use eframe::{egui::{self, containers::{Popup, menu::{SubMenu, SubMenuButton}}, scroll_area::ScrollBarVisibility, Align2, Color32, Frame, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, Ui, Vec2}, epaint::{CubicBezierShape, PathStroke}};
 use serde::{Serialize, Deserialize};
 use serde_json;
 use std::{f32::consts::TAU, collections::HashSet, fs};
@@ -262,11 +262,12 @@ pub struct LogicCircuitToplevelView {
 	logic_loop_error: bool,
 	showing_component_popup: bool,
 	component_search_text: String,
-	all_logic_devices_search: Vec<EnumAllLogicDevices>
+	all_logic_devices_search: Vec<EnumAllLogicDevices>,
+	saved: bool
 }
 
 impl LogicCircuitToplevelView {
-	pub fn new(circuit: LogicCircuit) -> Self {
+	pub fn new(circuit: LogicCircuit, saved: bool) -> Self {
 		Self {
 			circuit,
 			screen_center_wrt_grid: V2::zeros(),
@@ -274,7 +275,8 @@ impl LogicCircuitToplevelView {
 			logic_loop_error: false,
 			showing_component_popup: false,
 			component_search_text: String::new(),
-			all_logic_devices_search: Vec::new()
+			all_logic_devices_search: Vec::new(),
+			saved
 		}
 	}
 	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles) {
@@ -296,6 +298,7 @@ impl LogicCircuitToplevelView {
 			let input_state = ui.ctx().input(|i| i.clone());
 			let recompute_connections: bool = self.circuit.toplevel_ui_interact(response, ui.ctx(), &draw_info, input_state);
 			if recompute_connections {
+				self.saved = false;
 				self.circuit.check_wire_geometry_and_connections();
 			}
 			// Update
@@ -311,16 +314,14 @@ impl LogicCircuitToplevelView {
 		// Top: general controls
 		Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::LEFT_TOP, child: Align2::LEFT_TOP}).id("top-left controls".into()).show(|ui| {
 			if ui.button("Save").clicked() {
-				// TODO
+				self.circuit.save().unwrap();
+				self.saved = true;
 			}
 			if ui.button("+ Component / Subcircuit").clicked() {
 				// Update component search list
 				self.all_logic_devices_search = basic_components::list_all_basic_components();
-				for dir_entry_result in fs::read_dir(resource_interface::CIRCUITS_DIR).expect("Cannot find circuits directory") {
-					let dir_entry = dir_entry_result.unwrap();
-					if dir_entry.metadata().unwrap().is_file() {
-						self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(dir_entry.file_name().into_string().unwrap(), false));
-					}
+				for file_path in resource_interface::list_all_circuit_files().unwrap() {
+					self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(file_path, false));
 				}
 				self.showing_component_popup = true;
 			}
@@ -363,29 +364,15 @@ impl LogicCircuitToplevelView {
 	}
 }
 
-enum AppState {
-	Home {
-		
-	},
-	Editor {
-		circuit_tabs: Vec<LogicCircuitToplevelView>,
-        current_tab_index: usize
-	}
-}
-
-impl AppState {
-	// TODO
-}
-
-impl Default for AppState {
-	fn default() -> Self {
-		Self::Home{}
-	}
-}
 
 pub struct App {
-	state: AppState,
-	styles: Styles
+	styles: Styles,
+	circuit_tabs: Vec<LogicCircuitToplevelView>,
+    current_tab_index: usize,
+	show_new_circuit_popup: bool,
+	new_circuit_name: String,
+	new_circuit_path: String,
+	load_circuit_err_opt: Option<String>
 }
 
 impl App {
@@ -399,36 +386,97 @@ impl App {
 			}
 		};
 		Self {
-			state: AppState::default(),
-			styles
+			styles,
+			circuit_tabs: Vec::new(),//vec![LogicCircuitToplevelView::new(create_simple_circuit(true), false)],
+			current_tab_index: 0,
+			show_new_circuit_popup: false,
+			new_circuit_name: String::new(),
+			new_circuit_path: String::new(),
+			load_circuit_err_opt: None
 		}
 	}
 }
 
 impl eframe::App for App {
 	fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-		let mut new_state_opt: Option<AppState> = None;
-		match &mut self.state {
-            AppState::Home{} => {
-                egui::CentralPanel::default().show(ctx, |ui: &mut Ui| {
-					ui.label("Rusty Logic");
-					if ui.button("Test circuit").clicked() {
-						new_state_opt = Some(AppState::Editor{circuit_tabs: vec![LogicCircuitToplevelView::new(create_simple_circuit(true))], current_tab_index: 0});
+		let circuit_names: Vec<String> = self.circuit_tabs.iter().map(|toplevel| toplevel.circuit.generic_device.unique_name.clone()).collect();
+		egui::CentralPanel::default().show(ctx, |ui: &mut Ui| {
+			// This function by default is only run upon user interaction, so copied this from https://users.rust-lang.org/t/issues-while-writing-a-clock-with-egui/102752
+			ui.ctx().request_repaint();
+			ScrollArea::horizontal().scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+				ui.horizontal(|ui| {
+					if ui.button("Home").clicked() {
+						if self.current_tab_index != 0 {
+							self.current_tab_index = 0;
+						}
 					}
+					for (i, circuit_name) in circuit_names.iter().enumerate() {
+						let name_for_ui: &str = match self.circuit_tabs[i].saved {
+							true => circuit_name,
+							false => &format!("{} *", circuit_name)
+						};
+						if ui.button(name_for_ui).clicked() {
+							if i + 1 != self.current_tab_index {
+								self.current_tab_index = i + 1;
+							}
+						}
+					}
+					let new_button_response = ui.button("+");
+					if new_button_response.clicked() {
+						self.new_circuit_name = String::new();
+						self.new_circuit_path = String::new();
+						self.load_circuit_err_opt = None;
+					}
+					Popup::menu(&new_button_response).close_behavior(PopupCloseBehavior::CloseOnClickOutside).align(RectAlign::RIGHT_START).align_alternatives(&[RectAlign::LEFT_START]).show(|ui| {
+						ui.menu_button("New Circuit", |ui| {
+							ui.horizontal(|ui| {
+								ui.label("Name: ");
+								ui.text_edit_singleline(&mut self.new_circuit_name);
+							});
+							ui.horizontal(|ui| {
+								ui.label("Save file path: ");
+								ui.text_edit_singleline(&mut self.new_circuit_path);
+								ui.label(".json");
+							});
+							if ui.button("Create Circuit").clicked() {
+								self.circuit_tabs.push(LogicCircuitToplevelView::new(LogicCircuit::new_mostly_default(self.new_circuit_name.clone(), self.new_circuit_path.clone()), false));
+								self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
+							}
+						});
+						ui.menu_button("Load Circuit", |ui| {
+							let files_list = resource_interface::list_all_circuit_files().unwrap();
+							if files_list.len() == 0 {
+								ui.label(format!("No circuit files found in {}", resource_interface::CIRCUITS_DIR));
+							}
+							ScrollArea::vertical().show(ui, |ui| {
+								for file_path in files_list {
+									if ui.selectable_label(false, &file_path).clicked() {
+										match resource_interface::load_circuit(&file_path, false) {
+											Ok(circuit) => {
+												self.circuit_tabs.push(LogicCircuitToplevelView::new(circuit, true));
+												self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
+											},
+											Err(e) => {
+												self.load_circuit_err_opt = Some(e);
+											}
+										}
+									}
+								}
+							});
+							if let Some(load_error) = &self.load_circuit_err_opt {
+								ui.label(format!("Loading error: {}", load_error));
+							}
+						});
+					});
 				});
-            },
-            AppState::Editor{circuit_tabs, current_tab_index} => {
-				let circuit_toplevel: &mut LogicCircuitToplevelView = &mut circuit_tabs[*current_tab_index];
-                egui::CentralPanel::default().show(ctx, |ui: &mut Ui| {
-					// This function by default is only run upon user interaction, so copied this from https://users.rust-lang.org/t/issues-while-writing-a-clock-with-egui/102752
-					ui.ctx().request_repaint();
-					ui.label(&circuit_toplevel.circuit.generic_device.unique_name);
-					circuit_toplevel.draw(ui, &self.styles);
-				});
-            }
-        }
-		if let Some(new_state) = new_state_opt {
-			self.state = new_state;
-		}
+			});
+			if self.current_tab_index == 0 {// Home tab
+				ui.label("Rusty logic");
+			}
+			else {
+				let circuit_toplevel: &mut LogicCircuitToplevelView = &mut self.circuit_tabs[self.current_tab_index - 1];
+				circuit_toplevel.draw(ui, &self.styles);
+			}
+		});
 	}
 }

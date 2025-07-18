@@ -41,7 +41,8 @@ pub enum EnumAllLogicDevices {
 	/// (Relative path of circuit, Whether to use block diagram)
 	SubCircuit(String, bool),
 	GateAnd(basic_components::GateAnd),
-	GateNand(basic_components::GateNand)
+	GateNand(basic_components::GateNand),
+	GateNot(basic_components::GateNot)
 }
 
 impl EnumAllLogicDevices {
@@ -49,17 +50,32 @@ impl EnumAllLogicDevices {
 		match self_instance {
 			Self::SubCircuit(circuit_rel_path, displayed_as_block) => Ok(Box::new(load_circuit(&circuit_rel_path, displayed_as_block)?)),
 			Self::GateAnd(gate) => Ok(Box::new(gate)),
-			Self::GateNand(gate) => Ok(Box::new(gate))
+			Self::GateNand(gate) => Ok(Box::new(gate)),
+			Self::GateNot(gate) => Ok(Box::new(gate))
 		}
 	}
 	/// Example: "AND Gate" or "D Latch", for the component search UI
 	pub fn type_name(&self) -> String {
 		match self {
 			Self::SubCircuit(circuit_rel_path, displayed_as_block) => circuit_rel_path.clone(),
-			Self::GateAnd(gate) => "AND Gate".to_owned(),
-			Self::GateNand(gate) => "NAND Gate".to_owned()
+			Self::GateAnd(_) => "AND Gate".to_owned(),
+			Self::GateNand(_) => "NAND Gate".to_owned(),
+			Self::GateNot(_) => "NOT Gate".to_owned()
 		}
 	}
+}
+
+pub fn list_all_circuit_files() -> Result<Vec<String>, String> {
+	let mut out = Vec::<String>::new();
+	for dir_entry_result in fs::read_dir(CIRCUITS_DIR).expect("Cannot find circuits directory") {
+		let dir_entry = to_string_err(dir_entry_result)?;
+		if to_string_err(dir_entry.metadata())?.is_file() {
+			let mut with_extention = dir_entry.file_name().into_string().unwrap();
+			with_extention.truncate(with_extention.len() - 5);
+			out.push(with_extention);
+		}
+	}
+	Ok(out)
 }
 
 pub fn get_circuit_file_path(circuit_rel_path: &str) -> String {
