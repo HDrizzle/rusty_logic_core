@@ -1,5 +1,5 @@
-use crate::{basic_components, prelude::*, resource_interface, simulator::{AncestryStack, Tool, SelectionState}};
-use eframe::{egui::{self, containers::{Popup, menu::{SubMenu, SubMenuButton}}, scroll_area::ScrollBarVisibility, Align2, Color32, Frame, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, Ui, Vec2}, epaint::{CubicBezierShape, PathStroke}};
+use crate::{basic_components, prelude::*, resource_interface, simulator::{AncestryStack, Tool, SelectionState, GraphicSelectableItemRef}};
+use eframe::{egui::{self, containers::{menu::{SubMenu, SubMenuButton}, Popup}, scroll_area::ScrollBarVisibility, Align2, Button, Color32, Frame, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, Ui, Vec2}, epaint::{CubicBezierShape, PathStroke}};
 use serde::{Serialize, Deserialize};
 use serde_json;
 use std::{f32::consts::TAU, collections::HashSet, fs};
@@ -90,6 +90,11 @@ pub trait GraphicSelectableItem {
 	fn get_properties(&self) -> Vec<SelectProperty>;
 	fn set_property(&mut self, property: SelectProperty);
 	fn copy(&self) -> CopiedGraphicItem;
+	/// Meant for external connections so that clickes can do something special instead of just selecting them
+	/// Returns: Whether the click was "used", if so then it won't be selected normally but can still be command-clicked and included in a dragged rectangle
+	fn accept_click(&mut self) -> bool {
+		false
+	}
 	fn get_selected(&self) -> bool {
 		self.get_ui_data().selected
 	}
@@ -153,7 +158,10 @@ pub enum SelectProperty {
 	BitWidth(u32),
 	PositionX(i32),
 	PositionY(i32),
-	GlobalConnectionState(Option<bool>),
+	GlobalConnectionState{
+		clock: bool,
+		driven: Option<bool>
+	},
 	Direction(FourWayDir)
 }
 
@@ -163,8 +171,55 @@ impl SelectProperty {
 			Self::BitWidth(_) => "Bit Width".to_owned(),
 			Self::PositionX(_) => "X".to_owned(),
 			Self::PositionY(_) => "Y".to_owned(),
-			Self::GlobalConnectionState(_) => "I/O State".to_owned(),
+			Self::GlobalConnectionState{clock: _, driven: _} => "I/O State".to_owned(),
 			Self::Direction(_) => "Direction".to_owned()
+		}
+	}
+	/// Add this property to a list on the UI
+	/// Returns: Whether to update the property
+	pub fn add_to_ui(&mut self, ui: &mut Ui) -> bool {
+		match self {
+			Self::BitWidth(n) => {
+				ui.label("TODO");
+				false
+			},
+			Self::PositionX(x) => {
+				ui.label("TODO");
+				false
+			},
+			Self::PositionY(y) => {
+				ui.label("TODO");
+				false
+			},
+			Self::GlobalConnectionState{clock, driven} => {
+				let mut return_update = false;
+				Popup::menu(&ui.button("I/O State")).align(RectAlign::RIGHT_START).show(|ui| {
+					if ui.button("Driven (CLK)").clicked() {
+						*clock = true;
+						return_update = true;
+					}
+					if ui.button("Driven (0)").clicked() {
+						*clock = false;
+						*driven = Some(false);
+						return_update = true;
+					}
+					if ui.button("Driven (1)").clicked() {
+						*clock = false;
+						*driven = Some(true);
+						return_update = true;
+					}
+					if ui.button("Floating").clicked() {
+						*clock = false;
+						*driven = None;
+						return_update = true;
+					}
+				});
+				return_update
+			},
+			Self::Direction(dir) => {
+				ui.label("TODO");
+				false
+			}
 		}
 	}
 }
@@ -226,7 +281,7 @@ impl<'a> ComponentDrawInfo<'a> {
 		let n_segs = ((end_deg - start_deg) / seg_size) as usize;
 		for i in 0..n_segs+1 {
 			let angle_rad = ((i as f32 * seg_size) + start_deg) * TAU / 360.0;
-			polyline.push(V2::new(angle_rad.cos() * radius_grid, angle_rad.sin() * radius_grid));
+			polyline.push(V2::new(angle_rad.cos() * radius_grid, angle_rad.sin() * radius_grid) + center_grid);
 		}
 		self.draw_polyline(polyline, stroke);
 	}
@@ -263,7 +318,8 @@ pub struct LogicCircuitToplevelView {
 	showing_component_popup: bool,
 	component_search_text: String,
 	all_logic_devices_search: Vec<EnumAllLogicDevices>,
-	saved: bool
+	saved: bool,
+	new_sub_cycles_entry: String
 }
 
 impl LogicCircuitToplevelView {
@@ -276,7 +332,8 @@ impl LogicCircuitToplevelView {
 			showing_component_popup: false,
 			component_search_text: String::new(),
 			all_logic_devices_search: Vec::new(),
-			saved
+			saved,
+			new_sub_cycles_entry: String::new()
 		}
 	}
 	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles) {
@@ -324,6 +381,92 @@ impl LogicCircuitToplevelView {
 					self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(file_path, false));
 				}
 				self.showing_component_popup = true;
+			}
+			if self.circuit.tool.borrow().tool_select_allowed() {
+				ui.menu_button("+ I/O Pin", |ui| {
+					let mut new_pin_opt = Option::<LogicConnectionPin>::None;
+					if ui.button("Input").clicked() {
+						let mut new_pin = LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(0, 0), FourWayDir::W, 1.0);
+						new_pin.external_state = LogicState::Driven(false);
+						new_pin_opt = Some(new_pin);
+					}
+					if ui.button("Input (CLK)").clicked() {
+						new_pin_opt = Some(LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Clock), IntV2(0, 0), FourWayDir::W, 1.0));
+					}
+					if ui.button("Output").clicked() {
+						new_pin_opt = Some(LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(0, 0), FourWayDir::E, 1.0));
+					}
+					if let Some(new_pin) = new_pin_opt {
+						let handles: Vec<GraphicSelectableItemRef> = self.circuit.paste(&CopiedItemSet::new(vec![CopiedGraphicItem::ExternalConnection(new_pin)], IntV2(0, 0)));
+						*self.circuit.tool.borrow_mut() = Tool::Select{
+							selected_graphics: HashSet::from_iter(vec![handles[0].clone()].into_iter()),
+							selected_graphics_state: SelectionState::FollowingMouse(IntV2(0, 0), V2::zeros())
+						};
+					}
+				});
+			}
+			// Circuit settings (clock speed, etc)
+			ui.collapsing("Circuit Settings", |ui| {
+				ui.horizontal(|ui| {
+					ui.label("Sub compute cycles");
+					ui.text_edit_singleline(&mut self.new_sub_cycles_entry);
+					let button = Button::new("Update");
+					match self.new_sub_cycles_entry.parse::<usize>() {
+						Ok(sub_cycles) => {
+							if ui.add(button).clicked() {
+								self.circuit.generic_device.sub_compute_cycles = sub_cycles;
+							}
+						},
+						Err(_) => {
+							ui.add_enabled(false, button);
+						}
+					}
+				});
+				ui.checkbox(&mut self.circuit.clock_enabled, "Clock Enabled");
+				
+			});
+			// Active selection features
+			if let Tool::Select{selected_graphics, selected_graphics_state: _} = &*self.circuit.tool.borrow() {
+				if !selected_graphics.is_empty() {
+					// Properties list
+					ui.separator();
+					ui.label("Properties");
+					// All different variants of `SelectProperty`
+					// Vec<(Property, whether they are all the same, Set of selected items to update when property is edited)>
+					let mut unique_properties = Vec::<(SelectProperty, bool, HashSet<GraphicSelectableItemRef>)>::new();
+					for graphic_handle in selected_graphics.iter() {
+						let new_properties: Vec<SelectProperty> = self.circuit.run_function_on_graphic_item(graphic_handle.clone(), |item_box| item_box.get_properties());
+						for property in new_properties {
+							// Check if property enum variant is already included in `unique_properties`
+							let mut variant_included = false;// Optional index of `unique_properties`
+							for (prop_test, are_all_same, graphic_item_set) in unique_properties.iter_mut() {
+								if prop_test.ui_name() == property.ui_name() {
+									variant_included = true;
+									if *prop_test != property {
+										*are_all_same = false;
+									}
+									graphic_item_set.insert(graphic_handle.clone());
+								}
+							}
+							if !variant_included {
+								unique_properties.push((
+									property,
+									true,
+									HashSet::from_iter(vec![graphic_handle.clone()].into_iter())
+								));
+							}
+						}
+					}
+					// Display them
+					for (prop, are_all_same, graphic_item_set) in unique_properties.iter_mut() {
+						if prop.add_to_ui(ui) {
+							self.saved = false;
+							for graphic_handle in graphic_item_set.iter() {
+								self.circuit.run_function_on_graphic_item_mut(graphic_handle.clone(), |item_box| {item_box.set_property(prop.clone());});
+							}
+						}
+					}
+				}
 			}
 		});
 		if self.showing_component_popup {
@@ -451,7 +594,7 @@ impl eframe::App for App {
 							ScrollArea::vertical().show(ui, |ui| {
 								for file_path in files_list {
 									if ui.selectable_label(false, &file_path).clicked() {
-										match resource_interface::load_circuit(&file_path, false) {
+										match resource_interface::load_circuit(&file_path, false, true) {
 											Ok(circuit) => {
 												self.circuit_tabs.push(LogicCircuitToplevelView::new(circuit, true));
 												self.current_tab_index = self.circuit_tabs.len();// Not an OBOE

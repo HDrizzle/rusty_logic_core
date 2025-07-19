@@ -368,7 +368,7 @@ pub struct LogicConnectionPin {
 	pub internal_source: Option<LogicConnectionPinInternalSource>,
 	internal_state: LogicState,
 	pub external_source: Option<LogicConnectionPinExternalSource>,
-	external_state: LogicState,
+	pub external_state: LogicState,
 	pub direction: FourWayDir,
 	/// Usually 1, may be something else if theres a curve on an OR input or something
 	pub length: f32,
@@ -481,7 +481,7 @@ impl GraphicSelectableItem for LogicConnectionPin {
 			SelectProperty::BitWidth(self.bit_width),
 			SelectProperty::PositionX(self.ui_data.position.0),
 			SelectProperty::PositionY(self.ui_data.position.1),
-			SelectProperty::GlobalConnectionState(self.state().to_bool_opt()),
+			SelectProperty::GlobalConnectionState{clock: self.is_ext_source_clock(), driven: self.state().to_bool_opt()},
 			SelectProperty::Direction(self.direction)
 		]
 	}
@@ -496,8 +496,14 @@ impl GraphicSelectableItem for LogicConnectionPin {
 			SelectProperty::PositionY(y) => {
 				self.ui_data.position.1 = y;
 			},
-			SelectProperty::GlobalConnectionState(bool_opt) => {
-				self.external_state = bool_opt.into();
+			SelectProperty::GlobalConnectionState{clock, driven} => {
+				if clock {
+					self.external_source = Some(LogicConnectionPinExternalSource::Clock);
+				}
+				else {
+					self.external_source = Some(LogicConnectionPinExternalSource::Global);
+					self.external_state = driven.into();
+				}
 			},
 			SelectProperty::Direction(direction) => {
 				self.direction = direction;
@@ -506,6 +512,21 @@ impl GraphicSelectableItem for LogicConnectionPin {
 	}
 	fn copy(&self) -> CopiedGraphicItem {
 		CopiedGraphicItem::ExternalConnection(self.clone())
+	}
+	fn accept_click(&mut self) -> bool {
+		match self.external_source.clone().expect("Pin being used as a graphic item must have an external source") {
+			LogicConnectionPinExternalSource::Global => {
+				if self.external_state.is_valid() {
+					self.external_state = (!self.external_state.to_bool()).into();
+					true
+				}
+				else {
+					false
+				}
+			},
+			LogicConnectionPinExternalSource::Clock => false,
+			LogicConnectionPinExternalSource::Net(_) => panic!("Pin being used as a graphic item cannot hav eexternal net source")
+		}
 	}
 }
 
@@ -886,7 +907,7 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 			SelectProperty::Direction(dir) => {
 				self.get_generic_mut().rotation = dir;
 			},
-			SelectProperty::GlobalConnectionState(_) => {}
+			SelectProperty::GlobalConnectionState{clock: _, driven: _} => {}
 		}
 	}
 	fn copy(&self) -> CopiedGraphicItem {
@@ -945,6 +966,9 @@ impl<'a> AncestryStack<'a> {
 
 impl<'a> PartialEq for AncestryStack<'a> {
 	fn eq(&self, other: &Self) -> bool {
+		if self.0.len() != other.0.len() {
+			return false;
+		}
 		for i in 0..self.0.len() {
 			if self.0[i].get_generic().unique_name != other.0[i].get_generic().unique_name {
 				return false;
@@ -1037,7 +1061,8 @@ pub struct LogicCircuit {
 	block_pin_positions: HashMap<String, (IntV2, FourWayDir)>,
 	displayed_as_block: bool,
 	/// For UI
-	pub tool: RefCell<Tool>
+	pub tool: RefCell<Tool>,
+	is_toplevel: bool
 }
 
 impl LogicCircuit {
@@ -1053,7 +1078,8 @@ impl LogicCircuit {
 		clock_enabled: bool,
 		clock_state: bool,
 		clock_freq: f32,
-		displayed_as_block: bool
+		displayed_as_block: bool,
+		is_toplevel: bool
 	) -> Result<Self, String> {
 		let mut components = HashMap::<u64, RefCell<Box<dyn LogicDevice>>>::new();
 		for (ref_, comp) in components_not_celled.into_iter() {
@@ -1078,7 +1104,8 @@ impl LogicCircuit {
 			clock_last_change: Instant::now(),
 			block_pin_positions: HashMap::new(),
 			displayed_as_block,
-			tool: RefCell::new(Tool::default())
+			tool: RefCell::new(Tool::default()),
+			is_toplevel
 		};
 		new.recompute_default_layout();
 		new.check_wire_geometry_and_connections();
@@ -1100,14 +1127,26 @@ impl LogicCircuit {
 			false,
 			false,
 			1.0,
+			false,
 			true
 		).unwrap()
 	}
-	pub fn from_save(save: LogicCircuitSave, save_path: String, displayed_as_block: bool) -> Result<Self, String> {
+	pub fn from_save(save: LogicCircuitSave, save_path: String, displayed_as_block: bool, toplevel: bool) -> Result<Self, String> {
 		// Init compnents
 		let mut components = HashMap::<u64, RefCell<Box<dyn LogicDevice>>>::new();
 		for (ref_, save_comp) in save.components.into_iter() {
 			components.insert(ref_, RefCell::new(EnumAllLogicDevices::to_dynamic(save_comp)?));
+		}
+		// Get rid of Global pin sources if not toplevel
+		if !toplevel {
+			for (_, pin_cell) in &mut save.generic_device.pins.borrow().iter() {
+				let mut pin = pin_cell.borrow_mut();
+				if let Some(source) = &pin.external_source {
+					if let LogicConnectionPinExternalSource::Global = source {
+						pin.external_source = None;
+					}
+				}
+			}
 		}
 		Ok(Self {
 			generic_device: save.generic_device,
@@ -1121,7 +1160,8 @@ impl LogicCircuit {
 			clock_last_change: Instant::now(),
 			block_pin_positions: save.block_pin_positions,
 			displayed_as_block,
-			tool: RefCell::new(Tool::default())
+			tool: RefCell::new(Tool::default()),
+			is_toplevel: toplevel
 		})
 	}
 	fn recompute_default_layout(&mut self) {
@@ -1382,12 +1422,12 @@ impl LogicCircuit {
 					}
 				}
 				// Delete
-				if input_state.consume_key(Modifiers::NONE, Key::Delete) {
-					println!("Delete");// TODO: Make this work
+				if input_state.consume_key(Modifiers::NONE, Key::Backspace) {
 					for item_ref in selected_graphics.iter() {
 						self.remove_graphic_item(item_ref);
 					}
 					return_recompute_connections = true;
+					*selected_graphics = HashSet::new();
 				}
 			},
 			Tool::HighlightNet(net_id) => {
@@ -1466,7 +1506,7 @@ impl LogicCircuit {
 		}
 		return_recompute_connections
 	}
-	fn paste(&self, item_set: &CopiedItemSet) -> Vec<GraphicSelectableItemRef> {
+	pub fn paste(&self, item_set: &CopiedItemSet) -> Vec<GraphicSelectableItemRef> {
 		let mut out = Vec::<GraphicSelectableItemRef>::new();
 		for pasted_item in &item_set.items {
 			out.push(match pasted_item {
@@ -2046,9 +2086,11 @@ impl LogicCircuit {
 	fn was_anything_clicked<'a>(&self, grid_pos: V2) -> Option<GraphicSelectableItemRef> {
 		let mut selected_opt = Option::<GraphicSelectableItemRef>::None;
 		for ref_ in self.get_all_graphics_references() {
-			self.run_function_on_graphic_item(ref_.clone(), |graphic_item| {
+			self.run_function_on_graphic_item_mut(ref_.clone(), |graphic_item| {
 				if graphic_item.is_click_hit(grid_pos, V2::zeros()) {
-					selected_opt = Some(ref_.clone());
+					if !graphic_item.accept_click() {
+						selected_opt = Some(ref_.clone());
+					}
 				}
 			});
 		}
@@ -2062,7 +2104,7 @@ impl LogicCircuit {
 			GraphicSelectableItemRef::Pin(pin_id) => {self.generic_device.pins.borrow_mut().remove(pin_id).expect(&error_msg);},
 		}
 	}
-	fn run_function_on_graphic_item<T>(&self, ref_: GraphicSelectableItemRef, mut func: impl FnMut(Box<&dyn GraphicSelectableItem>) -> T) -> T {
+	pub fn run_function_on_graphic_item<T>(&self, ref_: GraphicSelectableItemRef, mut func: impl FnMut(Box<&dyn GraphicSelectableItem>) -> T) -> T {
 		let error_msg = format!("Graphic item reference {:?} cannot be found", &ref_);
 		match ref_ {
 			GraphicSelectableItemRef::Component(comp_id) => func(Box::new(logic_device_to_graphic_item(self.components.borrow().get(&comp_id).expect(&error_msg).borrow().deref().as_ref()))),
@@ -2070,7 +2112,7 @@ impl LogicCircuit {
 			GraphicSelectableItemRef::Pin(pin_id) => func(Box::new(self.generic_device.pins.borrow().get(&pin_id).expect(&error_msg).borrow().deref())),
 		}
 	}
-	fn run_function_on_graphic_item_mut<T>(&self, ref_: GraphicSelectableItemRef, mut func: impl FnMut(Box<&mut dyn GraphicSelectableItem>) -> T) -> T {
+	pub fn run_function_on_graphic_item_mut<T>(&self, ref_: GraphicSelectableItemRef, mut func: impl FnMut(Box<&mut dyn GraphicSelectableItem>) -> T) -> T {
 		let error_msg = format!("Graphic item reference {:?} cannot be found", &ref_);
 		match ref_ {
 			GraphicSelectableItemRef::Component(comp_id) => func(Box::new(logic_device_to_graphic_item_mut(self.components.borrow().get(&comp_id).expect(&error_msg).borrow_mut().deref_mut().as_mut()))),
@@ -2120,7 +2162,7 @@ impl LogicDevice for LogicCircuit {
 	}
 	fn compute_step(&mut self, ancestors_above: &AncestryStack) {
 		// Update clock
-		if self.clock_last_change.elapsed() > Duration::from_secs_f32(0.5 / self.clock_freq) {// The frequency is based on a whole period, it must change twice per period, so 0.5/f not 1/f
+		if self.clock_enabled && self.clock_last_change.elapsed() > Duration::from_secs_f32(0.5 / self.clock_freq) {// The frequency is based on a whole period, it must change twice per period, so 0.5/f not 1/f
 			self.clock_state = !self.clock_state;
 			self.clock_last_change = Instant::now();
 		}
@@ -2128,7 +2170,7 @@ impl LogicDevice for LogicCircuit {
 		// Update net states
 		let mut new_net_states = HashMap::<u64, (LogicState, Vec<GlobalSourceReference>)>::new();
 		for (net_id, net) in self.nets.borrow().iter() {
-			new_net_states.insert(*net_id, net.borrow_mut().update_state(&ancestors, *net_id));
+			new_net_states.insert(*net_id, net.borrow().update_state(&ancestors, *net_id));
 		}
 		drop(ancestors);
 		for (net_id, (state, sources)) in new_net_states.into_iter() {
@@ -2235,6 +2277,11 @@ impl LogicDevice for LogicCircuit {
 		else {
 			// Draws the circuit with wires and everything how you would expect
 			for ref_ in self.get_all_graphics_references() {
+				if let GraphicSelectableItemRef::Pin(_) = ref_ {
+					if !self.is_toplevel {
+						continue;
+					}
+				}
 				self.run_function_on_graphic_item(ref_, |graphic_item| graphic_item.draw(draw));
 			}
 		}
@@ -2246,6 +2293,6 @@ impl LogicDevice for LogicCircuit {
 		self
 	}
 	fn is_toplevel_circuit(&self) -> bool {
-		true
+		self.is_toplevel
 	}
 }

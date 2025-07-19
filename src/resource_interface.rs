@@ -14,10 +14,10 @@ pub static STYLES_FILE: &str = "resources/styles.json";
 
 /// Loads circuit, path is relative to `CIRCUITS_DIR` and does not include .json extension
 /// Example: File is located at `resources/circuits/sequential/d_latch.json` -> circuit path is `sequential/d_latch`
-pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool) -> Result<LogicCircuit, String> {
+pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: bool) -> Result<LogicCircuit, String> {
 	let path = get_circuit_file_path(circuit_rel_path);
 	let string_raw = load_file_with_better_error(&path)?;
-	LogicCircuit::from_save(to_string_err(serde_json::from_str(&string_raw))?, circuit_rel_path.to_string(), displayed_as_block)
+	LogicCircuit::from_save(to_string_err(serde_json::from_str(&string_raw))?, circuit_rel_path.to_string(), displayed_as_block, toplevel)
 }
 
 /// Like LogicCircuit but serializable
@@ -42,16 +42,24 @@ pub enum EnumAllLogicDevices {
 	SubCircuit(String, bool),
 	GateAnd(basic_components::GateAnd),
 	GateNand(basic_components::GateNand),
-	GateNot(basic_components::GateNot)
+	GateNot(basic_components::GateNot),
+	GateOr(basic_components::GateOr),
+	GateNor(basic_components::GateNor),
+	GateXor(basic_components::GateXor),
+	GateXnor(basic_components::GateXnor)
 }
 
 impl EnumAllLogicDevices {
 	pub fn to_dynamic(self_instance: Self) -> Result<Box<dyn LogicDevice>, String> {
 		match self_instance {
-			Self::SubCircuit(circuit_rel_path, displayed_as_block) => Ok(Box::new(load_circuit(&circuit_rel_path, displayed_as_block)?)),
+			Self::SubCircuit(circuit_rel_path, displayed_as_block) => Ok(Box::new(load_circuit(&circuit_rel_path, displayed_as_block, false)?)),
 			Self::GateAnd(gate) => Ok(Box::new(gate)),
 			Self::GateNand(gate) => Ok(Box::new(gate)),
-			Self::GateNot(gate) => Ok(Box::new(gate))
+			Self::GateNot(gate) => Ok(Box::new(gate)),
+			Self::GateOr(gate) => Ok(Box::new(gate)),
+			Self::GateNor(gate) => Ok(Box::new(gate)),
+			Self::GateXor(gate) => Ok(Box::new(gate)),
+			Self::GateXnor(gate) => Ok(Box::new(gate))
 		}
 	}
 	/// Example: "AND Gate" or "D Latch", for the component search UI
@@ -60,7 +68,11 @@ impl EnumAllLogicDevices {
 			Self::SubCircuit(circuit_rel_path, displayed_as_block) => circuit_rel_path.clone(),
 			Self::GateAnd(_) => "AND Gate".to_owned(),
 			Self::GateNand(_) => "NAND Gate".to_owned(),
-			Self::GateNot(_) => "NOT Gate".to_owned()
+			Self::GateNot(_) => "NOT Gate".to_owned(),
+			Self::GateOr(_) => "OR Gate".to_owned(),
+			Self::GateNor(_) => "NOR Gate".to_owned(),
+			Self::GateXor(_) => "XOR Gate".to_owned(),
+			Self::GateXnor(_) => "XNOR Gate".to_owned()
 		}
 	}
 }
