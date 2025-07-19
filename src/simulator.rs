@@ -800,6 +800,7 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	#[allow(unused)]
 	fn set_bit_width(&mut self, bit_width: u32) {}
 	fn is_toplevel_circuit(&self) -> bool {false}
+	fn is_circuit(&self) -> bool {false}
 	fn compute(&mut self, ancestors: &AncestryStack) {
 		for _ in 0..self.get_generic().sub_compute_cycles {
 			self.compute_step(ancestors);
@@ -1044,6 +1045,36 @@ impl Default for Tool {
 }
 
 #[derive(Debug)]
+pub struct Clock {
+	pub enabled: bool,
+	pub state: bool,
+	pub freq: f32,
+	pub last_change: Instant
+}
+
+impl Clock {
+	pub fn new(
+		enabled: bool,
+		state: bool,
+		freq: f32
+	) -> Self {
+		Self {
+			enabled,
+			state,
+			freq,
+			last_change: Instant::now()
+		}
+	}
+	pub fn update(&mut self) -> bool {
+		if self.enabled && self.last_change.elapsed() > Duration::from_secs_f32(0.5 / self.freq) {// The frequency is based on a whole period, it must change twice per period, so 0.5/f not 1/f
+			self.state = !self.state;
+			self.last_change = Instant::now();
+		}
+		self.state
+	}
+}
+
+#[derive(Debug)]
 pub struct LogicCircuit {
 	pub generic_device: LogicDeviceGeneric,
 	pub components: RefCell<HashMap<u64, RefCell<Box<dyn LogicDevice>>>>,
@@ -1052,10 +1083,7 @@ pub struct LogicCircuit {
 	pub save_path: String,
 	/// The clock is only meant to be used in the toplevel circuit, if you want to use the same clock everywhere, just have an input pin dedicated to it for all sub-circuits.
 	/// Alternatively, a sub-circuit can have its own internal clock which would be different from the outside clock
-	pub clock_enabled: bool,
-	pub clock_state: bool,
-	pub clock_freq: f32,
-	clock_last_change: Instant,
+	pub clock: RefCell<Clock>,
 	/// Inspired by CircuitVerse, block-diagram version of circuit
 	/// {pin ID: (relative position (ending), direction)}
 	block_pin_positions: HashMap<String, (IntV2, FourWayDir)>,
@@ -1098,10 +1126,7 @@ impl LogicCircuit {
 			nets: RefCell::new(hashmap_into_refcells(nets)),
 			wires: RefCell::new(hashmap_into_refcells(wires)),
 			save_path,
-			clock_enabled,
-			clock_state,
-			clock_freq,
-			clock_last_change: Instant::now(),
+			clock: RefCell::new(Clock::new(clock_enabled, clock_state, clock_freq)),
 			block_pin_positions: HashMap::new(),
 			displayed_as_block,
 			tool: RefCell::new(Tool::default()),
@@ -1154,10 +1179,7 @@ impl LogicCircuit {
 			nets: RefCell::new(hashmap_into_refcells(save.nets)),
 			wires: RefCell::new(hashmap_into_refcells(save.wires)),
 			save_path,
-			clock_enabled: save.clock_enabled,
-			clock_state: save.clock_state,
-			clock_freq: save.clock_freq,
-			clock_last_change: Instant::now(),
+			clock: RefCell::new(Clock::new(save.clock_enabled, save.clock_state, save.clock_freq)),
 			block_pin_positions: save.block_pin_positions,
 			displayed_as_block,
 			tool: RefCell::new(Tool::default()),
@@ -2151,21 +2173,9 @@ impl LogicCircuit {
 		// TODO: Text boxes once I implement them
 		out
 	}
-}
-
-impl LogicDevice for LogicCircuit {
-	fn get_generic(&self) -> &LogicDeviceGeneric {
-		&self.generic_device
-	}
-	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
-		&mut self.generic_device
-	}
-	fn compute_step(&mut self, ancestors_above: &AncestryStack) {
+	fn compute_immutable(&self, ancestors_above: &AncestryStack) {
 		// Update clock
-		if self.clock_enabled && self.clock_last_change.elapsed() > Duration::from_secs_f32(0.5 / self.clock_freq) {// The frequency is based on a whole period, it must change twice per period, so 0.5/f not 1/f
-			self.clock_state = !self.clock_state;
-			self.clock_last_change = Instant::now();
-		}
+		let clock_state: bool = self.clock.borrow_mut().update();
 		let ancestors = ancestors_above.push(&self);
 		// Update net states
 		let mut new_net_states = HashMap::<u64, (LogicState, Vec<GlobalSourceReference>)>::new();
@@ -2200,7 +2210,7 @@ impl LogicDevice for LogicCircuit {
 			let ext_source_opt = pin_cell.borrow().external_source.clone();
 			if let Some(ext_source) = ext_source_opt {
 				if let LogicConnectionPinExternalSource::Clock = ext_source {
-					pin_cell.borrow_mut().set_drive_external(self.clock_state.into());
+					pin_cell.borrow_mut().set_drive_external(clock_state.into());
 				}
 			}
 		}
@@ -2225,8 +2235,28 @@ impl LogicDevice for LogicCircuit {
 		// THIS GOES LAST, has to be seperate loop then before
 		let ancestors = ancestors_above.push(&self);
 		for (_, comp) in self.components.borrow().iter() {
-			comp.borrow_mut().compute(&ancestors);
+			let is_circuit = comp.borrow().is_circuit();
+			if is_circuit {
+				for _ in 0..comp.borrow().get_generic().sub_compute_cycles {
+					comp.borrow().get_circuit().compute_immutable(&ancestors);
+				}
+			}
+			else {
+				comp.borrow_mut().compute(&ancestors);
+			}
 		}
+	}
+}
+
+impl LogicDevice for LogicCircuit {
+	fn get_generic(&self) -> &LogicDeviceGeneric {
+		&self.generic_device
+	}
+	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
+		&mut self.generic_device
+	}
+	fn compute_step(&mut self, ancestors_above: &AncestryStack) {
+		self.compute_immutable(ancestors_above);
 	}
 	/// Writes self to file, then returns handle to file for inclusion in other circuits
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -2241,14 +2271,15 @@ impl LogicDevice for LogicCircuit {
 			wires_save.insert(*ref_, wire.borrow().clone());
 		}
 		// First, actually save this circuit
+		let clock = self.clock.borrow();
 		let save = LogicCircuitSave {
 			generic_device: self.generic_device.clone(),
 			components: components_save,
 			nets: hashmap_unwrap_refcells(self.nets.borrow().clone()),
 			wires: wires_save,
-			clock_enabled: self.clock_enabled,
-			clock_state: self.clock_state,
-			clock_freq: self.clock_freq,
+			clock_enabled: clock.enabled,
+			clock_state: clock.state,
+			clock_freq: clock.freq,
 			block_pin_positions: self.block_pin_positions.clone()
 		};
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
@@ -2294,5 +2325,8 @@ impl LogicDevice for LogicCircuit {
 	}
 	fn is_toplevel_circuit(&self) -> bool {
 		self.is_toplevel
+	}
+	fn is_circuit(&self) -> bool {
+		true
 	}
 }

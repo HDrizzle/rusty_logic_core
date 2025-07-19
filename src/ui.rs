@@ -422,8 +422,7 @@ impl LogicCircuitToplevelView {
 						}
 					}
 				});
-				ui.checkbox(&mut self.circuit.clock_enabled, "Clock Enabled");
-				
+				ui.checkbox(&mut self.circuit.clock.borrow_mut().enabled, "Clock Enabled");
 			});
 			// Active selection features
 			if let Tool::Select{selected_graphics, selected_graphics_state: _} = &*self.circuit.tool.borrow() {
