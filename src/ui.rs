@@ -1,8 +1,9 @@
 use crate::{basic_components, prelude::*, resource_interface, simulator::{AncestryStack, Tool, SelectionState, GraphicSelectableItemRef}};
-use eframe::{egui::{self, containers::{menu::{SubMenu, SubMenuButton}, Popup}, scroll_area::ScrollBarVisibility, Align2, Button, Color32, Frame, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, Ui, Vec2}, epaint::{CubicBezierShape, PathStroke}};
+use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, Align2, Button, DragValue, Frame, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, Ui}, epaint::PathStroke};
+use nalgebra::Transform2;
 use serde::{Serialize, Deserialize};
 use serde_json;
-use std::{f32::consts::TAU, collections::HashSet, fs};
+use std::{collections::HashSet, f32::consts::TAU, ops::RangeInclusive};
 
 /// Style for the UI, loaded from /resources/styles.json
 #[derive(Clone, Deserialize)]
@@ -66,17 +67,22 @@ impl Default for Styles {
 pub struct UIData {
 	pub selected: bool,
 	pub position: IntV2,
+	pub direction: FourWayDir,
 	pub position_before_dragging: IntV2,
 	pub dragging_offset: V2,
 	pub local_bb: (V2, V2)
 }
 
 impl UIData {
-	pub fn from_pos(position: IntV2) -> Self {
+	pub fn from_pos_dir(position: IntV2, direction: FourWayDir) -> Self {
 		Self {
 			position,
+			direction,
 			..Default::default()
 		}
+	}
+	pub fn pos_to_parent_coords(&self, position: IntV2) -> IntV2 {
+		self.direction.ro// TODO
 	}
 }
 
@@ -102,7 +108,7 @@ pub trait GraphicSelectableItem {
 		self.get_ui_data_mut().selected = selected;
 	}
 	/// Relative to Grid and self, return must be wrt global grid, hence why grid offset must be provided
-	/// grid_offset will only correct for positions of nested sub-circuits, not the position of the object that "it knows about"
+	/// grid_offset will only correct for positions of nested sub-circuits, not the position of the object that it itself "knows about"
 	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
 		let local_bb = self.get_ui_data().local_bb;
 		(grid_offset + local_bb.0, grid_offset + local_bb.1)
@@ -158,11 +164,12 @@ pub enum SelectProperty {
 	BitWidth(u32),
 	PositionX(i32),
 	PositionY(i32),
-	GlobalConnectionState{
-		clock: bool,
-		driven: Option<bool>
-	},
-	Direction(FourWayDir)
+	GlobalConnectionState(Option<bool>),
+	Direction(FourWayDir),
+	DisplayCircuitAsBlock(bool),
+	ClockEnabled(bool),
+	ClockFreq(f32),
+	ClockState(bool)
 }
 
 impl SelectProperty {
@@ -171,8 +178,12 @@ impl SelectProperty {
 			Self::BitWidth(_) => "Bit Width".to_owned(),
 			Self::PositionX(_) => "X".to_owned(),
 			Self::PositionY(_) => "Y".to_owned(),
-			Self::GlobalConnectionState{clock: _, driven: _} => "I/O State".to_owned(),
-			Self::Direction(_) => "Direction".to_owned()
+			Self::GlobalConnectionState(_) => "I/O State".to_owned(),
+			Self::Direction(_) => "Direction".to_owned(),
+			Self::DisplayCircuitAsBlock(_) => "Display circuit as block".to_owned(),
+			Self::ClockEnabled(_) => "Clock Enable".to_owned(),
+			Self::ClockFreq(_) => "Clock Frequency".to_owned(),
+			Self::ClockState(_) => "Clock State".to_owned()
 		}
 	}
 	/// Add this property to a list on the UI
@@ -180,36 +191,51 @@ impl SelectProperty {
 	pub fn add_to_ui(&mut self, ui: &mut Ui) -> bool {
 		match self {
 			Self::BitWidth(n) => {
-				ui.label("TODO");
-				false
+				ui.add(DragValue::new(n).range(RangeInclusive::new(1, 256)).clamp_existing_to_range(true)).changed()
 			},
 			Self::PositionX(x) => {
-				ui.label("TODO");
+				if ui.button("<").clicked() {
+					*x -= 1;
+					return true;
+				}
+				if ui.add(DragValue::new(x)).changed() {
+					return true;
+				}
+				if ui.button(">").clicked() {
+					*x += 1;
+					return true;
+				}
 				false
 			},
 			Self::PositionY(y) => {
-				ui.label("TODO");
+				if ui.button("<").clicked() {
+					*y -= 1;
+					return true;
+				}
+				if ui.add(DragValue::new(y)).changed() {
+					return true;
+				}
+				if ui.button(">").clicked() {
+					*y += 1;
+					return true;
+				}
 				false
 			},
-			Self::GlobalConnectionState{clock, driven} => {
+			Self::GlobalConnectionState(driven) => {
 				let mut return_update = false;
 				Popup::menu(&ui.button("I/O State")).align(RectAlign::RIGHT_START).show(|ui| {
 					if ui.button("Driven (CLK)").clicked() {
-						*clock = true;
 						return_update = true;
 					}
 					if ui.button("Driven (0)").clicked() {
-						*clock = false;
 						*driven = Some(false);
 						return_update = true;
 					}
 					if ui.button("Driven (1)").clicked() {
-						*clock = false;
 						*driven = Some(true);
 						return_update = true;
 					}
 					if ui.button("Floating").clicked() {
-						*clock = false;
 						*driven = None;
 						return_update = true;
 					}
@@ -217,8 +243,39 @@ impl SelectProperty {
 				return_update
 			},
 			Self::Direction(dir) => {
-				ui.label("TODO");
-				false
+				if ui.button("↶").clicked() {
+					*dir = dir.turn_ccw();
+					return true;
+				}
+				if ui.button("↷").clicked() {
+					*dir = dir.turn_cw();
+					return true;
+				}
+				return false;
+			},
+			Self::DisplayCircuitAsBlock(block) => {
+				ui.checkbox(block, "Display circuit as block").changed()
+			},
+			Self::ClockEnabled(enable) => {
+				ui.checkbox(enable, match enable {
+					true => "Enabled",
+					false => "Disabled"
+				}).changed()
+			},
+			Self::ClockFreq(freq) => {
+				ui.add(DragValue::new(freq).range(RangeInclusive::new(0.01, 1000000.0)).clamp_existing_to_range(false)).changed()
+			},
+			Self::ClockState(state) => {
+				if ui.button(match state {
+					true => "1",
+					false => "0"
+				}).clicked() {
+					*state = !(*state);
+					true
+				}
+				else {
+					false
+				}
 			}
 		}
 	}
@@ -232,6 +289,7 @@ pub struct ComponentDrawInfo<'a> {
 	pub painter: &'a Painter,
 	/// Includes component's own position, 
 	pub offset_grid: IntV2,
+	pub direction: FourWayDir,
 	pub styles: &'a Styles,
 	pub rect_center: V2,
 	rect_size_px: V2
@@ -243,6 +301,7 @@ impl<'a> ComponentDrawInfo<'a> {
 		grid_size: f32,
 		painter: &'a Painter,
 		offset_grid: IntV2,
+		direction: FourWayDir,
 		styles: &'a Styles,
 		rect_center: V2,
 		rect_size_px: V2
@@ -252,6 +311,7 @@ impl<'a> ComponentDrawInfo<'a> {
 			grid_size,
 			painter,
 			offset_grid,
+			direction,
 			styles,
 			rect_center,
 			rect_size_px
@@ -287,19 +347,30 @@ impl<'a> ComponentDrawInfo<'a> {
 	}
 	pub fn grid_to_px(&self, grid: V2) -> egui::Pos2 {
 		// TODO
-		let nalgebra_v2 = ((grid + self.offset_grid.to_v2()) * self.grid_size) + self.rect_center;
-		egui::Pos2{x: nalgebra_v2.x, y: nalgebra_v2.y}
+		let nalgebra_v2 = ((self.direction.rotate_v2(grid) + self.offset_grid.to_v2()) * self.grid_size) + self.rect_center;
+		if cfg!(feature = "reverse_y") {
+			egui::Pos2{x: nalgebra_v2.x, y: self.rect_size_px.y - nalgebra_v2.y}
+		} else {
+			egui::Pos2{x: nalgebra_v2.x, y: nalgebra_v2.y}
+		}
 	}
-	pub fn mouse_pos2_to_grid(&self, mouse_pos: Pos2) -> V2 {
+	pub fn mouse_pos2_to_grid(&self, mouse_pos_y_backwards: Pos2) -> V2 {
+		#[cfg(feature = "reverse_y")]
+		let mouse_pos = V2::new(mouse_pos_y_backwards.x, self.rect_size_px.y - mouse_pos_y_backwards.y);
+		#[cfg(not(feature = "reverse_y"))]
+		let mouse_pos = emath_pos2_to_v2(mouse_pos_y_backwards);
 		// TODO
-		((emath_pos2_to_v2(mouse_pos) - self.rect_center) / self.grid_size) - self.offset_grid.to_v2()
+		self.direction.rotate_v2_reverse(((mouse_pos - self.rect_center) / self.grid_size) - self.offset_grid.to_v2())
 	}
-	pub fn add_grid_pos(&'a self, new_grid_pos: IntV2) -> Self {
+	/// `offset_unrotated` is wrt parent coordinates, dir_ is the direction of the local coordinates of whatever this new drawer is being created for
+	pub fn add_grid_pos_and_direction(&'a self, offset_unrotated: IntV2, dir_: FourWayDir) -> Self {
+		let offset = self.direction.rotate_intv2(offset_unrotated);
 		Self {
 			screen_center_wrt_grid: self.screen_center_wrt_grid,
 			grid_size: self.grid_size,
 			painter: self.painter,
-			offset_grid: self.offset_grid + new_grid_pos,
+			offset_grid: self.offset_grid + offset,
+			direction: self.direction.rotate_intv2(dir_.to_unit_int()).is_along_axis().unwrap(),
 			styles: self.styles,
 			rect_center: self.rect_center,
 			rect_size_px: self.rect_size_px
@@ -319,7 +390,8 @@ pub struct LogicCircuitToplevelView {
 	component_search_text: String,
 	all_logic_devices_search: Vec<EnumAllLogicDevices>,
 	saved: bool,
-	new_sub_cycles_entry: String
+	new_sub_cycles_entry: String,
+	recompute_conns_nect_frame: bool
 }
 
 impl LogicCircuitToplevelView {
@@ -333,7 +405,8 @@ impl LogicCircuitToplevelView {
 			component_search_text: String::new(),
 			all_logic_devices_search: Vec::new(),
 			saved,
-			new_sub_cycles_entry: String::new()
+			new_sub_cycles_entry: String::new(),
+			recompute_conns_nect_frame: false
 		}
 	}
 	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles) {
@@ -347,6 +420,7 @@ impl LogicCircuitToplevelView {
 				self.grid_size,
 				&painter,
 				IntV2(0, 0),
+				FourWayDir::default(),
 				styles,
 				emath_pos2_to_v2(response.rect.center()),
 				emath_vec2_to_v2(canvas_size)
@@ -359,8 +433,9 @@ impl LogicCircuitToplevelView {
 				self.circuit.check_wire_geometry_and_connections();
 			}
 			// Update
-			if recompute_connections || propagate {
+			if recompute_connections || propagate || self.recompute_conns_nect_frame {
 				self.logic_loop_error = self.propagate_until_stable(PROPAGATION_LIMIT);
+				self.recompute_conns_nect_frame = false;
 			}
 			// graphics help from https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/painting.rs
 			// Draw circuit
@@ -371,14 +446,14 @@ impl LogicCircuitToplevelView {
 		// Top: general controls
 		Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::LEFT_TOP, child: Align2::LEFT_TOP}).id("top-left controls".into()).show(|ui| {
 			if ui.button("Save").clicked() {
-				self.circuit.save().unwrap();
+				self.circuit.save_circuit().unwrap();
 				self.saved = true;
 			}
 			if ui.button("+ Component / Subcircuit").clicked() {
 				// Update component search list
 				self.all_logic_devices_search = basic_components::list_all_basic_components();
 				for file_path in resource_interface::list_all_circuit_files().unwrap() {
-					self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(file_path, false));
+					self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(file_path, false, IntV2(0, 0), FourWayDir::default()));
 				}
 				self.showing_component_popup = true;
 			}
@@ -390,9 +465,6 @@ impl LogicCircuitToplevelView {
 						new_pin.external_state = LogicState::Driven(false);
 						new_pin_opt = Some(new_pin);
 					}
-					if ui.button("Input (CLK)").clicked() {
-						new_pin_opt = Some(LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Clock), IntV2(0, 0), FourWayDir::W, 1.0));
-					}
 					if ui.button("Output").clicked() {
 						new_pin_opt = Some(LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(0, 0), FourWayDir::E, 1.0));
 					}
@@ -400,13 +472,17 @@ impl LogicCircuitToplevelView {
 						let handles: Vec<GraphicSelectableItemRef> = self.circuit.paste(&CopiedItemSet::new(vec![CopiedGraphicItem::ExternalConnection(new_pin)], IntV2(0, 0)));
 						*self.circuit.tool.borrow_mut() = Tool::Select{
 							selected_graphics: HashSet::from_iter(vec![handles[0].clone()].into_iter()),
-							selected_graphics_state: SelectionState::FollowingMouse(IntV2(0, 0), V2::zeros())
+							selected_graphics_state: SelectionState::FollowingMouse(V2::zeros())
 						};
 					}
 				});
 			}
 			// Circuit settings (clock speed, etc)
 			ui.collapsing("Circuit Settings", |ui| {
+				ui.horizontal(|ui| {
+					ui.label("Name");
+					ui.text_edit_singleline(&mut self.circuit.generic_device.unique_name);
+				});
 				ui.horizontal(|ui| {
 					ui.label("Sub compute cycles");
 					ui.text_edit_singleline(&mut self.new_sub_cycles_entry);
@@ -422,7 +498,6 @@ impl LogicCircuitToplevelView {
 						}
 					}
 				});
-				ui.checkbox(&mut self.circuit.clock.borrow_mut().enabled, "Clock Enabled");
 			});
 			// Active selection features
 			if let Tool::Select{selected_graphics, selected_graphics_state: _} = &*self.circuit.tool.borrow() {
@@ -458,12 +533,16 @@ impl LogicCircuitToplevelView {
 					}
 					// Display them
 					for (prop, are_all_same, graphic_item_set) in unique_properties.iter_mut() {
-						if prop.add_to_ui(ui) {
-							self.saved = false;
-							for graphic_handle in graphic_item_set.iter() {
-								self.circuit.run_function_on_graphic_item_mut(graphic_handle.clone(), |item_box| {item_box.set_property(prop.clone());});
+						ui.horizontal(|ui| {
+							ui.label(format!("{}:", prop.ui_name()));
+							if prop.add_to_ui(ui) {
+								self.saved = false;
+								self.recompute_conns_nect_frame = true;
+								for graphic_handle in graphic_item_set.iter() {
+									self.circuit.run_function_on_graphic_item_mut(graphic_handle.clone(), |item_box| {item_box.set_property(prop.clone());});
+								}
 							}
-						}
+						});
 					}
 				}
 			}
@@ -485,7 +564,7 @@ impl LogicCircuitToplevelView {
 								let handle = self.circuit.insert_component(device_save);
 								*self.circuit.tool.borrow_mut() = Tool::Select{
 									selected_graphics: HashSet::from_iter(vec![handle].into_iter()),
-									selected_graphics_state: SelectionState::FollowingMouse(IntV2(0, 0), V2::zeros())
+									selected_graphics_state: SelectionState::FollowingMouse(V2::zeros())
 								};
 							}
 						}
@@ -593,7 +672,7 @@ impl eframe::App for App {
 							ScrollArea::vertical().show(ui, |ui| {
 								for file_path in files_list {
 									if ui.selectable_label(false, &file_path).clicked() {
-										match resource_interface::load_circuit(&file_path, false, true) {
+										match resource_interface::load_circuit(&file_path, false, true, IntV2(0, 0), FourWayDir::default()) {
 											Ok(circuit) => {
 												self.circuit_tabs.push(LogicCircuitToplevelView::new(circuit, true));
 												self.current_tab_index = self.circuit_tabs.len();// Not an OBOE

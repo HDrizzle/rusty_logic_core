@@ -256,9 +256,6 @@ impl LogicNet {
 									// Check if it is connected to a global pin
 									LogicConnectionPinExternalSource::Global => {
 										out.push((GlobalSourceReference::Global(ext_conn_id.to_owned()), pin.borrow().external_state));
-									},
-									LogicConnectionPinExternalSource::Clock => {
-										out.push((GlobalSourceReference::Clock(self_ancestors.to_sub_circuit_path()), pin.borrow().external_state));
 									}
 								}
 							}
@@ -351,8 +348,7 @@ pub enum LogicConnectionPinExternalSource {
 	/// Even if not connected, it will have its own net
 	Net(u64),
 	#[default]
-	Global,
-	Clock
+	Global
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -369,10 +365,9 @@ pub struct LogicConnectionPin {
 	internal_state: LogicState,
 	pub external_source: Option<LogicConnectionPinExternalSource>,
 	pub external_state: LogicState,
-	pub direction: FourWayDir,
 	/// Usually 1, may be something else if theres a curve on an OR input or something
 	pub length: f32,
-	ui_data: UIData,
+	pub ui_data: UIData,
 	pub bit_width: u32
 }
 
@@ -389,21 +384,9 @@ impl LogicConnectionPin {
 			internal_state: LogicState::Floating,
 			external_source,
 			external_state: LogicState::Floating,
-			direction,
 			length,
-			ui_data: UIData::from_pos(relative_end_grid),
+			ui_data: UIData::from_pos_dir(relative_end_grid, direction),
 			bit_width: 1
-		}
-	}
-	pub fn is_ext_source_clock(&self) -> bool {
-		match &self.external_source {
-			Some(source) => if let LogicConnectionPinExternalSource::Clock = source {
-				true
-			}
-			else {
-				false
-			},
-			None => false
 		}
 	}
 	pub fn set_drive_internal(&mut self, state: LogicState) {
@@ -420,7 +403,7 @@ impl LogicConnectionPin {
 /// ONLY meant to be used on external pins on the toplevel circuit, all other pins are just rendered as part of the component
 impl GraphicSelectableItem for LogicConnectionPin {
 	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
-		let draw = draw_parent.add_grid_pos(self.ui_data.position);
+		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
 		draw.draw_polyline(
 			vec![
 				V2::new(-0.9, -0.9),
@@ -428,32 +411,16 @@ impl GraphicSelectableItem for LogicConnectionPin {
 				V2::new(0.9, 0.9),
 				V2::new(0.9, -0.9),
 				V2::new(-0.9, -0.9)
-			].iter().map(|p| p + (self.direction.to_unit() * 2.0)).collect(),
+			].iter().map(|p| p + (self.ui_data.direction.to_unit() * 2.0)).collect(),
 			draw.styles.color_from_logic_state(self.state())
 		);
 		draw.draw_polyline(
 			vec![
 				V2::zeros(),
-				self.direction.to_unit()
+				self.ui_data.direction.to_unit()
 			],
 			draw.styles.color_from_logic_state(self.state())
 		);
-		if let Some(ext_source) = &self.external_source {
-			if let LogicConnectionPinExternalSource::Clock = ext_source {
-				let clk_scale = 0.7;
-				draw.draw_polyline(
-					vec![
-						V2::new(-clk_scale, 0.0),
-						V2::new(-clk_scale, clk_scale),
-						V2::new(0.0, clk_scale),
-						V2::new(0.0, -clk_scale),
-						V2::new(clk_scale, -clk_scale),
-						V2::new(clk_scale, 0.0)
-					].iter().map(|p| p + (self.direction.to_unit() * 2.0)).collect(),
-					draw.styles.color_foreground
-				);
-			}
-		}
 	}
 	fn get_ui_data(&self) -> &UIData {
 		&self.ui_data
@@ -463,7 +430,7 @@ impl GraphicSelectableItem for LogicConnectionPin {
 	}
 	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
 		let half_diagonal = V2::new(1.0, 1.0);
-		let box_center = (self.direction.to_unit() * 2.0) + self.ui_data.position.to_v2();
+		let box_center = (self.ui_data.direction.to_unit() * 2.0) + self.ui_data.position.to_v2();
 		let global_offset = grid_offset + box_center;
 		(global_offset - half_diagonal, global_offset + half_diagonal)
 	}
@@ -481,8 +448,8 @@ impl GraphicSelectableItem for LogicConnectionPin {
 			SelectProperty::BitWidth(self.bit_width),
 			SelectProperty::PositionX(self.ui_data.position.0),
 			SelectProperty::PositionY(self.ui_data.position.1),
-			SelectProperty::GlobalConnectionState{clock: self.is_ext_source_clock(), driven: self.state().to_bool_opt()},
-			SelectProperty::Direction(self.direction)
+			SelectProperty::GlobalConnectionState(self.state().to_bool_opt()),
+			SelectProperty::Direction(self.ui_data.direction)
 		]
 	}
 	fn set_property(&mut self, property: SelectProperty) {
@@ -496,18 +463,14 @@ impl GraphicSelectableItem for LogicConnectionPin {
 			SelectProperty::PositionY(y) => {
 				self.ui_data.position.1 = y;
 			},
-			SelectProperty::GlobalConnectionState{clock, driven} => {
-				if clock {
-					self.external_source = Some(LogicConnectionPinExternalSource::Clock);
-				}
-				else {
-					self.external_source = Some(LogicConnectionPinExternalSource::Global);
-					self.external_state = driven.into();
-				}
+			SelectProperty::GlobalConnectionState(driven) => {
+				self.external_source = Some(LogicConnectionPinExternalSource::Global);
+				self.external_state = driven.into();
 			},
 			SelectProperty::Direction(direction) => {
-				self.direction = direction;
-			}
+				self.ui_data.direction = direction;
+			},
+			_ => {}
 		}
 	}
 	fn copy(&self) -> CopiedGraphicItem {
@@ -524,7 +487,6 @@ impl GraphicSelectableItem for LogicConnectionPin {
 					false
 				}
 			},
-			LogicConnectionPinExternalSource::Clock => false,
 			LogicConnectionPinExternalSource::Net(_) => panic!("Pin being used as a graphic item cannot hav eexternal net source")
 		}
 	}
@@ -591,7 +553,7 @@ impl Wire {
 		end_connections: Rc<RefCell<HashSet<WireConnection>>>
 	) -> Self {
 		Self {
-			ui_data: UIData::from_pos(pos),
+			ui_data: UIData::from_pos_dir(pos, FourWayDir::default()),
 			length,
 			direction,
 			net,
@@ -760,7 +722,6 @@ pub struct LogicDeviceGeneric {
 	pub ui_data: UIData,
 	pub unique_name: String,
 	pub sub_compute_cycles: usize,
-	pub rotation: FourWayDir,
 	/// Only for graphical purposes
 	pub bounding_box: (V2, V2)
 }
@@ -779,10 +740,9 @@ impl LogicDeviceGeneric {
 		}
 		Ok(Self {
 			pins: RefCell::new(hashmap_into_refcells(pins)),
-			ui_data: UIData::from_pos(position_grid),
+			ui_data: UIData::from_pos_dir(position_grid, rotation),
 			unique_name,
 			sub_compute_cycles,
-			rotation,
 			bounding_box
 		})
 	}
@@ -801,6 +761,10 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn set_bit_width(&mut self, bit_width: u32) {}
 	fn is_toplevel_circuit(&self) -> bool {false}
 	fn is_circuit(&self) -> bool {false}
+	/// Everything besides what `impl<T: LogicDevice> GraphicSelectableItem for T::get_properties()` generates
+	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {Vec::new()}
+	/// Everything besides what `impl<T: LogicDevice> GraphicSelectableItem for T::set_property()` accepts
+	fn device_set_special_select_property(&mut self, property: SelectProperty) {drop(property);}// So that unused variable warning doesn't happen
 	fn compute(&mut self, ancestors: &AncestryStack) {
 		for _ in 0..self.get_generic().sub_compute_cycles {
 			self.compute_step(ancestors);
@@ -854,14 +818,14 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 /// Everything that implements `Component` also automatically works with the graphics
 impl<T: LogicDevice> GraphicSelectableItem for T {
 	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
-		let draw = draw_parent.add_grid_pos(self.get_generic().ui_data.position);
+		let draw = draw_parent.add_grid_pos_and_direction(self.get_generic().ui_data.position, self.get_generic().ui_data.direction);
 		if !self.is_toplevel_circuit() {
 			for (_, pin_cell) in self.get_pins_cell().borrow().iter() {
 				let pin = pin_cell.borrow();
 				draw.draw_polyline(
 					vec![
 						pin.ui_data.position.to_v2(),
-						pin.ui_data.position.to_v2() - (pin.direction.to_unit() * pin.length)
+						pin.ui_data.position.to_v2() - (pin.ui_data.direction.to_unit() * pin.length)
 					],
 					draw.styles.color_from_logic_state(pin.state())
 				);
@@ -876,7 +840,17 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 		&mut self.get_generic_mut().ui_data
 	}
 	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
-		let local_bb = self.get_generic().bounding_box;
+		let local_bb: (V2, V2) = if self.is_circuit() {
+			if self.get_circuit().displayed_as_block {
+				self.get_generic().bounding_box
+			}
+			else {
+				self.get_circuit().circuit_internals_bb
+			}
+		}
+		else {
+			self.get_generic().bounding_box
+		};
 		let offset = grid_offset + self.get_generic().ui_data.position.to_v2();
 		(local_bb.0 + offset, local_bb.1 + offset)
 	}
@@ -887,11 +861,15 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 		let mut out = vec![
 			SelectProperty::PositionX(self.get_generic().ui_data.position.0),
 			SelectProperty::PositionY(self.get_generic().ui_data.position.1),
-			SelectProperty::Direction(self.get_generic().rotation)
+			SelectProperty::Direction(self.get_generic().ui_data.direction)
 		];
+		if self.is_circuit() {
+			out.push(SelectProperty::DisplayCircuitAsBlock(self.get_circuit().displayed_as_block));
+		}
 		if let Some(bit_width) = self.get_bit_width() {
 			out.push(SelectProperty::BitWidth(bit_width));
 		}
+		out.append(&mut self.device_get_special_select_properties());
 		out
 	}
 	fn set_property(&mut self, property: SelectProperty) {
@@ -906,9 +884,15 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 				self.get_generic_mut().ui_data.position.1 = y;
 			},
 			SelectProperty::Direction(dir) => {
-				self.get_generic_mut().rotation = dir;
+				self.get_generic_mut().ui_data.direction = dir;
 			},
-			SelectProperty::GlobalConnectionState{clock: _, driven: _} => {}
+			SelectProperty::GlobalConnectionState(_) => {},
+			SelectProperty::DisplayCircuitAsBlock(block) => {
+				if self.is_circuit() {
+					self.get_circuit_mut().displayed_as_block = block;
+				}
+			},
+			other => self.device_set_special_select_property(other),
 		}
 	}
 	fn copy(&self) -> CopiedGraphicItem {
@@ -995,8 +979,8 @@ pub enum SelectionState {
 	/// (Start, Delta)
 	Dragging(V2, V2),
 	/// After Paste operation, the pasted stuff will remain selected and following the mouse until a left click
-	/// (Original BB center, current or most recent mouse pos)
-	FollowingMouse(IntV2, V2)
+	/// (Current or most recent mouse pos)
+	FollowingMouse(V2)
 }
 
 #[derive(Debug, Clone)]
@@ -1027,7 +1011,7 @@ impl Tool {
 			Self::Select{selected_graphics: _, selected_graphics_state} => match selected_graphics_state {
 				SelectionState::Fixed => true,
 				SelectionState::Dragging(_, _) => false,
-				SelectionState::FollowingMouse(_, _) => false
+				SelectionState::FollowingMouse(_) => false
 			},
 			Self::HighlightNet(_) => true,
 			Self::PlaceWire{perp_pairs: _, start_net_opt: _, start_wire_connections_opt: _} => false,
@@ -1045,52 +1029,22 @@ impl Default for Tool {
 }
 
 #[derive(Debug)]
-pub struct Clock {
-	pub enabled: bool,
-	pub state: bool,
-	pub freq: f32,
-	pub last_change: Instant
-}
-
-impl Clock {
-	pub fn new(
-		enabled: bool,
-		state: bool,
-		freq: f32
-	) -> Self {
-		Self {
-			enabled,
-			state,
-			freq,
-			last_change: Instant::now()
-		}
-	}
-	pub fn update(&mut self) -> bool {
-		if self.enabled && self.last_change.elapsed() > Duration::from_secs_f32(0.5 / self.freq) {// The frequency is based on a whole period, it must change twice per period, so 0.5/f not 1/f
-			self.state = !self.state;
-			self.last_change = Instant::now();
-		}
-		self.state
-	}
-}
-
-#[derive(Debug)]
 pub struct LogicCircuit {
 	pub generic_device: LogicDeviceGeneric,
 	pub components: RefCell<HashMap<u64, RefCell<Box<dyn LogicDevice>>>>,
 	pub nets: RefCell<HashMap<u64, RefCell<LogicNet>>>,
 	pub wires: RefCell<HashMap<u64, RefCell<Wire>>>,
 	pub save_path: String,
-	/// The clock is only meant to be used in the toplevel circuit, if you want to use the same clock everywhere, just have an input pin dedicated to it for all sub-circuits.
-	/// Alternatively, a sub-circuit can have its own internal clock which would be different from the outside clock
-	pub clock: RefCell<Clock>,
 	/// Inspired by CircuitVerse, block-diagram version of circuit
 	/// {pin ID: (relative position (ending), direction)}
 	block_pin_positions: HashMap<String, (IntV2, FourWayDir)>,
 	displayed_as_block: bool,
 	/// For UI
 	pub tool: RefCell<Tool>,
-	is_toplevel: bool
+	is_toplevel: bool,
+	/// Bounding box for the circuit, not the block diagram, relative to this circuit
+	/// The block diagram BB can be found at `self.generic_device.bounding_box`
+	pub circuit_internals_bb: (V2, V2)
 }
 
 impl LogicCircuit {
@@ -1126,11 +1080,11 @@ impl LogicCircuit {
 			nets: RefCell::new(hashmap_into_refcells(nets)),
 			wires: RefCell::new(hashmap_into_refcells(wires)),
 			save_path,
-			clock: RefCell::new(Clock::new(clock_enabled, clock_state, clock_freq)),
 			block_pin_positions: HashMap::new(),
 			displayed_as_block,
 			tool: RefCell::new(Tool::default()),
-			is_toplevel
+			is_toplevel,
+			circuit_internals_bb: (V2::zeros(), V2::zeros())
 		};
 		new.recompute_default_layout();
 		new.check_wire_geometry_and_connections();
@@ -1156,46 +1110,51 @@ impl LogicCircuit {
 			true
 		).unwrap()
 	}
-	pub fn from_save(save: LogicCircuitSave, save_path: String, displayed_as_block: bool, toplevel: bool) -> Result<Self, String> {
+	pub fn from_save(mut save: LogicCircuitSave, save_path: String, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir) -> Result<Self, String> {
+		// Set position and direction correctly
+		save.generic_device.ui_data.position = pos;
+		save.generic_device.ui_data.direction = dir;
 		// Init compnents
 		let mut components = HashMap::<u64, RefCell<Box<dyn LogicDevice>>>::new();
 		for (ref_, save_comp) in save.components.into_iter() {
 			components.insert(ref_, RefCell::new(EnumAllLogicDevices::to_dynamic(save_comp)?));
 		}
-		// Get rid of Global pin sources if not toplevel
-		if !toplevel {
-			for (_, pin_cell) in &mut save.generic_device.pins.borrow().iter() {
-				let mut pin = pin_cell.borrow_mut();
-				if let Some(source) = &pin.external_source {
+		// Get rid of Global pin sources if not toplevel and nets if toplevel
+		for (_, pin_cell) in &mut save.generic_device.pins.borrow().iter() {
+			let mut pin = pin_cell.borrow_mut();
+			if let Some(source) = &pin.external_source {
+				if toplevel {
+					if let LogicConnectionPinExternalSource::Net(_) = source {
+						pin.external_source = Some(LogicConnectionPinExternalSource::Global);
+					}
+				}
+				else {
 					if let LogicConnectionPinExternalSource::Global = source {
 						pin.external_source = None;
 					}
 				}
 			}
 		}
-		Ok(Self {
+		let mut out = Self {
 			generic_device: save.generic_device,
 			components: RefCell::new(components),
 			nets: RefCell::new(hashmap_into_refcells(save.nets)),
 			wires: RefCell::new(hashmap_into_refcells(save.wires)),
 			save_path,
-			clock: RefCell::new(Clock::new(save.clock_enabled, save.clock_state, save.clock_freq)),
 			block_pin_positions: save.block_pin_positions,
 			displayed_as_block,
 			tool: RefCell::new(Tool::default()),
-			is_toplevel: toplevel
-		})
+			is_toplevel: toplevel,
+			circuit_internals_bb: (V2::zeros(), V2::zeros())
+		};
+		out.check_wire_geometry_and_connections();
+		Ok(out)
 	}
 	fn recompute_default_layout(&mut self) {
 		// Bounding box & layout, like in CircuitVerse
 		let mut count_pins_not_clock: i32 = 0;
 		let mut block_pin_positions: HashMap<String, (IntV2, FourWayDir)> = HashMap::new();
 		for (pin_ref, pin_cell) in self.get_pins_cell().borrow().iter() {
-			if let Some(ext_source) = &pin_cell.borrow().external_source {
-				if let LogicConnectionPinExternalSource::Clock = ext_source {
-					continue;
-				}
-			}
 			if count_pins_not_clock % 2 == 0 {
 				block_pin_positions.insert(pin_ref.clone(), (IntV2(-(CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH as i32) - 1, count_pins_not_clock / 2), FourWayDir::W));
 			}
@@ -1252,8 +1211,7 @@ impl LogicCircuit {
 						LogicConnectionPinExternalSource::Net(net_id) => match self.nets.borrow_mut().get_mut(&net_id) {
 							Some(net) => net.borrow_mut().edit_component_connection(true, *comp_id, pin_id),
 							None => pin_to_net_connections_to_drop.push(CircuitWidePinReference::ComponentPin(ComponentPinReference::new(*comp_id, pin_id.to_owned()))),
-						},
-						LogicConnectionPinExternalSource::Clock => {}
+						}
 					}
 				}
 			}
@@ -1340,7 +1298,12 @@ impl LogicCircuit {
 						}
 					},
 					SelectionState::Dragging(start_grid, delta_grid) => {
-						*delta_grid += emath_vec2_to_v2(response.drag_delta()) / draw.grid_size;
+						let delta_grid_backwards_y = emath_vec2_to_v2(response.drag_delta()) / draw.grid_size;
+						*delta_grid += if cfg!(feature = "reverse_y") {
+							V2::new(delta_grid_backwards_y.x, -delta_grid_backwards_y.y)
+						} else {
+							delta_grid_backwards_y
+						};
 						match selected_graphics.len() {
 							0 => {// Drag a rectangle
 								let select_bb: (V2, V2) = merge_points_to_bb(vec![*start_grid, *start_grid + *delta_grid]);
@@ -1377,7 +1340,7 @@ impl LogicCircuit {
 							}
 						}
 					},
-					SelectionState::FollowingMouse(og_bb_center, mouse_pos) => {
+					SelectionState::FollowingMouse(mouse_pos) => {
 						if let Some(new_mouse_pos) = mouse_pos_grid_opt {// In case the mouse goes off the edge or something idk
 							*mouse_pos = new_mouse_pos;
 						}
@@ -1438,7 +1401,7 @@ impl LogicCircuit {
 					match serde_json::from_str::<CopiedItemSet>(&string_raw) {
 						Ok(item_set) => {
 							let pasted_selected_graphics = self.paste(&item_set);
-							new_tool_opt = Some(Tool::Select{selected_graphics: HashSet::from_iter(pasted_selected_graphics.into_iter()), selected_graphics_state: SelectionState::FollowingMouse(item_set.bb_center, mouse_pos_grid_opt.unwrap())});
+							new_tool_opt = Some(Tool::Select{selected_graphics: HashSet::from_iter(pasted_selected_graphics.into_iter()), selected_graphics_state: SelectionState::FollowingMouse(mouse_pos_grid_opt.unwrap())});
 						},
 						Err(_) => {}
 					}
@@ -1689,7 +1652,7 @@ impl LogicCircuit {
 		new_wire_ids
 	}
 	/// Fixes everything, should be run when a new circuit is created or when anything is moved, deleted, or placed
-	pub fn check_wire_geometry_and_connections(&self) {
+	pub fn check_wire_geometry_and_connections(&mut self) {
 		// Remove all wire connections except to themselves
 		self.check_wires_connected_to_just_themselves();
 		// Find overlapping wires and correct them, make sure to preserve connections
@@ -1706,6 +1669,8 @@ impl LogicCircuit {
 		self.update_pin_to_wire_connections();
 		// Combine consecutive segments in the same direction
 		self.merge_consecutive_wires();
+		// Recompute BB for circuit internals
+		self.recompute_internals_bb();
 	}
 	fn check_wires_connected_to_just_themselves(&self) {
 		let wires = self.wires.borrow();
@@ -1721,7 +1686,7 @@ impl LogicCircuit {
 		// First: T-conn check
 		// vec<(Wire with end at pos, Wire to be sliced, Position)>
 		// The code is in a seperate block so that the self.wires borrow will be dropped and won't cause borrow issues when T connections are fixed
-		let mut t_conns_to_fix: Vec<(u64, u64, IntV2)> = {
+		let t_conns_to_fix: Vec<(u64, u64, IntV2)> = {
 			let wires = self.wires.borrow();
 			let mut out = Vec::<(u64, u64, IntV2)>::new();
 			for (wire_id, wire_cell) in wires.iter() {
@@ -1851,7 +1816,7 @@ impl LogicCircuit {
 							if let Some((old_net, new_net)) = net_migration {
 								let net_missing_err = "Net migration is only supposed to happen if both wires are already visited, meaning they're net should be in `net_wire_associations`";
 								let old_net_wires = net_wire_associations.get(&old_net).expect(net_missing_err).clone();
-								let mut new_net_wires = net_wire_associations.get_mut(&new_net).expect(net_missing_err);
+								let new_net_wires = net_wire_associations.get_mut(&new_net).expect(net_missing_err);
 								for wire_id in &old_net_wires {
 									// Update wire's net ref
 									if !(wire_id == wire_1_id || wire_id == wire_2_id) {
@@ -1923,7 +1888,7 @@ impl LogicCircuit {
 		}
 		
 		// 5. Create new nets and re-assign wires for the found islands.
-		for (island_wires, original_net_id) in islands_to_create_nets_for {
+		for (island_wires, _) in islands_to_create_nets_for {
 			// Now it's safe to get a new net ID and then mutate `nets`.
 			let new_net_id = lowest_unused_key(&nets);
 			let new_net = LogicNet::new(Vec::new());
@@ -1998,9 +1963,6 @@ impl LogicCircuit {
 			let comp = comp_cell.borrow();
 			for (pin_id, pin_cell) in comp.get_pins_cell().borrow().iter() {
 				let mut pin = pin_cell.borrow_mut();
-				if pin.is_ext_source_clock() {// Don't mess with
-					continue;
-				}
 				let pin_pos: IntV2 = pin.ui_data.position + comp.get_ui_data().position;
 				// Fist check if pin is already connected to another net and remove from that net's connection list in case it's a different net
 				if let Some(source) = &pin.external_source {
@@ -2105,6 +2067,29 @@ impl LogicCircuit {
 			other => panic!("LogicCircuit.add_connection_to_wire() provided with invalid wire intercept triple: {:?}", other)
 		}
 	}
+	fn recompute_internals_bb(&mut self) {
+		let mut bb_opt = Option::<(V2, V2)>::None;
+		for item_ref in self.get_all_graphics_references() {
+			if let GraphicSelectableItemRef::Pin(_) = &item_ref {
+				continue;
+			}
+			self.run_function_on_graphic_item(item_ref.clone(), |item_box| {
+				let new_bb = item_box.bounding_box(V2::zeros());
+				if let Some(bb) = &mut bb_opt {
+					*bb = merge_points_to_bb(vec![bb.0, bb.1, new_bb.0, new_bb.1]);
+				}
+				else {
+					bb_opt = Some(new_bb);
+				}
+			});
+		}
+		if let Some(bb) = bb_opt {
+			self.circuit_internals_bb = bb;
+		}
+		else {
+			self.circuit_internals_bb = (V2::zeros(), V2::zeros())
+		}
+	}
 	fn was_anything_clicked<'a>(&self, grid_pos: V2) -> Option<GraphicSelectableItemRef> {
 		let mut selected_opt = Option::<GraphicSelectableItemRef>::None;
 		for ref_ in self.get_all_graphics_references() {
@@ -2174,8 +2159,6 @@ impl LogicCircuit {
 		out
 	}
 	fn compute_immutable(&self, ancestors_above: &AncestryStack) {
-		// Update clock
-		let clock_state: bool = self.clock.borrow_mut().update();
 		let ancestors = ancestors_above.push(&self);
 		// Update net states
 		let mut new_net_states = HashMap::<u64, (LogicState, Vec<GlobalSourceReference>)>::new();
@@ -2207,12 +2190,6 @@ impl LogicCircuit {
 			else {
 				pin_cell.borrow_mut().set_drive_internal(LogicState::Floating);
 			}
-			let ext_source_opt = pin_cell.borrow().external_source.clone();
-			if let Some(ext_source) = ext_source_opt {
-				if let LogicConnectionPinExternalSource::Clock = ext_source {
-					pin_cell.borrow_mut().set_drive_external(clock_state.into());
-				}
-			}
 		}
 		// Component pins, and propagate through components
 		for (comp_id, comp) in self.components.borrow().iter() {
@@ -2223,8 +2200,7 @@ impl LogicCircuit {
 						LogicConnectionPinExternalSource::Global => panic!("Pin {} of component {} has external source 'Global' which doesn't make sense", pin_id, comp_id),
 						LogicConnectionPinExternalSource::Net(net_id) => {
 							pin_cell.borrow_mut().set_drive_external(self.nets.borrow_mut().get_mut(&net_id).expect(&format!("Pin {} of component {} references net {} which doesn't exist", pin_id, comp_id, net_id)).borrow().state);
-						},
-						LogicConnectionPinExternalSource::Clock => {}// A clock-connected pin is handled by the sub-circuit itself
+						}
 					}
 				}
 				else {
@@ -2246,6 +2222,29 @@ impl LogicCircuit {
 			}
 		}
 	}
+	pub fn save_circuit(&self) -> Result<(), String> {
+		// Convert components to enum variants to be serialized
+		let mut components_save = HashMap::<u64, EnumAllLogicDevices>::new();
+		for (ref_, component) in self.components.borrow().iter() {
+			components_save.insert(*ref_, component.borrow().save()?);
+		}
+		// Un-RefCell Wires
+		let mut wires_save = HashMap::<u64, Wire>::new();
+		for (ref_, wire) in self.wires.borrow().iter() {
+			wires_save.insert(*ref_, wire.borrow().clone());
+		}
+		// First, actually save this circuit
+		let save = LogicCircuitSave {
+			generic_device: self.generic_device.clone(),
+			components: components_save,
+			nets: hashmap_unwrap_refcells(self.nets.borrow().clone()),
+			wires: wires_save,
+			block_pin_positions: self.block_pin_positions.clone()
+		};
+		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
+		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_path), &raw_string))?;
+		Ok(())
+	}
 }
 
 impl LogicDevice for LogicCircuit {
@@ -2258,34 +2257,11 @@ impl LogicDevice for LogicCircuit {
 	fn compute_step(&mut self, ancestors_above: &AncestryStack) {
 		self.compute_immutable(ancestors_above);
 	}
-	/// Writes self to file, then returns handle to file for inclusion in other circuits
+	/// Returns handle to file for inclusion in other circuits
+	/// The actual save is done with `LogicCircuit::save_circuit()`
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
-		// Convert components to enum variants to be serialized
-		let mut components_save = HashMap::<u64, EnumAllLogicDevices>::new();
-		for (ref_, component) in self.components.borrow().iter() {
-			components_save.insert(*ref_, component.borrow().save()?);
-		}
-		// Un-RefCell Wires
-		let mut wires_save = HashMap::<u64, Wire>::new();
-		for (ref_, wire) in self.wires.borrow().iter() {
-			wires_save.insert(*ref_, wire.borrow().clone());
-		}
-		// First, actually save this circuit
-		let clock = self.clock.borrow();
-		let save = LogicCircuitSave {
-			generic_device: self.generic_device.clone(),
-			components: components_save,
-			nets: hashmap_unwrap_refcells(self.nets.borrow().clone()),
-			wires: wires_save,
-			clock_enabled: clock.enabled,
-			clock_state: clock.state,
-			clock_freq: clock.freq,
-			block_pin_positions: self.block_pin_positions.clone()
-		};
-		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
-		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_path), &raw_string))?;
 		// Path to save file
-		Ok(EnumAllLogicDevices::SubCircuit(self.save_path.clone(), self.displayed_as_block))
+		Ok(EnumAllLogicDevices::SubCircuit(self.save_path.clone(), self.displayed_as_block, self.get_ui_data().position, self.get_ui_data().direction))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		if self.displayed_as_block {

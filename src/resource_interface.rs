@@ -14,10 +14,10 @@ pub static STYLES_FILE: &str = "resources/styles.json";
 
 /// Loads circuit, path is relative to `CIRCUITS_DIR` and does not include .json extension
 /// Example: File is located at `resources/circuits/sequential/d_latch.json` -> circuit path is `sequential/d_latch`
-pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: bool) -> Result<LogicCircuit, String> {
+pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir) -> Result<LogicCircuit, String> {
 	let path = get_circuit_file_path(circuit_rel_path);
 	let string_raw = load_file_with_better_error(&path)?;
-	LogicCircuit::from_save(to_string_err(serde_json::from_str(&string_raw))?, circuit_rel_path.to_string(), displayed_as_block, toplevel)
+	LogicCircuit::from_save(to_string_err(serde_json::from_str(&string_raw))?, circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir)
 }
 
 /// Like LogicCircuit but serializable
@@ -27,9 +27,6 @@ pub struct LogicCircuitSave {
 	pub components: HashMap<u64, EnumAllLogicDevices>,
 	pub nets: HashMap<u64, LogicNet>,
 	pub wires: HashMap<u64, Wire>,
-	pub clock_enabled: bool,
-	pub clock_state: bool,
-	pub clock_freq: f32,
 	/// Inspired by CircuitVerse, block-diagram version of circuit
 	/// (pin ID, relative position (ending), direction)
 	pub block_pin_positions: HashMap<String, (IntV2, FourWayDir)>
@@ -38,41 +35,52 @@ pub struct LogicCircuitSave {
 /// Not great but I can't think of anything else
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EnumAllLogicDevices {
-	/// (Relative path of circuit, Whether to use block diagram)
-	SubCircuit(String, bool),
+	/// (Relative path of circuit, Whether to use block diagram, Position, Orientation)
+	SubCircuit(String, bool, IntV2, FourWayDir),
 	GateAnd(basic_components::GateAnd),
 	GateNand(basic_components::GateNand),
 	GateNot(basic_components::GateNot),
 	GateOr(basic_components::GateOr),
 	GateNor(basic_components::GateNor),
 	GateXor(basic_components::GateXor),
-	GateXnor(basic_components::GateXnor)
+	GateXnor(basic_components::GateXnor),
+	Clock {
+		enabled: bool,
+		state: bool,
+		freq: f32,
+		position_grid: IntV2,
+		direction: FourWayDir
+	}/*,
+	FixedGround(basic_components::Ground),
+	FixedPower(basic_components::Power)*/
 }
 
 impl EnumAllLogicDevices {
 	pub fn to_dynamic(self_instance: Self) -> Result<Box<dyn LogicDevice>, String> {
 		match self_instance {
-			Self::SubCircuit(circuit_rel_path, displayed_as_block) => Ok(Box::new(load_circuit(&circuit_rel_path, displayed_as_block, false)?)),
+			Self::SubCircuit(circuit_rel_path, displayed_as_block, pos, dir) => Ok(Box::new(load_circuit(&circuit_rel_path, displayed_as_block, false, pos, dir)?)),
 			Self::GateAnd(gate) => Ok(Box::new(gate)),
 			Self::GateNand(gate) => Ok(Box::new(gate)),
 			Self::GateNot(gate) => Ok(Box::new(gate)),
 			Self::GateOr(gate) => Ok(Box::new(gate)),
 			Self::GateNor(gate) => Ok(Box::new(gate)),
 			Self::GateXor(gate) => Ok(Box::new(gate)),
-			Self::GateXnor(gate) => Ok(Box::new(gate))
+			Self::GateXnor(gate) => Ok(Box::new(gate)),
+			Self::Clock{enabled, state, freq, position_grid, direction} => Ok(Box::new(basic_components::Clock::new(enabled, state, freq, position_grid, direction)))
 		}
 	}
 	/// Example: "AND Gate" or "D Latch", for the component search UI
 	pub fn type_name(&self) -> String {
 		match self {
-			Self::SubCircuit(circuit_rel_path, displayed_as_block) => circuit_rel_path.clone(),
+			Self::SubCircuit(circuit_rel_path, _, _, _) => circuit_rel_path.clone(),
 			Self::GateAnd(_) => "AND Gate".to_owned(),
 			Self::GateNand(_) => "NAND Gate".to_owned(),
 			Self::GateNot(_) => "NOT Gate".to_owned(),
 			Self::GateOr(_) => "OR Gate".to_owned(),
 			Self::GateNor(_) => "NOR Gate".to_owned(),
 			Self::GateXor(_) => "XOR Gate".to_owned(),
-			Self::GateXnor(_) => "XNOR Gate".to_owned()
+			Self::GateXnor(_) => "XNOR Gate".to_owned(),
+			Self::Clock{enabled: _, state: _, freq: _, position_grid: _, direction: _} => "Clock Source".to_owned()
 		}
 	}
 }

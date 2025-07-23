@@ -1,6 +1,5 @@
 use crate::prelude::*;
-use crate::basic_components;
-use crate::simulator::{AncestryStack, CircuitWidePinReference, ComponentPinReference, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource};
+use crate::simulator::{AncestryStack, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource};
 
 #[test]
 fn logic_state_merge() {
@@ -65,7 +64,7 @@ fn logic_state_merge() {
 
 #[test]
 fn basic_sim_and_gate() {
-	let mut circuit = create_simple_circuit(false);
+	let mut circuit = create_simple_circuit();
 	// Connections computed correctly
 	assert_eq!(circuit.get_pins_cell().borrow().get("a").unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(0)));
 	assert_eq!(circuit.get_pins_cell().borrow().get("b").unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(1)));

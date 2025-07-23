@@ -3,6 +3,10 @@ name = "rusty_logic"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+#default = ["reverse_y"]
+reverse_y = []
+
 [dependencies]
 eframe = "0.32.0"
 nalgebra = {version = "^0.33", features = ["serde-serialize"]}

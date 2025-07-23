@@ -192,6 +192,47 @@ pub mod prelude {
 				Self::S => Self::N
 			}
 		}
+		pub fn turn_ccw(&self) -> Self {
+			match &self {
+				Self::E => Self::N,
+				Self::N => Self::W,
+				Self::W => Self::S,
+				Self::S => Self::E
+			}
+		}
+		pub fn turn_cw(&self) -> Self {
+			match &self {
+				Self::E => Self::S,
+				Self::N => Self::E,
+				Self::W => Self::N,
+				Self::S => Self::W
+			}
+		}
+		pub fn cos_sin(&self) -> (i32, i32) {
+			match &self {
+				Self::E => (1, 0),
+				Self::N => (0, 1),
+				Self::W => (-1, 0),
+				Self::S => (0, -1)
+			}
+		}
+		/// 2D rotation matrix multiplication
+		pub fn rotate_v2(&self, in_: V2) -> V2 {
+			let (cos_int, sin_int) = self.cos_sin();
+			let (cos, sin) = (cos_int as f32, sin_int as f32);
+			V2::new(in_.x * cos - in_.y * sin, in_.x * sin + in_.y * cos)
+		}
+		/// 2D rotation matrix multiplication
+		pub fn rotate_v2_reverse(&self, in_: V2) -> V2 {
+			let (cos_int, sin_int) = self.cos_sin();
+			let (cos, sin) = (cos_int as f32, -(sin_int as f32));
+			V2::new(in_.x * cos - in_.y * sin, in_.x * sin + in_.y * cos)
+		}
+		/// 2D rotation matrix multiplication with int
+		pub fn rotate_intv2(&self, in_: IntV2) -> IntV2 {
+			let (cos, sin) = self.cos_sin();
+			IntV2(in_.0 * cos - in_.1 * sin, in_.0 * sin + in_.1 * cos)
+		}
 	}
 	impl Default for FourWayDir {
 		fn default() -> Self {
@@ -494,20 +535,14 @@ pub mod prelude {
 	}
 
 	use simulator::{CircuitWidePinReference, ComponentPinReference};
-	pub fn create_simple_circuit(clock_as_input: bool) -> LogicCircuit {
-		let ext_conn_source: LogicConnectionPinExternalSource = if clock_as_input {
-			LogicConnectionPinExternalSource::Clock
-		}
-		else {
-			LogicConnectionPinExternalSource::Global
-		};
+	pub fn create_simple_circuit() -> LogicCircuit {
 		LogicCircuit::new(
 			vec_to_u64_keyed_hashmap(vec![
 				Box::new(basic_components::GateAnd::new(IntV2(0, 0), "and", FourWayDir::default())).into_box()
 			]),
 			hash_map!{
-				"a".to_owned() => LogicConnectionPin::new(None, Some(ext_conn_source.clone()), IntV2(-4, -1), FourWayDir::W, 1.0),
-				"b".to_owned() => LogicConnectionPin::new(None, Some(ext_conn_source.clone()), IntV2(-4, 1), FourWayDir::W, 1.0),
+				"a".to_owned() => LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(-4, -1), FourWayDir::W, 1.0),
+				"b".to_owned() => LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(-4, 1), FourWayDir::W, 1.0),
 				"q".to_owned() => LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(4, 0), FourWayDir::E, 1.0),
 			},
 			vec_to_u64_keyed_hashmap(vec![

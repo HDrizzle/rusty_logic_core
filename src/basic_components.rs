@@ -1,6 +1,7 @@
 use crate::{prelude::*, simulator::{AncestryStack, LogicConnectionPinInternalSource}};
 use serde::{Deserialize, Serialize};
 use common_macros::hash_map;
+use std::time::{Instant, Duration};
 
 /// For the component search popup
 pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
@@ -11,7 +12,8 @@ pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
 		GateOr::new(IntV2(0, 0), "", FourWayDir::default()).save().unwrap(),
 		GateNor::new(IntV2(0, 0), "", FourWayDir::default()).save().unwrap(),
 		GateXor::new(IntV2(0, 0), "", FourWayDir::default()).save().unwrap(),
-		GateXnor::new(IntV2(0, 0), "", FourWayDir::default()).save().unwrap()
+		GateXnor::new(IntV2(0, 0), "", FourWayDir::default()).save().unwrap(),
+		Clock::new(false, false, 1.0, IntV2(0, 0), FourWayDir::default()).save().unwrap()
 	]
 }
 
@@ -369,5 +371,100 @@ impl LogicDevice for GateXnor {
 		draw.draw_arc(V2::new(-7.8, 0.0), 6.0, -19.5, 19.5, draw.styles.color_foreground);
 		draw.draw_arc(V2::new(-8.1, 0.0), 6.0, -19.5, 19.5, draw.styles.color_foreground);
 		draw.draw_circle(V2::new(2.5, 0.0), 0.5, draw.styles.color_foreground);
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct Clock {
+	pub generic: LogicDeviceGeneric,
+	pub enabled: bool,
+	pub freq: f32,
+	pub last_change: Instant
+}
+
+impl Clock {
+	pub fn new(
+		enabled: bool,
+		state: bool,
+		freq: f32,
+		position_grid: IntV2,
+		direction: FourWayDir
+	) -> Self {
+		let mut out = Self {
+			generic: LogicDeviceGeneric::new(
+				hash_map!{
+					"q".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(0, 0), FourWayDir::W, 1.0),
+				},
+				position_grid,
+				"CLK".to_owned(),
+				1,
+				direction,
+				(V2::new(-2.0, -2.0), V2::new(3.0, 2.0))
+			).unwrap(),
+			enabled,
+			freq,
+			last_change: Instant::now()
+		};
+		out.set_pin_internal_state_panic("q", state.into());
+		out.generic.ui_data.position = position_grid;
+		out.generic.ui_data.direction = direction;
+		out
+	}
+}
+
+impl LogicDevice for Clock {
+	fn get_generic(&self) -> &LogicDeviceGeneric {
+		&self.generic
+	}
+	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
+		&mut self.generic
+	}
+	fn compute_step(&mut self, _ancestors: &AncestryStack) {
+		if self.enabled && self.last_change.elapsed() > Duration::from_secs_f32(0.5 / self.freq) {// The frequency is based on a whole period, it must change twice per period, so 0.5/f not 1/f
+			self.set_pin_internal_state_panic("q", (!self.get_pin_state_panic("q").to_bool()).into());
+			self.last_change = Instant::now();
+		}
+	}
+	fn save(&self) -> Result<EnumAllLogicDevices, String> {
+		Ok(EnumAllLogicDevices::Clock{enabled: self.enabled, state: self.get_pin_state_panic("q").to_bool(), freq: self.freq, position_grid: self.generic.ui_data.position, direction: self.generic.ui_data.direction})
+	}
+	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+		draw.draw_polyline(
+			vec![
+				V2::new(-0.9, -0.9),
+				V2::new(-0.9, 0.9),
+				V2::new(0.9, 0.9),
+				V2::new(0.9, -0.9),
+				V2::new(-0.9, -0.9)
+			].iter().map(|p| p + (self.generic.ui_data.direction.to_unit() * 2.0)).collect(),
+			draw.styles.color_from_logic_state(self.get_pin_state_panic("q"))
+		);
+		let clk_scale = 0.7;
+		draw.draw_polyline(
+			vec![
+				V2::new(-clk_scale, 0.0),
+				V2::new(-clk_scale, clk_scale),
+				V2::new(0.0, clk_scale),
+				V2::new(0.0, -clk_scale),
+				V2::new(clk_scale, -clk_scale),
+				V2::new(clk_scale, 0.0)
+			].iter().map(|p| p + (self.generic.ui_data.direction.to_unit() * 2.0)).collect(),
+			draw.styles.color_foreground
+		);
+	}
+	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
+		vec![
+			SelectProperty::ClockEnabled(self.enabled),
+			SelectProperty::ClockFreq(self.freq),
+			SelectProperty::ClockState(self.get_pin_state_panic("q").to_bool())
+		]
+	}
+	fn device_set_special_select_property(&mut self, property: SelectProperty) {
+		match property {
+			SelectProperty::ClockEnabled(enable) => {self.enabled = enable;},
+			SelectProperty::ClockFreq(freq) => {self.freq = freq;},
+			SelectProperty::ClockState(state) => self.set_pin_internal_state_panic("q", state.into()),
+			_ => {}
+		}
 	}
 }
