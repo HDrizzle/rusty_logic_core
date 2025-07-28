@@ -24,7 +24,7 @@ pub mod prelude {
 	pub type V2 = Vector2<f32>;
 	use eframe::egui::{Color32, CornerRadius};
 	pub use ui::{Styles, LogicCircuitToplevelView, App, ComponentDrawInfo, GraphicSelectableItem, SelectProperty, UIData, CopiedGraphicItem, CopiedItemSet};
-	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection};
+	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection, LogicDeviceSave};
 	pub use resource_interface::{load_file_with_better_error, EnumAllLogicDevices};
 	pub fn u8_3_to_color32(in_: [u8; 3]) -> Color32 {
 		Color32::from_rgb(in_[0], in_[1], in_[2])
@@ -232,6 +232,11 @@ pub mod prelude {
 		pub fn rotate_intv2(&self, in_: IntV2) -> IntV2 {
 			let (cos, sin) = self.cos_sin();
 			IntV2(in_.0 * cos - in_.1 * sin, in_.0 * sin + in_.1 * cos)
+		}
+		/// 2D rotation matrix multiplication with int
+		pub fn rotate_intv2_reverse(&self, in_: IntV2) -> IntV2 {
+			let (cos, sin) = self.cos_sin();
+			IntV2(in_.0 * cos + in_.1 * sin, in_.1 * cos - in_.0 * sin)
 		}
 	}
 	impl Default for FourWayDir {

@@ -67,6 +67,7 @@ impl Default for Styles {
 pub struct UIData {
 	pub selected: bool,
 	pub position: IntV2,
+	/// Relative to parent, NOT global
 	pub direction: FourWayDir,
 	pub position_before_dragging: IntV2,
 	pub dragging_offset: V2,
@@ -74,15 +75,19 @@ pub struct UIData {
 }
 
 impl UIData {
-	pub fn from_pos_dir(position: IntV2, direction: FourWayDir) -> Self {
+	pub fn new(position: IntV2, direction: FourWayDir, local_bb: (V2, V2)) -> Self {
 		Self {
 			position,
 			direction,
+			local_bb,
 			..Default::default()
 		}
 	}
 	pub fn pos_to_parent_coords(&self, position: IntV2) -> IntV2 {
-		self.direction.ro// TODO
+		self.direction.rotate_intv2(position) + self.position
+	}
+	pub fn pos_to_parent_coords_float(&self, position: V2) -> V2 {
+		self.direction.rotate_v2(position) + self.position.to_v2()
 	}
 }
 
@@ -110,8 +115,9 @@ pub trait GraphicSelectableItem {
 	/// Relative to Grid and self, return must be wrt global grid, hence why grid offset must be provided
 	/// grid_offset will only correct for positions of nested sub-circuits, not the position of the object that it itself "knows about"
 	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
-		let local_bb = self.get_ui_data().local_bb;
-		(grid_offset + local_bb.0, grid_offset + local_bb.1)
+		let ui_data = self.get_ui_data();
+		let local_bb = ui_data.local_bb;
+		merge_points_to_bb(vec![grid_offset + ui_data.pos_to_parent_coords_float(local_bb.0), grid_offset + ui_data.pos_to_parent_coords_float(local_bb.1)])
 	}
 	/// Mouse is relative to Grid
 	/// Things with complicated shapes should override this with something better
@@ -187,7 +193,7 @@ impl SelectProperty {
 		}
 	}
 	/// Add this property to a list on the UI
-	/// Returns: Whether to update the property
+	/// Returns: Whether to update the property and/or recalculate circuit connections
 	pub fn add_to_ui(&mut self, ui: &mut Ui) -> bool {
 		match self {
 			Self::BitWidth(n) => {
@@ -254,7 +260,7 @@ impl SelectProperty {
 				return false;
 			},
 			Self::DisplayCircuitAsBlock(block) => {
-				ui.checkbox(block, "Display circuit as block").changed()
+				ui.checkbox(block, "").changed()
 			},
 			Self::ClockEnabled(enable) => {
 				ui.checkbox(enable, match enable {
@@ -391,7 +397,7 @@ pub struct LogicCircuitToplevelView {
 	all_logic_devices_search: Vec<EnumAllLogicDevices>,
 	saved: bool,
 	new_sub_cycles_entry: String,
-	recompute_conns_nect_frame: bool
+	recompute_conns_next_frame: bool
 }
 
 impl LogicCircuitToplevelView {
@@ -406,7 +412,7 @@ impl LogicCircuitToplevelView {
 			all_logic_devices_search: Vec::new(),
 			saved,
 			new_sub_cycles_entry: String::new(),
-			recompute_conns_nect_frame: false
+			recompute_conns_next_frame: false
 		}
 	}
 	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles) {
@@ -428,14 +434,14 @@ impl LogicCircuitToplevelView {
 			// First, detect user unput
 			let input_state = ui.ctx().input(|i| i.clone());
 			let recompute_connections: bool = self.circuit.toplevel_ui_interact(response, ui.ctx(), &draw_info, input_state);
-			if recompute_connections {
+			if recompute_connections || self.recompute_conns_next_frame {
 				self.saved = false;
 				self.circuit.check_wire_geometry_and_connections();
 			}
 			// Update
-			if recompute_connections || propagate || self.recompute_conns_nect_frame {
+			if recompute_connections || propagate {
 				self.logic_loop_error = self.propagate_until_stable(PROPAGATION_LIMIT);
-				self.recompute_conns_nect_frame = false;
+				self.recompute_conns_next_frame = false;
 			}
 			// graphics help from https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/painting.rs
 			// Draw circuit
@@ -537,7 +543,7 @@ impl LogicCircuitToplevelView {
 							ui.label(format!("{}:", prop.ui_name()));
 							if prop.add_to_ui(ui) {
 								self.saved = false;
-								self.recompute_conns_nect_frame = true;
+								self.recompute_conns_next_frame = true;
 								for graphic_handle in graphic_item_set.iter() {
 									self.circuit.run_function_on_graphic_item_mut(graphic_handle.clone(), |item_box| {item_box.set_property(prop.clone());});
 								}

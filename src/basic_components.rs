@@ -399,7 +399,7 @@ impl Clock {
 				"CLK".to_owned(),
 				1,
 				direction,
-				(V2::new(-2.0, -2.0), V2::new(3.0, 2.0))
+				(V2::new(1.0, -1.0), V2::new(3.0, 1.0))
 			).unwrap(),
 			enabled,
 			freq,
@@ -431,12 +431,12 @@ impl LogicDevice for Clock {
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(
 			vec![
-				V2::new(-0.9, -0.9),
-				V2::new(-0.9, 0.9),
-				V2::new(0.9, 0.9),
-				V2::new(0.9, -0.9),
-				V2::new(-0.9, -0.9)
-			].iter().map(|p| p + (self.generic.ui_data.direction.to_unit() * 2.0)).collect(),
+				V2::new(1.1, -0.9),
+				V2::new(1.1, 0.9),
+				V2::new(2.9, 0.9),
+				V2::new(2.9, -0.9),
+				V2::new(1.1, -0.9)
+			],
 			draw.styles.color_from_logic_state(self.get_pin_state_panic("q"))
 		);
 		let clk_scale = 0.7;
@@ -448,7 +448,7 @@ impl LogicDevice for Clock {
 				V2::new(0.0, -clk_scale),
 				V2::new(clk_scale, -clk_scale),
 				V2::new(clk_scale, 0.0)
-			].iter().map(|p| p + (self.generic.ui_data.direction.to_unit() * 2.0)).collect(),
+			].iter().map(|p| self.generic.ui_data.direction.rotate_v2_reverse(*p) + V2::new(2.0, 0.0)).collect(),
 			draw.styles.color_foreground
 		);
 	}

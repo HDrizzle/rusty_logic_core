@@ -37,13 +37,13 @@ pub struct LogicCircuitSave {
 pub enum EnumAllLogicDevices {
 	/// (Relative path of circuit, Whether to use block diagram, Position, Orientation)
 	SubCircuit(String, bool, IntV2, FourWayDir),
-	GateAnd(basic_components::GateAnd),
-	GateNand(basic_components::GateNand),
-	GateNot(basic_components::GateNot),
-	GateOr(basic_components::GateOr),
-	GateNor(basic_components::GateNor),
-	GateXor(basic_components::GateXor),
-	GateXnor(basic_components::GateXnor),
+	GateAnd(LogicDeviceSave),
+	GateNand(LogicDeviceSave),
+	GateNot(LogicDeviceSave),
+	GateOr(LogicDeviceSave),
+	GateNor(LogicDeviceSave),
+	GateXor(LogicDeviceSave),
+	GateXnor(LogicDeviceSave),
 	Clock {
 		enabled: bool,
 		state: bool,

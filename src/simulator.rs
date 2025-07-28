@@ -385,7 +385,7 @@ impl LogicConnectionPin {
 			external_source,
 			external_state: LogicState::Floating,
 			length,
-			ui_data: UIData::from_pos_dir(relative_end_grid, direction),
+			ui_data: UIData::new(relative_end_grid, direction, (V2::new(1.0, -1.0), V2::new(3.0, 1.0))),
 			bit_width: 1
 		}
 	}
@@ -406,18 +406,18 @@ impl GraphicSelectableItem for LogicConnectionPin {
 		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
 		draw.draw_polyline(
 			vec![
-				V2::new(-0.9, -0.9),
-				V2::new(-0.9, 0.9),
-				V2::new(0.9, 0.9),
-				V2::new(0.9, -0.9),
-				V2::new(-0.9, -0.9)
-			].iter().map(|p| p + (self.ui_data.direction.to_unit() * 2.0)).collect(),
+				V2::new(1.1, -0.9),
+				V2::new(1.1, 0.9),
+				V2::new(2.9, 0.9),
+				V2::new(2.9, -0.9),
+				V2::new(1.1, -0.9)
+			],
 			draw.styles.color_from_logic_state(self.state())
 		);
 		draw.draw_polyline(
 			vec![
 				V2::zeros(),
-				self.ui_data.direction.to_unit()
+				V2::new(1.0, 0.0)
 			],
 			draw.styles.color_from_logic_state(self.state())
 		);
@@ -428,12 +428,12 @@ impl GraphicSelectableItem for LogicConnectionPin {
 	fn get_ui_data_mut(&mut self) -> &mut UIData {
 		&mut self.ui_data
 	}
-	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
+	/*fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
 		let half_diagonal = V2::new(1.0, 1.0);
 		let box_center = (self.ui_data.direction.to_unit() * 2.0) + self.ui_data.position.to_v2();
 		let global_offset = grid_offset + box_center;
 		(global_offset - half_diagonal, global_offset + half_diagonal)
-	}
+	}*/
 	fn is_connected_to_net(&self, net_id: u64) -> bool {
 		match &self.internal_source {
 			Some(source) => match source {
@@ -553,7 +553,7 @@ impl Wire {
 		end_connections: Rc<RefCell<HashSet<WireConnection>>>
 	) -> Self {
 		Self {
-			ui_data: UIData::from_pos_dir(pos, FourWayDir::default()),
+			ui_data: UIData::new(pos, FourWayDir::default(), (V2::zeros(), V2::zeros())),
 			length,
 			direction,
 			net,
@@ -716,35 +716,76 @@ pub enum WireConnection {
 	Wire(u64)
 }
 
+/// Only essential things like position/orientation, logic state
+/// Not used for saving circuits
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct LogicDeviceSave {
+	pin_states: HashMap<String, LogicState>,
+	pos: IntV2,
+	dir: FourWayDir,
+	bit_width: Option<u32>,
+	name_opt: Option<String>
+}
+
+/// It is recommended for anything implementing the trait `LogicDevice` to have a field for this
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogicDeviceGeneric {
 	pub pins: RefCell<HashMap<String, RefCell<LogicConnectionPin>>>,
 	pub ui_data: UIData,
-	pub unique_name: String,
+	pub name_opt: Option<String>,
 	pub sub_compute_cycles: usize,
-	/// Only for graphical purposes
-	pub bounding_box: (V2, V2)
+	pub bit_width: Option<u32>
 }
 
 impl LogicDeviceGeneric {
 	pub fn new(
-		pins: HashMap<String, LogicConnectionPin>,
-		position_grid: IntV2,
-		unique_name: String,
-		sub_compute_cycles: usize,
-		rotation: FourWayDir,
-		bounding_box: (V2, V2)
+		pin_config: HashMap<String, (IntV2, FourWayDir, f32)>,
+		bounding_box: (V2, V2),
+		sub_compute_cycles: usize
+	) -> Result<Self, String> {
+		Self::load(LogicDeviceSave::default(), pin_config, bounding_box, sub_compute_cycles)
+	}
+	pub fn load(
+		save: LogicDeviceSave,
+		pin_config: HashMap<String, (IntV2, FourWayDir, f32)>,
+		bounding_box: (V2, V2),
+		sub_compute_cycles: usize
 	) -> Result<Self, String> {
 		if sub_compute_cycles == 0 {
 			return Err("Sub-compute cycles cannot be 0".to_string());
 		}
+		let mut pins = HashMap::<String, RefCell<LogicConnectionPin>>::new();
+		for (pin_name, config) in pin_config {
+			let mut pin = LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, config.0, config.1, config.2);
+			pin.internal_state = match save.pin_states.get(&pin_name) {
+				Some(state) => *state,
+				None => {
+					return Err(format!("Logic device save does not include pin state for pin \"{}\"", &pin_name));
+				}
+			};
+			pins.insert(pin_name.clone(), RefCell::new(pin));
+		}
 		Ok(Self {
-			pins: RefCell::new(hashmap_into_refcells(pins)),
-			ui_data: UIData::from_pos_dir(position_grid, rotation),
-			unique_name,
-			sub_compute_cycles,
-			bounding_box
+			pins: RefCell::new(pins),
+			ui_data: UIData::new(save.pos, save.dir, bounding_box),
+			name_opt: save.name_opt,
+			sub_compute_cycles: 1,
+			bit_width: save.bit_width
 		})
+	}
+	pub fn save(&self) -> LogicDeviceSave {
+		let mut pin_states = HashMap::<String, LogicState>::new();
+		let pins = self.pins.borrow();
+		for (name, pin_cell) in pins.iter() {
+			pin_states.insert(name.clone(), pin_cell.borrow().internal_state);
+		}
+		LogicDeviceSave {
+			pin_states,
+			pos: self.ui_data.position,
+			dir: self.ui_data.direction,
+			bit_width: self.bit_width,
+			name_opt: self.name_opt.clone()
+		}
 	}
 }
 
@@ -755,7 +796,7 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn compute_step(&mut self, ancestors: &AncestryStack);
 	fn save(&self) -> Result<EnumAllLogicDevices, String>;
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>);
-	/// In CircuitVerse there can be for example one AND gate that acts like 8 gates, with 8-bit busses going in and out of it
+	/// In CircuitVerse there can be, for example, one AND gate that acts like 8 gates, with 8-bit busses going in and out of it
 	fn get_bit_width(&self) -> Option<u32> {Some(1)}
 	#[allow(unused)]
 	fn set_bit_width(&mut self, bit_width: u32) {}
@@ -839,20 +880,21 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 	fn get_ui_data_mut(&mut self) -> &mut UIData {
 		&mut self.get_generic_mut().ui_data
 	}
+	// TODO: fix
 	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
 		let local_bb: (V2, V2) = if self.is_circuit() {
 			if self.get_circuit().displayed_as_block {
-				self.get_generic().bounding_box
+				self.get_generic().ui_data.local_bb
 			}
 			else {
 				self.get_circuit().circuit_internals_bb
 			}
 		}
 		else {
-			self.get_generic().bounding_box
+			self.get_generic().ui_data.local_bb
 		};
-		let offset = grid_offset + self.get_generic().ui_data.position.to_v2();
-		(local_bb.0 + offset, local_bb.1 + offset)
+		let ui_data: &UIData = &self.get_generic().ui_data;
+		merge_points_to_bb(vec![ui_data.pos_to_parent_coords_float(local_bb.0) + grid_offset, ui_data.pos_to_parent_coords_float(local_bb.1) + grid_offset])
 	}
 	fn is_connected_to_net(&self, _net_id: u64) -> bool {
 		false// Don't highlight a whole component, only wires and pins
@@ -1164,7 +1206,7 @@ impl LogicCircuit {
 			count_pins_not_clock += 1;
 		}
 		self.block_pin_positions = block_pin_positions;
-		self.generic_device.bounding_box = (V2::new(-(CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH as f32), -1.0), V2::new(CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH as f32, ((count_pins_not_clock / 2) + 1) as f32));
+		self.generic_device.ui_data.local_bb = (V2::new(-(CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH as f32), -1.0), V2::new(CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH as f32, ((count_pins_not_clock / 2) + 1) as f32));
 	}
 	/// Nets reference connections to pins and pins may reference nets, this function makes sure each "connection" is either connected both ways or deleted if one end is missing
 	/// Use `update_pin_to_wire_connections()` instead
@@ -1542,7 +1584,7 @@ impl LogicCircuit {
 		for (_, comp_cell) in self.components.borrow().iter() {
 			let comp = comp_cell.borrow();
 			for (_, pin) in comp.get_pins_cell().borrow().iter() {
-				if pin.borrow().ui_data.position + comp.get_ui_data().position == point {
+				if comp.get_ui_data().pos_to_parent_coords(pin.borrow().ui_data.position) == point {
 					if let Some(source) = &pin.borrow().external_source {
 						match source {
 							LogicConnectionPinExternalSource::Net(net_id) => {
@@ -1963,7 +2005,7 @@ impl LogicCircuit {
 			let comp = comp_cell.borrow();
 			for (pin_id, pin_cell) in comp.get_pins_cell().borrow().iter() {
 				let mut pin = pin_cell.borrow_mut();
-				let pin_pos: IntV2 = pin.ui_data.position + comp.get_ui_data().position;
+				let pin_pos: IntV2 = comp.get_ui_data().pos_to_parent_coords(pin.ui_data.position);
 				// Fist check if pin is already connected to another net and remove from that net's connection list in case it's a different net
 				if let Some(source) = &pin.external_source {
 					if let LogicConnectionPinExternalSource::Net(old_net_id) = source {
@@ -2268,11 +2310,11 @@ impl LogicDevice for LogicCircuit {
 			// Rectangle
 			draw.draw_polyline(
 				vec![
-					V2::new(-self.generic_device.bounding_box.0.x, -self.generic_device.bounding_box.0.y),
-					V2::new(self.generic_device.bounding_box.1.x, -self.generic_device.bounding_box.0.y),
-					V2::new(self.generic_device.bounding_box.1.x, self.generic_device.bounding_box.1.y),
-					V2::new(-self.generic_device.bounding_box.0.x, self.generic_device.bounding_box.1.y),
-					V2::new(-self.generic_device.bounding_box.0.x, -self.generic_device.bounding_box.0.y)
+					V2::new(-self.generic_device.ui_data.local_bb.0.x, -self.generic_device.ui_data.local_bb.0.y),
+					V2::new(self.generic_device.ui_data.local_bb.1.x, -self.generic_device.ui_data.local_bb.0.y),
+					V2::new(self.generic_device.ui_data.local_bb.1.x, self.generic_device.ui_data.local_bb.1.y),
+					V2::new(-self.generic_device.ui_data.local_bb.0.x, self.generic_device.ui_data.local_bb.1.y),
+					V2::new(-self.generic_device.ui_data.local_bb.0.x, -self.generic_device.ui_data.local_bb.0.y)
 				],
 				draw.styles.color_foreground
 			);
