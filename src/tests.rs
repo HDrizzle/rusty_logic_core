@@ -66,38 +66,38 @@ fn logic_state_merge() {
 fn basic_sim_and_gate() {
 	let mut circuit = create_simple_circuit();
 	// Connections computed correctly
-	assert_eq!(circuit.get_pins_cell().borrow().get("a").unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(0)));
-	assert_eq!(circuit.get_pins_cell().borrow().get("b").unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(1)));
-	assert_eq!(circuit.get_pins_cell().borrow().get("q").unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(2)));
+	assert_eq!(circuit.get_pins_cell().borrow().get(&0).unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(0)));
+	assert_eq!(circuit.get_pins_cell().borrow().get(&1).unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(1)));
+	assert_eq!(circuit.get_pins_cell().borrow().get(&2).unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(2)));
 	{
 		let binding = circuit.components.borrow();
 		let binding2 = binding.get(&0).unwrap().borrow();
 		let and_gate = binding2.get_generic();
-		assert_eq!(and_gate.pins.borrow().get("a").unwrap().borrow().external_source, Some(LogicConnectionPinExternalSource::Net(0)));
-		assert_eq!(and_gate.pins.borrow().get("b").unwrap().borrow().external_source, Some(LogicConnectionPinExternalSource::Net(1)));
-		assert_eq!(and_gate.pins.borrow().get("q").unwrap().borrow().external_source, Some(LogicConnectionPinExternalSource::Net(2)));
+		assert_eq!(and_gate.pins.borrow().get(&0).unwrap().borrow().external_source, Some(LogicConnectionPinExternalSource::Net(0)));
+		assert_eq!(and_gate.pins.borrow().get(&1).unwrap().borrow().external_source, Some(LogicConnectionPinExternalSource::Net(1)));
+		assert_eq!(and_gate.pins.borrow().get(&2).unwrap().borrow().external_source, Some(LogicConnectionPinExternalSource::Net(2)));
 	}
 	// Set global inputs
-	circuit.set_pin_external_state("a", true.into()).unwrap();
-	circuit.set_pin_external_state("b", true.into()).unwrap();
+	circuit.set_pin_external_state(0, true.into()).unwrap();
+	circuit.set_pin_external_state(1, true.into()).unwrap();
 	// Compute
 	circuit.compute(&AncestryStack::new());
 	circuit.compute(&AncestryStack::new());
 	// AND gate output
-	assert_eq!(circuit.get_pin_state_panic("q"), true.into());
+	assert_eq!(circuit.get_pin_state_panic(2), true.into());
 	// Set global inputs
-	circuit.set_pin_external_state("a", false.into()).unwrap();
+	circuit.set_pin_external_state(0, false.into()).unwrap();
 	// Compute
 	circuit.compute(&AncestryStack::new());
 	circuit.compute(&AncestryStack::new());
 	// AND gate output
-	assert_eq!(circuit.get_pin_state_panic("q"), false.into());
+	assert_eq!(circuit.get_pin_state_panic(2), false.into());
 	// Set global inputs
-	circuit.set_pin_external_state("a", true.into()).unwrap();
-	circuit.set_pin_external_state("b", false.into()).unwrap();
+	circuit.set_pin_external_state(0, true.into()).unwrap();
+	circuit.set_pin_external_state(1, false.into()).unwrap();
 	// Compute
 	circuit.compute(&AncestryStack::new());
 	circuit.compute(&AncestryStack::new());
 	// AND gate output
-	assert_eq!(circuit.get_pin_state_panic("q"), false.into());
+	assert_eq!(circuit.get_pin_state_panic(2), false.into());
 }

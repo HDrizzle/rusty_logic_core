@@ -4,8 +4,9 @@ use std::{cell::RefCell, rc::Rc, collections::{HashMap, HashSet, VecDeque}, defa
 use serde::{Deserialize, Serialize};
 use crate::{prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
-use eframe::egui::{self, response::Response, Key, KeyboardShortcut, Modifiers, PointerButton};
+use eframe::egui::{self, response::Response, Align2, Key, KeyboardShortcut, Modifiers, PointerButton};
 use arboard;
+use common_macros::hash_map;
 
 fn logic_device_to_graphic_item(x: &dyn LogicDevice) -> &dyn GraphicSelectableItem {
 	x
@@ -169,7 +170,7 @@ impl LogicDriveSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GlobalSourceReference {
 	/// Pin of top level circuit, which always takes its inputs from Global
-	Global(String),
+	Global(u64),
 	/// Output from basic logic component
 	/// 0. Vec of strings, each one a sub-circuit of the last
 	/// 1. Component reference within the previously given circuit
@@ -222,7 +223,7 @@ impl LogicNet {
 											let circuit = component.get_circuit();
 											match circuit.nets.borrow().get(&child_circuit_net_id) {
 												Some(child_net) => out.append(&mut child_net.borrow().resolve_sources(&self_ancestors.push(circuit), *child_circuit_net_id, &new_caller_history)),
-												None => panic!("Internal connection in circuit \"{}\" references net {:?} inside sub-circuit \"{}\", the net does not exist", circuit.get_generic().unique_name, &child_circuit_net_id, component_cell.borrow().get_generic().unique_name)
+												None => panic!("Internal connection in circuit \"{}\" references net {:?} inside sub-circuit \"{}\", the net does not exist", circuit.get_generic().name, &child_circuit_net_id, component_cell.borrow().get_generic().name)
 											};
 										},
 										// Check if pin is driven by a regular component
@@ -232,9 +233,9 @@ impl LogicNet {
 									}
 								}
 							},
-							None => panic!("Net references internal pin {} on component \"{}\" circuit \"{}\", which doesn't exist on that component", component_pin_ref.pin_id, component_cell.borrow().get_generic().unique_name, circuit.get_generic().unique_name)
+							None => panic!("Net references internal pin {} on component \"{}\" circuit \"{}\", which doesn't exist on that component", component_pin_ref.pin_id, component_cell.borrow().get_generic().name, circuit.get_generic().name)
 						},
-						None => panic!("Net references internal pin on component {} circuit \"{}\", which doesn't exist in the circuit", component_pin_ref.component_id, circuit.get_generic().unique_name)
+						None => panic!("Net references internal pin on component {} circuit \"{}\", which doesn't exist in the circuit", component_pin_ref.component_id, circuit.get_generic().name)
 					},
 					CircuitWidePinReference::ExternalConnection(ext_conn_id) => match circuit.get_pins_cell().borrow().get(ext_conn_id) {
 						Some(pin) => {
@@ -284,7 +285,7 @@ impl LogicNet {
 		(new_state, sources)
 	}
 	/// Makes sure component connection is or isn't included in this net
-	pub fn edit_component_connection(&mut self, include: bool, comp_id: u64, pin_id: &str) {
+	pub fn edit_component_connection(&mut self, include: bool, comp_id: u64, pin_id: u64) {
 		let mut index_to_remove_opt = Option::<usize>::None;
 		for (conn_i, conn) in self.connections.iter().enumerate() {
 			match conn {
@@ -313,13 +314,13 @@ impl LogicNet {
 		}
 	}
 	/// Makes sure external connection is or isn't included in this net
-	pub fn edit_external_connection(&mut self, include: bool, pin_id: &str) {
+	pub fn edit_external_connection(&mut self, include: bool, pin_id: u64) {
 		let mut index_to_remove_opt = Option::<usize>::None;
 		for (conn_i, conn) in self.connections.iter().enumerate() {
 			match conn {
 				CircuitWidePinReference::ComponentPin(_) => {},
 				CircuitWidePinReference::ExternalConnection(test_pin_ref) => {
-					if test_pin_ref == pin_id {
+					if *test_pin_ref == pin_id {
 						if include {
 							return;// If the connection already exists, return
 						}
@@ -368,7 +369,9 @@ pub struct LogicConnectionPin {
 	/// Usually 1, may be something else if theres a curve on an OR input or something
 	pub length: f32,
 	pub ui_data: UIData,
-	pub bit_width: u32
+	pub bit_width: u32,
+	/// Only for user, defaults to ""
+	pub name: String
 }
 
 impl LogicConnectionPin {
@@ -386,7 +389,8 @@ impl LogicConnectionPin {
 			external_state: LogicState::Floating,
 			length,
 			ui_data: UIData::new(relative_end_grid, direction, (V2::new(1.0, -1.0), V2::new(3.0, 1.0))),
-			bit_width: 1
+			bit_width: 1,
+			name: String::new()
 		}
 	}
 	pub fn set_drive_internal(&mut self, state: LogicState) {
@@ -449,7 +453,8 @@ impl GraphicSelectableItem for LogicConnectionPin {
 			SelectProperty::PositionX(self.ui_data.position.0),
 			SelectProperty::PositionY(self.ui_data.position.1),
 			SelectProperty::GlobalConnectionState(self.state().to_bool_opt()),
-			SelectProperty::Direction(self.ui_data.direction)
+			SelectProperty::Direction(self.ui_data.direction),
+			SelectProperty::Name(self.name.clone())
 		]
 	}
 	fn set_property(&mut self, property: SelectProperty) {
@@ -470,6 +475,9 @@ impl GraphicSelectableItem for LogicConnectionPin {
 			SelectProperty::Direction(direction) => {
 				self.ui_data.direction = direction;
 			},
+			SelectProperty::Name(name) => {
+				self.name = name;
+			}
 			_ => {}
 		}
 	}
@@ -496,7 +504,7 @@ impl GraphicSelectableItem for LogicConnectionPin {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum CircuitWidePinReference {
 	ComponentPin(ComponentPinReference),
-	ExternalConnection(String)
+	ExternalConnection(u64)
 }
 
 impl CircuitWidePinReference {
@@ -514,11 +522,11 @@ impl CircuitWidePinReference {
 pub struct ComponentPinReference {
 	/// Has to be a query for something else (()), not <Box<dyn LogicDevice>> so it will work with serde
 	component_id: u64,
-	pin_id: String
+	pin_id: u64
 }
 
 impl ComponentPinReference {
-	pub fn new(component_id: u64, pin_id: String) -> Self {
+	pub fn new(component_id: u64, pin_id: u64) -> Self {
 		Self {
 			component_id,
 			pin_id
@@ -720,71 +728,69 @@ pub enum WireConnection {
 /// Not used for saving circuits
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct LogicDeviceSave {
-	pin_states: HashMap<String, LogicState>,
+	pin_states: HashMap<u64, LogicState>,
 	pos: IntV2,
 	dir: FourWayDir,
 	bit_width: Option<u32>,
-	name_opt: Option<String>
+	name: String
 }
 
 /// It is recommended for anything implementing the trait `LogicDevice` to have a field for this
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogicDeviceGeneric {
-	pub pins: RefCell<HashMap<String, RefCell<LogicConnectionPin>>>,
+	pub pins: RefCell<HashMap<u64, RefCell<LogicConnectionPin>>>,
 	pub ui_data: UIData,
-	pub name_opt: Option<String>,
+	pub name: String,
 	pub sub_compute_cycles: usize,
 	pub bit_width: Option<u32>
 }
 
 impl LogicDeviceGeneric {
 	pub fn new(
-		pin_config: HashMap<String, (IntV2, FourWayDir, f32)>,
+		pin_config: HashMap<u64, (IntV2, FourWayDir, f32, String)>,
 		bounding_box: (V2, V2),
 		sub_compute_cycles: usize
-	) -> Result<Self, String> {
+	) -> Self {
 		Self::load(LogicDeviceSave::default(), pin_config, bounding_box, sub_compute_cycles)
 	}
 	pub fn load(
 		save: LogicDeviceSave,
-		pin_config: HashMap<String, (IntV2, FourWayDir, f32)>,
+		pin_config: HashMap<u64, (IntV2, FourWayDir, f32, String)>,
 		bounding_box: (V2, V2),
 		sub_compute_cycles: usize
-	) -> Result<Self, String> {
+	) -> Self {
 		if sub_compute_cycles == 0 {
-			return Err("Sub-compute cycles cannot be 0".to_string());
+			panic!("Sub-compute cycles cannot be 0");
 		}
-		let mut pins = HashMap::<String, RefCell<LogicConnectionPin>>::new();
-		for (pin_name, config) in pin_config {
+		let mut pins = HashMap::<u64, RefCell<LogicConnectionPin>>::new();
+		for (pin_id, config) in pin_config {
 			let mut pin = LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, config.0, config.1, config.2);
-			pin.internal_state = match save.pin_states.get(&pin_name) {
+			pin.internal_state = match save.pin_states.get(&pin_id) {
 				Some(state) => *state,
-				None => {
-					return Err(format!("Logic device save does not include pin state for pin \"{}\"", &pin_name));
-				}
+				None => LogicState::Floating
 			};
-			pins.insert(pin_name.clone(), RefCell::new(pin));
+			pins.insert(pin_id.clone(), RefCell::new(pin));
 		}
-		Ok(Self {
+		Self {
 			pins: RefCell::new(pins),
 			ui_data: UIData::new(save.pos, save.dir, bounding_box),
-			name_opt: save.name_opt,
+			name: save.name,
 			sub_compute_cycles: 1,
 			bit_width: save.bit_width
-		})
+		}
 	}
 	pub fn save(&self) -> LogicDeviceSave {
-		let mut pin_states = HashMap::<String, LogicState>::new();
+		let mut pin_states = HashMap::<u64, LogicState>::new();
 		let pins = self.pins.borrow();
-		for (name, pin_cell) in pins.iter() {
-			pin_states.insert(name.clone(), pin_cell.borrow().internal_state);
+		for (pin_id, pin_cell) in pins.iter() {
+			pin_states.insert(*pin_id, pin_cell.borrow().internal_state);
 		}
 		LogicDeviceSave {
 			pin_states,
 			pos: self.ui_data.position,
 			dir: self.ui_data.direction,
 			bit_width: self.bit_width,
-			name_opt: self.name_opt.clone()
+			name: self.name.clone()
 		}
 	}
 }
@@ -819,17 +825,17 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	}
 	fn set_pin_external_state(
 		&mut self,
-		pin_id: &str,
+		pin_id: u64,
 		state: LogicState
 	) -> Result<(), String> {
 		let generic = self.get_generic_mut();
 		let pins = &generic.pins;
 		let mut pins_borrow_mut = pins.borrow_mut();
-		let pin: &mut LogicConnectionPin = pins_borrow_mut.get_mut(pin_id).expect(&format!("Pin ID {} does not work on logic device \"{}\"", pin_id, generic.unique_name)).get_mut();
+		let pin: &mut LogicConnectionPin = pins_borrow_mut.get_mut(&pin_id).expect(&format!("Pin ID {} does not work on logic device \"{}\"", pin_id, generic.name)).get_mut();
 		pin.set_drive_external(state);
 		Ok(())
 	}
-	fn get_pins_cell(&self) -> &RefCell<HashMap<String, RefCell<LogicConnectionPin>>> {
+	fn get_pins_cell(&self) -> &RefCell<HashMap<u64, RefCell<LogicConnectionPin>>> {
 		&self.get_generic().pins
 	}
 	/*fn query_pin_mut(&mut self, pin_id: &str) -> Option<&mut LogicConnectionPin> {
@@ -839,17 +845,17 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 			None => None
 		}
 	}*/
-	fn set_all_pin_states(&mut self, states: Vec<(&str, LogicState, LogicDriveSource)>) -> Result<(), String> {
+	fn set_all_pin_states(&mut self, states: Vec<(u64, LogicState, LogicDriveSource)>) -> Result<(), String> {
 		for (pin_query, state, _source) in states {
-			self.set_pin_external_state(&pin_query, state)?;
+			self.set_pin_external_state(pin_query, state)?;
 		}
 		Ok(())
 	}
-	fn get_pin_state_panic(&self, pin_query: &str) -> LogicState {
-		self.get_pins_cell().borrow().get(pin_query).expect(&format!("Pin query {:?} for logic device \"{}\" not valid", &pin_query, &self.get_generic().unique_name)).borrow().state()
+	fn get_pin_state_panic(&self, pin_query: u64) -> LogicState {
+		self.get_pins_cell().borrow().get(&pin_query).expect(&format!("Pin query {:?} for logic device \"{}\" not valid", &pin_query, &self.get_generic().name)).borrow().state()
 	}
-	fn set_pin_internal_state_panic(&mut self, pin_query: &str, state: LogicState) {
-		self.get_pins_cell().borrow_mut().get_mut(pin_query).expect(&format!("Pin query {:?} not valid", &pin_query)).borrow_mut().internal_state = state;
+	fn set_pin_internal_state_panic(&mut self, pin_query: u64, state: LogicState) {
+		self.get_pins_cell().borrow_mut().get_mut(&pin_query).expect(&format!("Pin query {:?} not valid", &pin_query)).borrow_mut().internal_state = state;
 	}
 	fn into_box(self: Box<Self>) -> Box<dyn LogicDevice> where Self: Sized {
 		self as Box<dyn LogicDevice>
@@ -985,7 +991,7 @@ impl<'a> AncestryStack<'a> {
 			if i ==  0 {
 				continue;
 			}
-			out.push(circuit.get_generic().unique_name.clone());
+			out.push(circuit.get_generic().name.clone());
 		}
 		SubCircuitPath(out)
 	}
@@ -997,7 +1003,7 @@ impl<'a> PartialEq for AncestryStack<'a> {
 			return false;
 		}
 		for i in 0..self.0.len() {
-			if self.0[i].get_generic().unique_name != other.0[i].get_generic().unique_name {
+			if self.0[i].get_generic().name != other.0[i].get_generic().name {// TODO: maybe make this better
 				return false;
 			}
 		}
@@ -1009,7 +1015,7 @@ impl<'a> PartialEq for AncestryStack<'a> {
 pub enum GraphicSelectableItemRef {
 	Component(u64),
 	Wire(u64),
-	Pin(String)
+	Pin(u64)
 }
 
 #[derive(Debug, Default, Clone)]
@@ -1078,30 +1084,28 @@ pub struct LogicCircuit {
 	pub wires: RefCell<HashMap<u64, RefCell<Wire>>>,
 	pub save_path: String,
 	/// Inspired by CircuitVerse, block-diagram version of circuit
-	/// {pin ID: (relative position (ending), direction)}
-	block_pin_positions: HashMap<String, (IntV2, FourWayDir)>,
+	/// {pin ID: (relative position (ending), direction, whether to show name)}
+	pub block_pin_positions: HashMap<u64, (IntV2, FourWayDir, bool)>,
 	displayed_as_block: bool,
 	/// For UI
 	pub tool: RefCell<Tool>,
 	is_toplevel: bool,
 	/// Bounding box for the circuit, not the block diagram, relative to this circuit
 	/// The block diagram BB can be found at `self.generic_device.bounding_box`
-	pub circuit_internals_bb: (V2, V2)
+	pub circuit_internals_bb: (V2, V2),
+	/// For example, "D Latch", not "Register #7"
+	pub type_name: String
 }
 
 impl LogicCircuit {
 	pub fn new(
 		components_not_celled: HashMap<u64, Box<dyn LogicDevice>>,
-		external_connections: HashMap<String, LogicConnectionPin>,
+		external_connections: Vec<(IntV2, FourWayDir, f32, String)>,
 		nets: HashMap<u64, LogicNet>,
-		position_grid: IntV2,
-		unique_name: String,
+		type_name: String,
 		sub_compute_cycles: usize,
 		wires: HashMap<u64, Wire>,
 		save_path: String,
-		clock_enabled: bool,
-		clock_state: bool,
-		clock_freq: f32,
 		displayed_as_block: bool,
 		is_toplevel: bool
 	) -> Result<Self, String> {
@@ -1111,13 +1115,10 @@ impl LogicCircuit {
 		}
 		let mut new = Self {
 			generic_device: LogicDeviceGeneric::new(
-				external_connections,
-				position_grid,
-				unique_name,
-				sub_compute_cycles,
-				FourWayDir::E,
-				(V2::zeros(), V2::zeros())
-			)?,
+				vec_to_u64_keyed_hashmap(external_connections),
+				(V2::zeros(), V2::zeros()),
+				sub_compute_cycles
+			),
 			components: RefCell::new(components),
 			nets: RefCell::new(hashmap_into_refcells(nets)),
 			wires: RefCell::new(hashmap_into_refcells(wires)),
@@ -1126,30 +1127,28 @@ impl LogicCircuit {
 			displayed_as_block,
 			tool: RefCell::new(Tool::default()),
 			is_toplevel,
-			circuit_internals_bb: (V2::zeros(), V2::zeros())
+			circuit_internals_bb: (V2::zeros(), V2::zeros()),
+			type_name
 		};
 		new.recompute_default_layout();
 		new.check_wire_geometry_and_connections();
 		Ok(new)
 	}
 	pub fn new_mostly_default(
-		name: String,
-		save_path: String
+		type_name: String,
+		save_path: String,
+		toplevel: bool
 	) -> Self {
 		Self::new(
 			HashMap::new(),
+			Vec::new(),
 			HashMap::new(),
-			HashMap::new(),
-			IntV2(0, 0),
-			name,
+			type_name,
 			1,
 			HashMap::new(),
 			save_path,
 			false,
-			false,
-			1.0,
-			false,
-			true
+			toplevel
 		).unwrap()
 	}
 	pub fn from_save(mut save: LogicCircuitSave, save_path: String, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir) -> Result<Self, String> {
@@ -1175,38 +1174,65 @@ impl LogicCircuit {
 						pin.external_source = None;
 					}
 				}
+				pin.internal_source = None;// Will be automatically assigned from wire geometry, remove because of invalid net references
 			}
+		}
+		// Reconstruct wires
+		let mut reconstructed_wires = HashMap::<u64, RefCell<Wire>>::new();
+		for (wire_id, wire_geom) in save.wires {
+			reconstructed_wires.insert(wire_id, RefCell::new(Wire::new(wire_geom.0, wire_geom.2, wire_geom.1, 1, 0, Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new())))));
 		}
 		let mut out = Self {
 			generic_device: save.generic_device,
 			components: RefCell::new(components),
-			nets: RefCell::new(hashmap_into_refcells(save.nets)),
-			wires: RefCell::new(hashmap_into_refcells(save.wires)),
+			nets: RefCell::new(hash_map!(0 => RefCell::new(LogicNet::new(Vec::new())))),
+			wires: RefCell::new(reconstructed_wires),
 			save_path,
 			block_pin_positions: save.block_pin_positions,
 			displayed_as_block,
 			tool: RefCell::new(Tool::default()),
 			is_toplevel: toplevel,
-			circuit_internals_bb: (V2::zeros(), V2::zeros())
+			circuit_internals_bb: (V2::zeros(), V2::zeros()),
+			type_name: save.type_name
 		};
 		out.check_wire_geometry_and_connections();
+		out.update_pin_block_positions();
 		Ok(out)
 	}
 	fn recompute_default_layout(&mut self) {
 		// Bounding box & layout, like in CircuitVerse
 		let mut count_pins_not_clock: i32 = 0;
-		let mut block_pin_positions: HashMap<String, (IntV2, FourWayDir)> = HashMap::new();
-		for (pin_ref, pin_cell) in self.get_pins_cell().borrow().iter() {
+		let mut block_pin_positions: HashMap<u64, (IntV2, FourWayDir, bool)> = HashMap::new();
+		for (pin_id, _) in self.get_pins_cell().borrow().iter() {
 			if count_pins_not_clock % 2 == 0 {
-				block_pin_positions.insert(pin_ref.clone(), (IntV2(-(CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH as i32) - 1, count_pins_not_clock / 2), FourWayDir::W));
+				block_pin_positions.insert(*pin_id, (IntV2(-(CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH as i32) - 1, count_pins_not_clock / 2), FourWayDir::W, true));
 			}
 			else {
-				block_pin_positions.insert(pin_ref.clone(), (IntV2(CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH as i32 + 1, count_pins_not_clock / 2), FourWayDir::E));
+				block_pin_positions.insert(*pin_id, (IntV2(CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH as i32 + 1, count_pins_not_clock / 2), FourWayDir::E, true));
 			}
 			count_pins_not_clock += 1;
 		}
 		self.block_pin_positions = block_pin_positions;
 		self.generic_device.ui_data.local_bb = (V2::new(-(CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH as f32), -1.0), V2::new(CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH as f32, ((count_pins_not_clock / 2) + 1) as f32));
+		self.update_pin_block_positions();
+	}
+	/// Makes sure all pins have a block position and that there are no extra block positions
+	pub fn update_pin_block_positions(&mut self) {
+		let pins = self.generic_device.pins.borrow();
+		for pin_id in pins.keys() {
+			if !self.block_pin_positions.contains_key(pin_id) {
+				self.block_pin_positions.insert(pin_id.clone(), (IntV2(0, 0), FourWayDir::default(), true));
+			}
+		}
+		let mut block_positions_to_delete = Vec::<u64>::new();
+		for pin_id in self.block_pin_positions.keys() {
+			if !pins.contains_key(pin_id) {
+				block_positions_to_delete.push(*pin_id);
+			}
+		}
+		for pin_id_to_del in block_positions_to_delete {
+			self.block_pin_positions.remove(&pin_id_to_del);
+		}
 	}
 	/// Nets reference connections to pins and pins may reference nets, this function makes sure each "connection" is either connected both ways or deleted if one end is missing
 	/// Use `update_pin_to_wire_connections()` instead
@@ -1251,7 +1277,7 @@ impl LogicCircuit {
 					match source {
 						LogicConnectionPinExternalSource::Global => panic!("Pin {:?} of component {:?} has external source 'Global' which doesn't make sense", &pin_id, &comp_id),
 						LogicConnectionPinExternalSource::Net(net_id) => match self.nets.borrow_mut().get_mut(&net_id) {
-							Some(net) => net.borrow_mut().edit_component_connection(true, *comp_id, pin_id),
+							Some(net) => net.borrow_mut().edit_component_connection(true, *comp_id, *pin_id),
 							None => pin_to_net_connections_to_drop.push(CircuitWidePinReference::ComponentPin(ComponentPinReference::new(*comp_id, pin_id.to_owned()))),
 						}
 					}
@@ -1262,9 +1288,9 @@ impl LogicCircuit {
 		for (pin_id, pin) in self.get_pins_cell().borrow().iter() {
 			if let Some(source) = &pin.borrow().internal_source {
 				match source {
-					LogicConnectionPinInternalSource::ComponentInternal => panic!("External connection pin {} of circuit {:?} has internal source 'ComponentInternal' which doesn't make sense", pin_id, &self.generic_device.unique_name),
+					LogicConnectionPinInternalSource::ComponentInternal => panic!("External connection pin {} of circuit {:?} has internal source 'ComponentInternal' which doesn't make sense", pin_id, &self.generic_device.name),
 					LogicConnectionPinInternalSource::Net(net_query) => match self.nets.borrow().get(&net_query) {
-						Some(net) => net.borrow_mut().edit_external_connection(true, pin_id),
+						Some(net) => net.borrow_mut().edit_external_connection(true, *pin_id),
 						None => pin_to_net_connections_to_drop.push(CircuitWidePinReference::ExternalConnection(pin_id.to_owned())),
 					}
 				}
@@ -1286,6 +1312,7 @@ impl LogicCircuit {
 	pub fn toplevel_ui_interact<'a>(&mut self, response: Response, context: &egui::Context, draw: &ComponentDrawInfo<'a>, mut input_state: egui::InputState) -> bool {
 		let mut return_recompute_connections = false;
 		let mut new_tool_opt = Option::<Tool>::None;
+		let mut recompute_pin_block_positions = false;
 		let mouse_pos_grid_opt: Option<V2> = match response.hover_pos() {
 			Some(pos_px) => Some(draw.mouse_pos2_to_grid(pos_px)),
 			None => None
@@ -1447,12 +1474,14 @@ impl LogicCircuit {
 						},
 						Err(_) => {}
 					}
+					recompute_pin_block_positions = true;
 				}
 				// Delete
 				if input_state.consume_key(Modifiers::NONE, Key::Backspace) {
 					for item_ref in selected_graphics.iter() {
 						self.remove_graphic_item(item_ref);
 					}
+					recompute_pin_block_positions = true;
 					return_recompute_connections = true;
 					*selected_graphics = HashSet::new();
 				}
@@ -1531,6 +1560,9 @@ impl LogicCircuit {
 		if let Some(new_tool) = new_tool_opt {
 			*self.tool.borrow_mut() = new_tool;
 		}
+		if recompute_pin_block_positions {
+			self.update_pin_block_positions();
+		}
 		return_recompute_connections
 	}
 	pub fn paste(&self, item_set: &CopiedItemSet) -> Vec<GraphicSelectableItemRef> {
@@ -1540,7 +1572,7 @@ impl LogicCircuit {
 				CopiedGraphicItem::Component(comp_save) => self.insert_component(comp_save),
 				CopiedGraphicItem::ExternalConnection(pin) => {
 					let mut pins = self.generic_device.pins.borrow_mut();
-					let name = new_pin_name(&*pins);
+					let name = lowest_unused_key(&*pins);
 					pins.insert(name.clone(), RefCell::new(pin.clone()));
 					GraphicSelectableItemRef::Pin(name)
 				},
@@ -2009,7 +2041,7 @@ impl LogicCircuit {
 				// Fist check if pin is already connected to another net and remove from that net's connection list in case it's a different net
 				if let Some(source) = &pin.external_source {
 					if let LogicConnectionPinExternalSource::Net(old_net_id) = source {
-						self.nets.borrow().get(old_net_id).expect(&format!("Net ID {} invalid when removing pin \"{}\" from its connection list", old_net_id, pin_id)).borrow_mut().edit_component_connection(false, *comp_id, pin_id);
+						self.nets.borrow().get(old_net_id).expect(&format!("Net ID {} invalid when removing pin \"{}\" from its connection list", old_net_id, pin_id)).borrow_mut().edit_component_connection(false, *comp_id, *pin_id);
 					}
 				}
 				match self.is_point_on_wire(pin_pos, None) {
@@ -2018,7 +2050,7 @@ impl LogicCircuit {
 							//let wire = self.wires.borrow_mut();
 							//let new_net_id: u64 = wire.get(&wire_id).expect(&format!("self.is_point_on_wire() returned invalid wire ID {}", wire_id)).borrow().net;
 							pin.external_source = Some(LogicConnectionPinExternalSource::Net(new_net_id));
-							self.nets.borrow().get(&new_net_id).expect("Net ID invalid").borrow_mut().edit_component_connection(true, *comp_id, pin_id);
+							self.nets.borrow().get(&new_net_id).expect("Net ID invalid").borrow_mut().edit_component_connection(true, *comp_id, *pin_id);
 						}
 						// Update wire connection
 						self.add_connection_to_wire(WireConnection::Pin(CircuitWidePinReference::ComponentPin(ComponentPinReference::new(*comp_id, pin_id.clone()))), wire_id, pin_pos, wire_intercept_triple);
@@ -2036,7 +2068,7 @@ impl LogicCircuit {
 			// Fist check if pin is already connected to another net and remove from that net's connection list in case it's a different net
 			if let Some(source) = &pin.internal_source {
 				if let LogicConnectionPinInternalSource::Net(old_net_id) = source {
-					self.nets.borrow().get(old_net_id).expect("Net ID invalid").borrow_mut().edit_external_connection(false, &pin_id);
+					self.nets.borrow().get(old_net_id).expect("Net ID invalid").borrow_mut().edit_external_connection(false, *pin_id);
 				}
 			}
 			match self.is_point_on_wire(pin_pos, None) {
@@ -2045,7 +2077,7 @@ impl LogicCircuit {
 						//let wires = self.wires.borrow_mut();
 						//let new_net_id: u64 = wires.get(&wire_id).expect(&format!("self.is_point_on_wire() returned invalid wire ID {}", wire_id)).borrow().net;
 						pin.internal_source = Some(LogicConnectionPinInternalSource::Net(new_net_id));
-						self.nets.borrow().get(&new_net_id).expect(&format!("Wire {} has invalid net ID {}", wire_id, new_net_id)).borrow_mut().edit_external_connection(true, &pin_id);
+						self.nets.borrow().get(&new_net_id).expect(&format!("Wire {} has invalid net ID {}", wire_id, new_net_id)).borrow_mut().edit_external_connection(true, *pin_id);
 					}
 					// Update wire connection
 					self.add_connection_to_wire(WireConnection::Pin(CircuitWidePinReference::ExternalConnection(pin_id.clone())), wire_id, pin_pos, wire_intercept_triple);
@@ -2226,7 +2258,7 @@ impl LogicCircuit {
 			if let Some(source) = int_source_opt {
 				match source {
 					LogicConnectionPinInternalSource::Net(net_id) => pin_cell.borrow_mut().set_drive_internal(self.nets.borrow().get(&net_id).expect(&format!("External connection pin {} has invalid net query {}", pin_id, net_id)).borrow().state),
-					LogicConnectionPinInternalSource::ComponentInternal => panic!("External connection pin {} for circuit \"{}\" has the internal source as ComponentInternal which shouldn't happen", pin_id, &self.generic_device.unique_name)
+					LogicConnectionPinInternalSource::ComponentInternal => panic!("External connection pin {} for circuit \"{}\" has the internal source as ComponentInternal which shouldn't happen", pin_id, &self.generic_device.name)
 				}
 			}
 			else {
@@ -2271,21 +2303,62 @@ impl LogicCircuit {
 			components_save.insert(*ref_, component.borrow().save()?);
 		}
 		// Un-RefCell Wires
-		let mut wires_save = HashMap::<u64, Wire>::new();
-		for (ref_, wire) in self.wires.borrow().iter() {
-			wires_save.insert(*ref_, wire.borrow().clone());
+		let mut wires_save = HashMap::<u64, (IntV2, FourWayDir, u32)>::new();
+		for (ref_, wire_cell) in self.wires.borrow().iter() {
+			let wire = wire_cell.borrow();
+			wires_save.insert(*ref_, (wire.ui_data.position, wire.direction, wire.length));
 		}
 		// First, actually save this circuit
 		let save = LogicCircuitSave {
 			generic_device: self.generic_device.clone(),
 			components: components_save,
-			nets: hashmap_unwrap_refcells(self.nets.borrow().clone()),
 			wires: wires_save,
-			block_pin_positions: self.block_pin_positions.clone()
+			block_pin_positions: self.block_pin_positions.clone(),
+			type_name: self.type_name.clone()
 		};
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_path), &raw_string))?;
 		Ok(())
+	}
+	pub fn draw_as_block<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+		// Rectangle
+		draw.draw_polyline(
+			vec![
+				V2::new(self.generic_device.ui_data.local_bb.0.x, self.generic_device.ui_data.local_bb.0.y),
+				V2::new(self.generic_device.ui_data.local_bb.1.x, self.generic_device.ui_data.local_bb.0.y),
+				V2::new(self.generic_device.ui_data.local_bb.1.x, self.generic_device.ui_data.local_bb.1.y),
+				V2::new(self.generic_device.ui_data.local_bb.0.x, self.generic_device.ui_data.local_bb.1.y),
+				V2::new(self.generic_device.ui_data.local_bb.0.x, self.generic_device.ui_data.local_bb.0.y)
+			],
+			draw.styles.color_foreground
+		);
+		// Pins at alternate locations
+		for (pin_id, pin_cell) in self.generic_device.pins.borrow().iter() {
+			let pin_alternate_config = self.block_pin_positions.get(pin_id).expect("Pin missing from block layout");
+			draw.draw_polyline(
+				vec![
+					pin_alternate_config.0.to_v2(),
+					(pin_alternate_config.0 + pin_alternate_config.1.to_unit_int()).to_v2()
+				],
+				draw.styles.color_foreground
+			);
+			// Pin name
+			let pin = pin_cell.borrow();
+			draw.text(
+				pin.name.clone(),
+				pin_alternate_config.0.to_v2() + (pin_alternate_config.1.to_unit()*0.2),
+				match pin_alternate_config.1 {
+					FourWayDir::E => Align2::LEFT_CENTER,
+					FourWayDir::N => Align2::CENTER_BOTTOM,
+					FourWayDir::W => Align2::RIGHT_CENTER,
+					FourWayDir::S => Align2::CENTER_TOP
+				},
+				draw.styles.text_color,
+				draw.styles.text_size_grid
+			);
+		}
+		// Name
+		// TODO
 	}
 }
 
@@ -2307,21 +2380,7 @@ impl LogicDevice for LogicCircuit {
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		if self.displayed_as_block {
-			// Rectangle
-			draw.draw_polyline(
-				vec![
-					V2::new(-self.generic_device.ui_data.local_bb.0.x, -self.generic_device.ui_data.local_bb.0.y),
-					V2::new(self.generic_device.ui_data.local_bb.1.x, -self.generic_device.ui_data.local_bb.0.y),
-					V2::new(self.generic_device.ui_data.local_bb.1.x, self.generic_device.ui_data.local_bb.1.y),
-					V2::new(-self.generic_device.ui_data.local_bb.0.x, self.generic_device.ui_data.local_bb.1.y),
-					V2::new(-self.generic_device.ui_data.local_bb.0.x, -self.generic_device.ui_data.local_bb.0.y)
-				],
-				draw.styles.color_foreground
-			);
-			// Pins at alternate locations
-			// TODO
-			// Name
-			// TODO
+			self.draw_as_block(draw);
 		}
 		else {
 			// Draws the circuit with wires and everything how you would expect

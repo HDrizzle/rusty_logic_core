@@ -1,0 +1,1 @@
+{"generic_device":{"pins":{},"ui_data":{"selected":false,"position":[0,0],"direction":"E","position_before_dragging":[0,0],"dragging_offset":[0.0,0.0],"local_bb":[[-10.0,-1.0],[10.0,1.0]]},"name":"","sub_compute_cycles":1,"bit_width":null},"components":{},"wires":{},"block_pin_positions":{},"type_name":"D LAtch"}

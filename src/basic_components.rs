@@ -1,4 +1,4 @@
-use crate::{prelude::*, simulator::{AncestryStack, LogicConnectionPinInternalSource}};
+use crate::{prelude::*, simulator::AncestryStack};
 use serde::{Deserialize, Serialize};
 use common_macros::hash_map;
 use std::time::{Instant, Duration};
@@ -6,14 +6,14 @@ use std::time::{Instant, Duration};
 /// For the component search popup
 pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
 	vec![
-		GateAnd::new(IntV2(0, 0), "", FourWayDir::default()).save().unwrap(),
-		GateNand::new(IntV2(0, 0), "", FourWayDir::default()).save().unwrap(),
-		GateNot::new(IntV2(0, 0), "", FourWayDir::default()).save().unwrap(),
-		GateOr::new(IntV2(0, 0), "", FourWayDir::default()).save().unwrap(),
-		GateNor::new(IntV2(0, 0), "", FourWayDir::default()).save().unwrap(),
-		GateXor::new(IntV2(0, 0), "", FourWayDir::default()).save().unwrap(),
-		GateXnor::new(IntV2(0, 0), "", FourWayDir::default()).save().unwrap(),
-		Clock::new(false, false, 1.0, IntV2(0, 0), FourWayDir::default()).save().unwrap()
+		GateAnd::new().save().unwrap(),
+		GateNand::new().save().unwrap(),
+		GateNot::new().save().unwrap(),
+		GateOr::new().save().unwrap(),
+		GateNor::new().save().unwrap(),
+		GateXor::new().save().unwrap(),
+		GateXnor::new().save().unwrap(),
+		Clock::new().save().unwrap()
 	]
 }
 
@@ -21,23 +21,20 @@ pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
 pub struct GateAnd(LogicDeviceGeneric);
 
 impl GateAnd {
-	pub fn new(
-		position_grid: IntV2,
-		unique_name: &str,
-		rotation: FourWayDir
-	) -> Self {
-		Self(LogicDeviceGeneric::new(
-			hash_map!{
-				"a".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, -1), FourWayDir::W, 1.0),
-				"b".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, 1), FourWayDir::W, 1.0),
-				"q".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(3, 0), FourWayDir::E, 1.0),
-			},
-			position_grid,
-			unique_name.to_owned(),
-			1,
-			rotation,
-			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0))
-		).unwrap())
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default())
+	}
+	pub fn from_save(save: LogicDeviceSave) -> Self {
+		Self(LogicDeviceGeneric::load(
+			save,
+			hash_map!(
+				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned()),
+				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned()),
+				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned()),
+			),
+			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			1
+		))
 	}
 }
 
@@ -49,10 +46,10 @@ impl LogicDevice for GateAnd {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack) {
-		self.set_pin_internal_state_panic("q", (self.get_pin_state_panic("a").to_bool() && self.get_pin_state_panic("b").to_bool()).into());
+		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() && self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
-		Ok(EnumAllLogicDevices::GateAnd(self.clone()))
+		Ok(EnumAllLogicDevices::GateAnd(self.0.save()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(vec![
@@ -69,23 +66,20 @@ impl LogicDevice for GateAnd {
 pub struct GateNand(LogicDeviceGeneric);
 
 impl GateNand {
-	pub fn new(
-		position_grid: IntV2,
-		unique_name: &str,
-		rotation: FourWayDir
-	) -> Self {
-		Self(LogicDeviceGeneric::new(
-			hash_map!{
-				"a".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, -1), FourWayDir::W, 1.0),
-				"b".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, 1), FourWayDir::W, 1.0),
-				"q".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(4, 0), FourWayDir::E, 1.0),
-			},
-			position_grid,
-			unique_name.to_owned(),
-			1,
-			rotation,
-			(V2::new(-2.0, -2.0), V2::new(3.0, 2.0))
-		).unwrap())
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default())
+	}
+	pub fn from_save(save: LogicDeviceSave) -> Self {
+		Self(LogicDeviceGeneric::load(
+			save,
+			hash_map!(
+				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned()),
+				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned()),
+				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned()),
+			),
+			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			1
+		))
 	}
 }
 
@@ -97,11 +91,11 @@ impl LogicDevice for GateNand {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack) {
-		let and: bool = self.get_pin_state_panic("a").to_bool() && self.get_pin_state_panic("b").to_bool();
-		self.set_pin_internal_state_panic("q", (!and).into());
+		let and: bool = self.get_pin_state_panic(0).to_bool() && self.get_pin_state_panic(1).to_bool();
+		self.set_pin_internal_state_panic(2, (!and).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
-		Ok(EnumAllLogicDevices::GateNand(self.clone()))
+		Ok(EnumAllLogicDevices::GateNand(self.0.save()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(vec![
@@ -119,22 +113,19 @@ impl LogicDevice for GateNand {
 pub struct GateNot(LogicDeviceGeneric);
 
 impl GateNot {
-	pub fn new(
-		position_grid: IntV2,
-		unique_name: &str,
-		rotation: FourWayDir
-	) -> Self {
-		Self(LogicDeviceGeneric::new(
-			hash_map!{
-				"a".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, 0), FourWayDir::W, 1.0),
-				"q".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(4, 0), FourWayDir::E, 1.0),
-			},
-			position_grid,
-			unique_name.to_owned(),
-			1,
-			rotation,
-			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0))
-		).unwrap())
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default())
+	}
+	pub fn from_save(save: LogicDeviceSave) -> Self {
+		Self(LogicDeviceGeneric::load(
+			save,
+			hash_map!(
+				0 => (IntV2(-3, 0), FourWayDir::W, 1.0, "a".to_owned()),
+				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned()),
+			),
+			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			1
+		))
 	}
 }
 
@@ -146,10 +137,10 @@ impl LogicDevice for GateNot {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack) {
-		self.set_pin_internal_state_panic("q", (!self.get_pin_state_panic("a").to_bool()).into());
+		self.set_pin_internal_state_panic(1, (!self.get_pin_state_panic(0).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
-		Ok(EnumAllLogicDevices::GateNot(self.clone()))
+		Ok(EnumAllLogicDevices::GateNot(self.0.save()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(vec![
@@ -166,23 +157,20 @@ impl LogicDevice for GateNot {
 pub struct GateOr(LogicDeviceGeneric);
 
 impl GateOr {
-	pub fn new(
-		position_grid: IntV2,
-		unique_name: &str,
-		rotation: FourWayDir
-	) -> Self {
-		Self(LogicDeviceGeneric::new(
-			hash_map!{
-				"a".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, -1), FourWayDir::W, 1.0),
-				"b".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, 1), FourWayDir::W, 1.0),
-				"q".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(3, 0), FourWayDir::E, 1.0),
-			},
-			position_grid,
-			unique_name.to_owned(),
-			1,
-			rotation,
-			(V2::new(-2.0, -2.0), V2::new(3.0, 2.0))
-		).unwrap())
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default())
+	}
+	pub fn from_save(save: LogicDeviceSave) -> Self {
+		Self(LogicDeviceGeneric::load(
+			save,
+			hash_map!(
+				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned()),
+				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned()),
+				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned()),
+			),
+			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			1
+		))
 	}
 }
 
@@ -194,10 +182,10 @@ impl LogicDevice for GateOr {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack) {
-		self.set_pin_internal_state_panic("q", (self.get_pin_state_panic("a").to_bool() || self.get_pin_state_panic("b").to_bool()).into());
+		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() || self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
-		Ok(EnumAllLogicDevices::GateOr(self.clone()))
+		Ok(EnumAllLogicDevices::GateOr(self.0.save()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(vec![
@@ -218,23 +206,20 @@ impl LogicDevice for GateOr {
 pub struct GateNor(LogicDeviceGeneric);
 
 impl GateNor {
-	pub fn new(
-		position_grid: IntV2,
-		unique_name: &str,
-		rotation: FourWayDir
-	) -> Self {
-		Self(LogicDeviceGeneric::new(
-			hash_map!{
-				"a".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, -1), FourWayDir::W, 1.0),
-				"b".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, 1), FourWayDir::W, 1.0),
-				"q".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(4, 0), FourWayDir::E, 1.0),
-			},
-			position_grid,
-			unique_name.to_owned(),
-			1,
-			rotation,
-			(V2::new(-2.0, -2.0), V2::new(3.0, 2.0))
-		).unwrap())
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default())
+	}
+	pub fn from_save(save: LogicDeviceSave) -> Self {
+		Self(LogicDeviceGeneric::load(
+			save,
+			hash_map!(
+				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned()),
+				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned()),
+				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned()),
+			),
+			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			1
+		))
 	}
 }
 
@@ -246,10 +231,10 @@ impl LogicDevice for GateNor {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack) {
-		self.set_pin_internal_state_panic("q", (!(self.get_pin_state_panic("a").to_bool() || self.get_pin_state_panic("b").to_bool())).into());
+		self.set_pin_internal_state_panic(2, (!(self.get_pin_state_panic(0).to_bool() || self.get_pin_state_panic(1).to_bool())).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
-		Ok(EnumAllLogicDevices::GateNor(self.clone()))
+		Ok(EnumAllLogicDevices::GateNor(self.0.save()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(vec![
@@ -271,23 +256,20 @@ impl LogicDevice for GateNor {
 pub struct GateXor(LogicDeviceGeneric);
 
 impl GateXor {
-	pub fn new(
-		position_grid: IntV2,
-		unique_name: &str,
-		rotation: FourWayDir
-	) -> Self {
-		Self(LogicDeviceGeneric::new(
-			hash_map!{
-				"a".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, -1), FourWayDir::W, 0.7),
-				"b".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, 1), FourWayDir::W, 0.7),
-				"q".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(3, 0), FourWayDir::E, 1.0),
-			},
-			position_grid,
-			unique_name.to_owned(),
-			1,
-			rotation,
-			(V2::new(-2.0, -2.0), V2::new(3.0, 2.0))
-		).unwrap())
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default())
+	}
+	pub fn from_save(save: LogicDeviceSave) -> Self {
+		Self(LogicDeviceGeneric::load(
+			save,
+			hash_map!(
+				0 => (IntV2(-3, -1), FourWayDir::W, 0.7, "a".to_owned()),
+				1 => (IntV2(-3, 1), FourWayDir::W, 0.7, "b".to_owned()),
+				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned()),
+			),
+			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			1
+		))
 	}
 }
 
@@ -299,10 +281,10 @@ impl LogicDevice for GateXor {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack) {
-		self.set_pin_internal_state_panic("q", (self.get_pin_state_panic("a").to_bool() != self.get_pin_state_panic("b").to_bool()).into());
+		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() != self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
-		Ok(EnumAllLogicDevices::GateXor(self.clone()))
+		Ok(EnumAllLogicDevices::GateXor(self.0.save()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(vec![
@@ -324,23 +306,20 @@ impl LogicDevice for GateXor {
 pub struct GateXnor(LogicDeviceGeneric);
 
 impl GateXnor {
-	pub fn new(
-		position_grid: IntV2,
-		unique_name: &str,
-		rotation: FourWayDir
-	) -> Self {
-		Self(LogicDeviceGeneric::new(
-			hash_map!{
-				"a".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, -1), FourWayDir::W, 0.7),
-				"b".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(-3, 1), FourWayDir::W, 0.7),
-				"q".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(4, 0), FourWayDir::E, 1.0),
-			},
-			position_grid,
-			unique_name.to_owned(),
-			1,
-			rotation,
-			(V2::new(-2.0, -2.0), V2::new(3.0, 2.0))
-		).unwrap())
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default())
+	}
+	pub fn from_save(save: LogicDeviceSave) -> Self {
+		Self(LogicDeviceGeneric::load(
+			save,
+			hash_map!(
+				0 => (IntV2(-3, -1), FourWayDir::W, 0.7, "a".to_owned()),
+				1 => (IntV2(-3, 1), FourWayDir::W, 0.7, "b".to_owned()),
+				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned()),
+			),
+			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			1
+		))
 	}
 }
 
@@ -352,10 +331,10 @@ impl LogicDevice for GateXnor {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack) {
-		self.set_pin_internal_state_panic("q", (self.get_pin_state_panic("a").to_bool() == self.get_pin_state_panic("b").to_bool()).into());
+		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() == self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
-		Ok(EnumAllLogicDevices::GateXnor(self.clone()))
+		Ok(EnumAllLogicDevices::GateXnor(self.0.save()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(vec![
@@ -383,31 +362,34 @@ pub struct Clock {
 }
 
 impl Clock {
-	pub fn new(
+	pub fn new() -> Self {
+		Self::from_save(false, false, 1.0, IntV2(0, 0), FourWayDir::default(), String::new())
+	}
+	pub fn from_save(
 		enabled: bool,
 		state: bool,
 		freq: f32,
 		position_grid: IntV2,
-		direction: FourWayDir
+		direction: FourWayDir,
+		name: String
 	) -> Self {
 		let mut out = Self {
-			generic: LogicDeviceGeneric::new(
-				hash_map!{
-					"q".to_owned() => LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, IntV2(0, 0), FourWayDir::W, 1.0),
-				},
-				position_grid,
-				"CLK".to_owned(),
-				1,
-				direction,
-				(V2::new(1.0, -1.0), V2::new(3.0, 1.0))
-			).unwrap(),
+			generic: LogicDeviceGeneric::load(
+				LogicDeviceSave::default(),
+				hash_map!(
+					0 => (IntV2(0, 0), FourWayDir::W, 1.0, "CLK".to_owned())
+				),
+				(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+				1
+			),
 			enabled,
 			freq,
 			last_change: Instant::now()
 		};
-		out.set_pin_internal_state_panic("q", state.into());
+		out.set_pin_internal_state_panic(0, state.into());
 		out.generic.ui_data.position = position_grid;
 		out.generic.ui_data.direction = direction;
+		out.generic.name = name;
 		out
 	}
 }
@@ -421,12 +403,12 @@ impl LogicDevice for Clock {
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack) {
 		if self.enabled && self.last_change.elapsed() > Duration::from_secs_f32(0.5 / self.freq) {// The frequency is based on a whole period, it must change twice per period, so 0.5/f not 1/f
-			self.set_pin_internal_state_panic("q", (!self.get_pin_state_panic("q").to_bool()).into());
+			self.set_pin_internal_state_panic(0, (!self.get_pin_state_panic(0).to_bool()).into());
 			self.last_change = Instant::now();
 		}
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
-		Ok(EnumAllLogicDevices::Clock{enabled: self.enabled, state: self.get_pin_state_panic("q").to_bool(), freq: self.freq, position_grid: self.generic.ui_data.position, direction: self.generic.ui_data.direction})
+		Ok(EnumAllLogicDevices::Clock{enabled: self.enabled, state: self.get_pin_state_panic(0).to_bool(), freq: self.freq, position_grid: self.generic.ui_data.position, direction: self.generic.ui_data.direction, name: self.generic.name.clone()})
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(
@@ -437,7 +419,7 @@ impl LogicDevice for Clock {
 				V2::new(2.9, -0.9),
 				V2::new(1.1, -0.9)
 			],
-			draw.styles.color_from_logic_state(self.get_pin_state_panic("q"))
+			draw.styles.color_from_logic_state(self.get_pin_state_panic(0))
 		);
 		let clk_scale = 0.7;
 		draw.draw_polyline(
@@ -456,14 +438,14 @@ impl LogicDevice for Clock {
 		vec![
 			SelectProperty::ClockEnabled(self.enabled),
 			SelectProperty::ClockFreq(self.freq),
-			SelectProperty::ClockState(self.get_pin_state_panic("q").to_bool())
+			SelectProperty::ClockState(self.get_pin_state_panic(0).to_bool())
 		]
 	}
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		match property {
 			SelectProperty::ClockEnabled(enable) => {self.enabled = enable;},
 			SelectProperty::ClockFreq(freq) => {self.freq = freq;},
-			SelectProperty::ClockState(state) => self.set_pin_internal_state_panic("q", state.into()),
+			SelectProperty::ClockState(state) => self.set_pin_internal_state_panic(0, state.into()),
 			_ => {}
 		}
 	}

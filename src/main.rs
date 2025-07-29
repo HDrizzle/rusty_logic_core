@@ -112,13 +112,13 @@ pub mod prelude {
 		}
 		out
 	}
-	pub fn new_pin_name(pins: &HashMap<String, RefCell<LogicConnectionPin>>) -> String {
+	/*pub fn new_pin_name(pins: &HashMap<u64, RefCell<LogicConnectionPin>>) -> String {
 		let mut i: u64 = 0;
 		while pins.contains_key(&format!("pin_{}", i)) {
 			i += 1;
 		}
 		format!("pin_{}", i)
-	}
+	}*/
 	pub fn clone_option_rc<T>(rc_opt: &Option<Rc<T>>) -> Option<Rc<T>> {
 		match rc_opt {
 			Some(rc) => Some(Rc::clone(rc)),
@@ -543,28 +543,27 @@ pub mod prelude {
 	pub fn create_simple_circuit() -> LogicCircuit {
 		LogicCircuit::new(
 			vec_to_u64_keyed_hashmap(vec![
-				Box::new(basic_components::GateAnd::new(IntV2(0, 0), "and", FourWayDir::default())).into_box()
+				Box::new(basic_components::GateAnd::new()).into_box()
 			]),
-			hash_map!{
-				"a".to_owned() => LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(-4, -1), FourWayDir::W, 1.0),
-				"b".to_owned() => LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(-4, 1), FourWayDir::W, 1.0),
-				"q".to_owned() => LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(4, 0), FourWayDir::E, 1.0),
-			},
+			vec![
+				(IntV2(-4, -1), FourWayDir::W, 1.0, "a".to_owned()),
+				(IntV2(-4, 1), FourWayDir::W, 1.0, "b".to_owned()),
+				(IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned()),
+			],
 			vec_to_u64_keyed_hashmap(vec![
 				LogicNet::new(vec![
-					CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0, "a".into())),
-					CircuitWidePinReference::ExternalConnection("a".into())
+					CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0, 0)),
+					CircuitWidePinReference::ExternalConnection(0)
 				]),
 				LogicNet::new(vec![
-					CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0, "b".into())),
-					CircuitWidePinReference::ExternalConnection("b".into())
+					CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0, 1)),
+					CircuitWidePinReference::ExternalConnection(1)
 				]),
 				LogicNet::new(vec![
-					CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0, "q".into())),
-					CircuitWidePinReference::ExternalConnection("q".into())
+					CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0, 2)),
+					CircuitWidePinReference::ExternalConnection(2)
 				]),
 			]),
-			IntV2(0, 0),
 			"test-circuit".to_string(),
 			1,
 			vec_to_u64_keyed_hashmap(vec![
@@ -574,9 +573,6 @@ pub mod prelude {
 			]),
 			"test".to_string(),
 			true,
-			false,
-			1.0,
-			false,
 			true
 		).unwrap()
 	}

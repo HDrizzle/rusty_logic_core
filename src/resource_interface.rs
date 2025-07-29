@@ -25,11 +25,9 @@ pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: 
 pub struct LogicCircuitSave {
 	pub generic_device: LogicDeviceGeneric,
 	pub components: HashMap<u64, EnumAllLogicDevices>,
-	pub nets: HashMap<u64, LogicNet>,
-	pub wires: HashMap<u64, Wire>,
-	/// Inspired by CircuitVerse, block-diagram version of circuit
-	/// (pin ID, relative position (ending), direction)
-	pub block_pin_positions: HashMap<String, (IntV2, FourWayDir)>
+	pub wires: HashMap<u64, (IntV2, FourWayDir, u32)>,
+	pub block_pin_positions: HashMap<u64, (IntV2, FourWayDir, bool)>,
+	pub type_name: String
 }
 
 /// Not great but I can't think of anything else
@@ -49,7 +47,8 @@ pub enum EnumAllLogicDevices {
 		state: bool,
 		freq: f32,
 		position_grid: IntV2,
-		direction: FourWayDir
+		direction: FourWayDir,
+		name: String
 	}/*,
 	FixedGround(basic_components::Ground),
 	FixedPower(basic_components::Power)*/
@@ -59,14 +58,14 @@ impl EnumAllLogicDevices {
 	pub fn to_dynamic(self_instance: Self) -> Result<Box<dyn LogicDevice>, String> {
 		match self_instance {
 			Self::SubCircuit(circuit_rel_path, displayed_as_block, pos, dir) => Ok(Box::new(load_circuit(&circuit_rel_path, displayed_as_block, false, pos, dir)?)),
-			Self::GateAnd(gate) => Ok(Box::new(gate)),
-			Self::GateNand(gate) => Ok(Box::new(gate)),
-			Self::GateNot(gate) => Ok(Box::new(gate)),
-			Self::GateOr(gate) => Ok(Box::new(gate)),
-			Self::GateNor(gate) => Ok(Box::new(gate)),
-			Self::GateXor(gate) => Ok(Box::new(gate)),
-			Self::GateXnor(gate) => Ok(Box::new(gate)),
-			Self::Clock{enabled, state, freq, position_grid, direction} => Ok(Box::new(basic_components::Clock::new(enabled, state, freq, position_grid, direction)))
+			Self::GateAnd(gate) => Ok(Box::new(basic_components::GateAnd::from_save(gate))),
+			Self::GateNand(gate) => Ok(Box::new(basic_components::GateNand::from_save(gate))),
+			Self::GateNot(gate) => Ok(Box::new(basic_components::GateNot::from_save(gate))),
+			Self::GateOr(gate) => Ok(Box::new(basic_components::GateOr::from_save(gate))),
+			Self::GateNor(gate) => Ok(Box::new(basic_components::GateNor::from_save(gate))),
+			Self::GateXor(gate) => Ok(Box::new(basic_components::GateXor::from_save(gate))),
+			Self::GateXnor(gate) => Ok(Box::new(basic_components::GateXnor::from_save(gate))),
+			Self::Clock{enabled, state, freq, position_grid, direction, name} => Ok(Box::new(basic_components::Clock::from_save(enabled, state, freq, position_grid, direction, name)))
 		}
 	}
 	/// Example: "AND Gate" or "D Latch", for the component search UI
@@ -80,7 +79,7 @@ impl EnumAllLogicDevices {
 			Self::GateNor(_) => "NOR Gate".to_owned(),
 			Self::GateXor(_) => "XOR Gate".to_owned(),
 			Self::GateXnor(_) => "XNOR Gate".to_owned(),
-			Self::Clock{enabled: _, state: _, freq: _, position_grid: _, direction: _} => "Clock Source".to_owned()
+			Self::Clock{enabled: _, state: _, freq: _, position_grid: _, direction: _, name: _} => "Clock Source".to_owned()
 		}
 	}
 }

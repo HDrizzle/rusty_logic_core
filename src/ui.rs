@@ -1,5 +1,5 @@
 use crate::{basic_components, prelude::*, resource_interface, simulator::{AncestryStack, Tool, SelectionState, GraphicSelectableItemRef}};
-use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, Align2, Button, DragValue, Frame, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, Ui}, epaint::PathStroke};
+use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, Align2, Button, DragValue, FontFamily, FontId, Frame, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, Ui}, epaint::PathStroke};
 use nalgebra::Transform2;
 use serde::{Serialize, Deserialize};
 use serde_json;
@@ -22,7 +22,9 @@ pub struct Styles {
     pub color_grid: [u8; 3],
 	pub select_rect_color: [u8; 4],
 	pub select_rect_edge_color: [u8; 3],
-	pub color_wire_in_progress: [u8; 3]
+	pub color_wire_in_progress: [u8; 3],
+	pub text_size_grid: f32,
+	pub text_color: [u8; 3]
 }
 
 impl Styles {
@@ -58,7 +60,9 @@ impl Default for Styles {
 			color_grid: [64, 64, 64],
 			select_rect_color: [7, 252, 244, 128],
 			select_rect_edge_color: [252, 7, 7],
-			color_wire_in_progress: [2, 156, 99]
+			color_wire_in_progress: [2, 156, 99],
+			text_size_grid: 0.8,
+			text_color: [106, 0, 193]
 		}
 	}
 }
@@ -175,7 +179,8 @@ pub enum SelectProperty {
 	DisplayCircuitAsBlock(bool),
 	ClockEnabled(bool),
 	ClockFreq(f32),
-	ClockState(bool)
+	ClockState(bool),
+	Name(String)
 }
 
 impl SelectProperty {
@@ -189,7 +194,8 @@ impl SelectProperty {
 			Self::DisplayCircuitAsBlock(_) => "Display circuit as block".to_owned(),
 			Self::ClockEnabled(_) => "Clock Enable".to_owned(),
 			Self::ClockFreq(_) => "Clock Frequency".to_owned(),
-			Self::ClockState(_) => "Clock State".to_owned()
+			Self::ClockState(_) => "Clock State".to_owned(),
+			Self::Name(_) => "Name".to_owned()
 		}
 	}
 	/// Add this property to a list on the UI
@@ -283,6 +289,9 @@ impl SelectProperty {
 					false
 				}
 			}
+			Self::Name(name) => {
+				ui.text_edit_singleline(name).changed()
+			}
 		}
 	}
 }
@@ -351,6 +360,9 @@ impl<'a> ComponentDrawInfo<'a> {
 		}
 		self.draw_polyline(polyline, stroke);
 	}
+	pub fn text(&self, text: String, pos: V2, align: Align2, color: [u8; 3], size_grid: f32) {
+		self.painter.text(self.grid_to_px(pos), align, text, FontId::new(self.grid_size * size_grid, FontFamily::Monospace), u8_3_to_color32(color));
+	}
 	pub fn grid_to_px(&self, grid: V2) -> egui::Pos2 {
 		// TODO
 		let nalgebra_v2 = ((self.direction.rotate_v2(grid) + self.offset_grid.to_v2()) * self.grid_size) + self.rect_center;
@@ -393,6 +405,7 @@ pub struct LogicCircuitToplevelView {
 	grid_size: f32,
 	logic_loop_error: bool,
 	showing_component_popup: bool,
+	showing_block_edit_popup: bool,
 	component_search_text: String,
 	all_logic_devices_search: Vec<EnumAllLogicDevices>,
 	saved: bool,
@@ -408,6 +421,7 @@ impl LogicCircuitToplevelView {
 			grid_size: 15.0,
 			logic_loop_error: false,
 			showing_component_popup: false,
+			showing_block_edit_popup: false,
 			component_search_text: String::new(),
 			all_logic_devices_search: Vec::new(),
 			saved,
@@ -480,6 +494,7 @@ impl LogicCircuitToplevelView {
 							selected_graphics: HashSet::from_iter(vec![handles[0].clone()].into_iter()),
 							selected_graphics_state: SelectionState::FollowingMouse(V2::zeros())
 						};
+						self.circuit.update_pin_block_positions();
 					}
 				});
 			}
@@ -487,7 +502,7 @@ impl LogicCircuitToplevelView {
 			ui.collapsing("Circuit Settings", |ui| {
 				ui.horizontal(|ui| {
 					ui.label("Name");
-					ui.text_edit_singleline(&mut self.circuit.generic_device.unique_name);
+					ui.text_edit_singleline(&mut self.circuit.type_name);
 				});
 				ui.horizontal(|ui| {
 					ui.label("Sub compute cycles");
@@ -504,6 +519,9 @@ impl LogicCircuitToplevelView {
 						}
 					}
 				});
+				if ui.button("Edit block layout").clicked() {
+					self.showing_block_edit_popup = true;
+				}
 			});
 			// Active selection features
 			if let Tool::Select{selected_graphics, selected_graphics_state: _} = &*self.circuit.tool.borrow() {
@@ -578,6 +596,11 @@ impl LogicCircuitToplevelView {
 				});
 			});
 		}
+		else if self.showing_block_edit_popup {
+			Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
+				self.edit_block_layout(ui, styles);
+			});
+		}
 	}
 	/// Runs `compute_step()` repeatedly on the circuit until there are no changes, there must be a limit because there are circuits (ex. NOT gate connected to itself) where this would otherwise never end
 	pub fn propagate_until_stable(&mut self, propagation_limit: usize) -> bool {
@@ -588,6 +611,81 @@ impl LogicCircuitToplevelView {
 			count += 1;
 		}
 		return true;
+	}
+	fn edit_block_layout(&mut self, ui: &mut Ui, styles: &Styles) {
+		let inner_response = Frame::canvas(ui.style()).show(ui, |ui| {
+			let canvas_size = ui.available_size_before_wrap();
+			let (response, painter) = ui.allocate_painter(canvas_size, Sense::all());
+			let draw_info = ComponentDrawInfo::new(
+				self.screen_center_wrt_grid,
+				self.grid_size,
+				&painter,
+				IntV2(0, 0),
+				FourWayDir::default(),
+				styles,
+				emath_pos2_to_v2(response.rect.center()),
+				emath_vec2_to_v2(canvas_size)
+			);
+			self.circuit.draw_as_block(&draw_info);
+		});
+		//inner_response.response.ctx.input_mut(|input| input.events.clear());
+		Popup::from_response(&inner_response.response).open(true).align(RectAlign{parent: Align2::LEFT_TOP, child: Align2::LEFT_TOP}).id("block edit controls".into()).show(|ui| {
+			ScrollArea::vertical().scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+				let pins = self.circuit.generic_device.pins.borrow();
+				for (pin_id, pin_cell) in pins.iter() {
+					let mut pin = pin_cell.borrow_mut();
+					let pin_config: &mut (IntV2, FourWayDir, bool) = self.circuit.block_pin_positions.get_mut(pin_id).unwrap();
+					ui.horizontal(|ui| {
+						ui.text_edit_singleline(&mut pin.name);
+						ui.checkbox(&mut pin_config.2, "");
+						ui.separator();
+						ui.label("X:");
+						if ui.button("<").clicked() {
+							pin_config.0.0 -= 1;
+						}
+						ui.add(DragValue::new(&mut pin_config.0.0));
+						if ui.button(">").clicked() {
+							pin_config.0.0 += 1;
+						}
+						ui.separator();
+						ui.label("Y:");
+						if ui.button("<").clicked() {
+							pin_config.0.1 -= 1;
+						}
+						ui.add(DragValue::new(&mut pin_config.0.1));
+						if ui.button(">").clicked() {
+							pin_config.0.1 += 1;
+						}
+						ui.separator();
+						ui.label("Dir:");
+						if ui.button("↶").clicked() {
+							pin_config.1 = pin_config.1.turn_ccw();
+						}
+						if ui.button("↷").clicked() {
+							pin_config.1 = pin_config.1.turn_cw();
+						}
+					});
+				}
+				ui.horizontal(|ui| {
+					let bb_float: (V2, V2) = self.circuit.generic_device.ui_data.local_bb;
+					let mut bb: (IntV2, IntV2) = (round_v2_to_intv2(bb_float.0), round_v2_to_intv2(bb_float.1));
+					ui.label("Box dimensions:");
+					ui.separator();
+					ui.label("X min:");
+					ui.add(DragValue::new(&mut bb.0.0));
+					ui.label("X max:");
+					ui.add(DragValue::new(&mut bb.1.0));
+					ui.label("Y min:");
+					ui.add(DragValue::new(&mut bb.0.1));
+					ui.label("Y max:");
+					ui.add(DragValue::new(&mut bb.1.1));
+					self.circuit.generic_device.ui_data.local_bb = (bb.0.to_v2(), bb.1.to_v2());
+				});
+			});
+			if ui.button("Done").clicked() {
+				self.showing_block_edit_popup = false;
+			}
+		});
 	}
 }
 
@@ -614,7 +712,7 @@ impl App {
 		};
 		Self {
 			styles,
-			circuit_tabs: Vec::new(),//vec![LogicCircuitToplevelView::new(create_simple_circuit(true), false)],
+			circuit_tabs: Vec::new(),//vec![LogicCircuitToplevelView::new(create_simple_circuit(), false)],
 			current_tab_index: 0,
 			show_new_circuit_popup: false,
 			new_circuit_name: String::new(),
@@ -626,7 +724,7 @@ impl App {
 
 impl eframe::App for App {
 	fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-		let circuit_names: Vec<String> = self.circuit_tabs.iter().map(|toplevel| toplevel.circuit.generic_device.unique_name.clone()).collect();
+		let circuit_names: Vec<String> = self.circuit_tabs.iter().map(|toplevel| toplevel.circuit.type_name.clone()).collect();
 		egui::CentralPanel::default().show(ctx, |ui: &mut Ui| {
 			// This function by default is only run upon user interaction, so copied this from https://users.rust-lang.org/t/issues-while-writing-a-clock-with-egui/102752
 			ui.ctx().request_repaint();
@@ -666,7 +764,7 @@ impl eframe::App for App {
 								ui.label(".json");
 							});
 							if ui.button("Create Circuit").clicked() {
-								self.circuit_tabs.push(LogicCircuitToplevelView::new(LogicCircuit::new_mostly_default(self.new_circuit_name.clone(), self.new_circuit_path.clone()), false));
+								self.circuit_tabs.push(LogicCircuitToplevelView::new(LogicCircuit::new_mostly_default(self.new_circuit_name.clone(), self.new_circuit_path.clone(), true), false));
 								self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
 							}
 						});
