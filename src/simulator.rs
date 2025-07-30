@@ -812,6 +812,20 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {Vec::new()}
 	/// Everything besides what `impl<T: LogicDevice> GraphicSelectableItem for T::set_property()` accepts
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {drop(property);}// So that unused variable warning doesn't happen
+	/// A circuit might override this to instead use the block display pin locations
+	fn get_pin_position_override(&self, pin_id: u64) -> Option<(IntV2, FourWayDir, f32)> {
+		self.get_pin_position(pin_id)
+	}
+	/// DO NOT DIRECTLY CALL THIS
+	fn get_pin_position(&self, pin_id: u64) -> Option<(IntV2, FourWayDir, f32)> {
+		match self.get_generic().pins.borrow().get(&pin_id) {
+			Some(pin_cell) => {
+				let pin = pin_cell.borrow();
+				Some((pin.ui_data.position, pin.ui_data.direction, pin.length))
+			},
+			None => None
+		}
+	}
 	fn compute(&mut self, ancestors: &AncestryStack) {
 		for _ in 0..self.get_generic().sub_compute_cycles {
 			self.compute_step(ancestors);
@@ -867,12 +881,13 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.get_generic().ui_data.position, self.get_generic().ui_data.direction);
 		if !self.is_toplevel_circuit() {
-			for (_, pin_cell) in self.get_pins_cell().borrow().iter() {
+			for (pin_id, pin_cell) in self.get_pins_cell().borrow().iter() {
 				let pin = pin_cell.borrow();
+				let position: (IntV2, FourWayDir, f32) = self.get_pin_position_override(*pin_id).unwrap();
 				draw.draw_polyline(
 					vec![
-						pin.ui_data.position.to_v2(),
-						pin.ui_data.position.to_v2() - (pin.ui_data.direction.to_unit() * pin.length)
+						position.0.to_v2(),
+						position.0.to_v2() - (position.1.to_unit() * position.2)
 					],
 					draw.styles.color_from_logic_state(pin.state())
 				);
@@ -1615,8 +1630,9 @@ impl LogicCircuit {
 		}
 		for (_, comp_cell) in self.components.borrow().iter() {
 			let comp = comp_cell.borrow();
-			for (_, pin) in comp.get_pins_cell().borrow().iter() {
-				if comp.get_ui_data().pos_to_parent_coords(pin.borrow().ui_data.position) == point {
+			for (pin_id, pin) in comp.get_pins_cell().borrow().iter() {
+				let pin_pos_wrt_comp = comp.get_pin_position_override(*pin_id).unwrap().0;
+				if comp.get_ui_data().pos_to_parent_coords(pin_pos_wrt_comp) == point {
 					if let Some(source) = &pin.borrow().external_source {
 						match source {
 							LogicConnectionPinExternalSource::Net(net_id) => {
@@ -2036,8 +2052,9 @@ impl LogicCircuit {
 		for (comp_id, comp_cell) in self.components.borrow().iter() {
 			let comp = comp_cell.borrow();
 			for (pin_id, pin_cell) in comp.get_pins_cell().borrow().iter() {
+				let pin_pos_wrt_component = comp.get_pin_position_override(*pin_id).unwrap().0;
+				let pin_pos: IntV2 = comp.get_ui_data().pos_to_parent_coords(pin_pos_wrt_component);
 				let mut pin = pin_cell.borrow_mut();
-				let pin_pos: IntV2 = comp.get_ui_data().pos_to_parent_coords(pin.ui_data.position);
 				// Fist check if pin is already connected to another net and remove from that net's connection list in case it's a different net
 				if let Some(source) = &pin.external_source {
 					if let LogicConnectionPinExternalSource::Net(old_net_id) = source {
@@ -2064,7 +2081,7 @@ impl LogicCircuit {
 		// External pins
 		for (pin_id, pin_cell) in self.get_pins_cell().borrow().iter() {
 			let mut pin = pin_cell.borrow_mut();
-			let pin_pos: IntV2 = pin.ui_data.position;
+			let pin_pos: IntV2 = pin.ui_data.position;// Do not use `self.get_pin_position_override()`
 			// Fist check if pin is already connected to another net and remove from that net's connection list in case it's a different net
 			if let Some(source) = &pin.internal_source {
 				if let LogicConnectionPinInternalSource::Net(old_net_id) = source {
@@ -2320,7 +2337,7 @@ impl LogicCircuit {
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_path), &raw_string))?;
 		Ok(())
 	}
-	pub fn draw_as_block<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+	pub fn draw_as_block<'a>(&self, draw: &ComponentDrawInfo<'a>, for_block_layout_edit: bool) {
 		// Rectangle
 		draw.draw_polyline(
 			vec![
@@ -2335,27 +2352,36 @@ impl LogicCircuit {
 		// Pins at alternate locations
 		for (pin_id, pin_cell) in self.generic_device.pins.borrow().iter() {
 			let pin_alternate_config = self.block_pin_positions.get(pin_id).expect("Pin missing from block layout");
+			let pin = pin_cell.borrow();
+			let pin_stroke = match for_block_layout_edit {
+				true => draw.styles.color_foreground,
+				false => draw.styles.color_from_logic_state(pin.state())
+			};
 			draw.draw_polyline(
 				vec![
 					pin_alternate_config.0.to_v2(),
-					(pin_alternate_config.0 + pin_alternate_config.1.to_unit_int()).to_v2()
+					(pin_alternate_config.0 - pin_alternate_config.1.to_unit_int()).to_v2()
 				],
-				draw.styles.color_foreground
+				pin_stroke
 			);
+			if for_block_layout_edit {
+				draw.draw_circle_filled(pin_alternate_config.0.to_v2(), draw.styles.connection_dot_grid_size, draw.styles.color_wire_floating);
+			}
 			// Pin name
-			let pin = pin_cell.borrow();
-			draw.text(
-				pin.name.clone(),
-				pin_alternate_config.0.to_v2() + (pin_alternate_config.1.to_unit()*0.2),
-				match pin_alternate_config.1 {
-					FourWayDir::E => Align2::LEFT_CENTER,
-					FourWayDir::N => Align2::CENTER_BOTTOM,
-					FourWayDir::W => Align2::RIGHT_CENTER,
-					FourWayDir::S => Align2::CENTER_TOP
-				},
-				draw.styles.text_color,
-				draw.styles.text_size_grid
-			);
+			if pin_alternate_config.2 {
+				draw.text(
+					pin.name.clone(),
+					pin_alternate_config.0.to_v2() - (pin_alternate_config.1.to_unit()*1.2),
+					match pin_alternate_config.1 {
+						FourWayDir::E => Align2::RIGHT_CENTER,
+						FourWayDir::N => Align2::CENTER_BOTTOM,
+						FourWayDir::W => Align2::LEFT_CENTER,
+						FourWayDir::S => Align2::CENTER_TOP
+					},
+					draw.styles.text_color,
+					draw.styles.text_size_grid
+				);
+			}
 		}
 		// Name
 		// TODO
@@ -2380,7 +2406,7 @@ impl LogicDevice for LogicCircuit {
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		if self.displayed_as_block {
-			self.draw_as_block(draw);
+			self.draw_as_block(draw, false);
 		}
 		else {
 			// Draws the circuit with wires and everything how you would expect
@@ -2405,5 +2431,16 @@ impl LogicDevice for LogicCircuit {
 	}
 	fn is_circuit(&self) -> bool {
 		true
+	}
+	fn get_pin_position_override(&self, pin_id: u64) -> Option<(IntV2, FourWayDir, f32)> {
+		if self.displayed_as_block {
+			match self.block_pin_positions.get(&pin_id) {
+				Some((pos, dir, _)) => Some((*pos, *dir, 1.0)),
+				None => None
+			}
+		}
+		else {
+			self.get_pin_position(pin_id)
+		}
 	}
 }

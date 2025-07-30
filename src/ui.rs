@@ -1,5 +1,5 @@
 use crate::{basic_components, prelude::*, resource_interface, simulator::{AncestryStack, Tool, SelectionState, GraphicSelectableItemRef}};
-use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, Align2, Button, DragValue, FontFamily, FontId, Frame, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, Ui}, epaint::PathStroke};
+use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, Align2, Button, DragValue, FontFamily, FontId, Frame, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, Ui}, epaint::PathStroke};
 use nalgebra::Transform2;
 use serde::{Serialize, Deserialize};
 use serde_json;
@@ -61,8 +61,8 @@ impl Default for Styles {
 			select_rect_color: [7, 252, 244, 128],
 			select_rect_edge_color: [252, 7, 7],
 			color_wire_in_progress: [2, 156, 99],
-			text_size_grid: 0.8,
-			text_color: [106, 0, 193]
+			text_size_grid: 0.9,
+			text_color: [243, 118, 252]
 		}
 	}
 }
@@ -431,9 +431,9 @@ impl LogicCircuitToplevelView {
 	}
 	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles) {
 		let inner_response = Frame::canvas(ui.style()).show(ui, |ui| {
+			let canvas_size = ui.available_size_before_wrap();
 			let mut propagate = true;// TODO: Change to false when rest of logic is implemented
 			// TODO
-			let canvas_size = ui.available_size_before_wrap();
 			let (response, painter) = ui.allocate_painter(canvas_size, Sense::all());
 			let draw_info = ComponentDrawInfo::new(
 				self.screen_center_wrt_grid,
@@ -502,11 +502,11 @@ impl LogicCircuitToplevelView {
 			ui.collapsing("Circuit Settings", |ui| {
 				ui.horizontal(|ui| {
 					ui.label("Name");
-					ui.text_edit_singleline(&mut self.circuit.type_name);
+					ui.add(TextEdit::singleline(&mut self.circuit.type_name).desired_width(100.0));
 				});
 				ui.horizontal(|ui| {
 					ui.label("Sub compute cycles");
-					ui.text_edit_singleline(&mut self.new_sub_cycles_entry);
+					ui.add(TextEdit::singleline(&mut self.new_sub_cycles_entry).desired_width(50.0));
 					let button = Button::new("Update");
 					match self.new_sub_cycles_entry.parse::<usize>() {
 						Ok(sub_cycles) => {
@@ -626,7 +626,7 @@ impl LogicCircuitToplevelView {
 				emath_pos2_to_v2(response.rect.center()),
 				emath_vec2_to_v2(canvas_size)
 			);
-			self.circuit.draw_as_block(&draw_info);
+			self.circuit.draw_as_block(&draw_info, true);
 		});
 		//inner_response.response.ctx.input_mut(|input| input.events.clear());
 		Popup::from_response(&inner_response.response).open(true).align(RectAlign{parent: Align2::LEFT_TOP, child: Align2::LEFT_TOP}).id("block edit controls".into()).show(|ui| {
@@ -636,7 +636,7 @@ impl LogicCircuitToplevelView {
 					let mut pin = pin_cell.borrow_mut();
 					let pin_config: &mut (IntV2, FourWayDir, bool) = self.circuit.block_pin_positions.get_mut(pin_id).unwrap();
 					ui.horizontal(|ui| {
-						ui.text_edit_singleline(&mut pin.name);
+						ui.add(TextEdit::singleline(&mut pin.name).desired_width(50.0));
 						ui.checkbox(&mut pin_config.2, "");
 						ui.separator();
 						ui.label("X:");
