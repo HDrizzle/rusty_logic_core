@@ -149,9 +149,7 @@ pub enum LogicDriveSource {
 	/// This also depends on context, for example the nets one either side of a sub-circuit pin would be referenced within different "namespaces"
 	Net(GenericQuery<LogicNet>),
 	/// Output of a basic logic gate, the actual transistors are not gonna be simulated
-	ComponentInternal(ComponentPinReference),
-	/// The clock source of a given circuit/sub-circuit
-	Clock(SubCircuitPath)
+	ComponentInternal(ComponentPinReference)
 }
 
 impl LogicDriveSource {
@@ -161,8 +159,7 @@ impl LogicDriveSource {
 			Self::Global => true,
 			Self::ExternalConnection(_) => false,
 			Self::Net(_) => false,
-			Self::ComponentInternal(_) => true,
-			Self::Clock(_) => true
+			Self::ComponentInternal(_) => true
 		}
 	}
 }
@@ -174,9 +171,7 @@ pub enum GlobalSourceReference {
 	/// Output from basic logic component
 	/// 0. Vec of strings, each one a sub-circuit of the last
 	/// 1. Component reference within the previously given circuit
-	ComponentInternal(SubCircuitPath, ComponentPinReference),
-	/// The clock source of a given circuit/sub-circuit
-	Clock(SubCircuitPath)
+	ComponentInternal(SubCircuitPath, ComponentPinReference)
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -539,7 +534,6 @@ impl ComponentPinReference {
 pub struct Wire {
 	ui_data: UIData,
 	pub length: u32,
-	pub direction: FourWayDir,
 	pub net: u64,
 	state: LogicState,
 	pub start_connections: Rc<RefCell<HashSet<WireConnection>>>,
@@ -561,9 +555,8 @@ impl Wire {
 		end_connections: Rc<RefCell<HashSet<WireConnection>>>
 	) -> Self {
 		Self {
-			ui_data: UIData::new(pos, FourWayDir::default(), (V2::zeros(), V2::zeros())),
+			ui_data: UIData::new(pos, direction, (V2::new(0.25, -0.25), V2::new(length as f32 - 0.25, 0.25))),
 			length,
-			direction,
 			net,
 			state: LogicState::Floating,
 			start_connections,
@@ -581,13 +574,13 @@ impl Wire {
 			return ((true, false, false), Some(Rc::clone(&self.start_connections)));
 		}
 		// End
-		if point == self.ui_data.position + self.direction.to_unit_int().mult(self.length as i32) {
+		if point == self.ui_data.position + self.ui_data.direction.to_unit_int().mult(self.length as i32) {
 			return ((false, false, true), Some(Rc::clone(&self.end_connections)));
 		}
 		// Middle
 		let this_to_point_v = point - self.ui_data.position;
 		if let Some(test_dir) = this_to_point_v.is_along_axis() {
-			if test_dir == self.direction && this_to_point_v.to_v2().magnitude() < self.length as f32 {
+			if test_dir == self.ui_data.direction && this_to_point_v.to_v2().magnitude() < self.length as f32 {
 				return ((false, true, false), None);
 			}
 		}
@@ -652,7 +645,7 @@ impl Wire {
 		vec![pair[0], pair[1]]
 	}
 	pub fn end_pos(&self) -> IntV2 {
-		self.ui_data.position + (self.direction.to_unit_int().mult(self.length as i32))
+		self.ui_data.position + (self.ui_data.direction.to_unit_int().mult(self.length as i32))
 	}
 }
 
@@ -682,8 +675,8 @@ impl GraphicSelectableItem for Wire {
 		&mut self.ui_data
 	}
 	/// Excludes end BBs which are special and for dragging the ends around or extruding at right angles
-	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
-		let local_bb_unrectified: (V2, V2) = match self.direction {
+	/*fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
+		let local_bb_unrectified: (V2, V2) = match self.ui_data.direction {
 			FourWayDir::E => (V2::new(0.25, -0.25), V2::new(self.length as f32 - 0.25, 0.25)),
 			FourWayDir::N => (V2::new(-0.25, 0.25 - (self.length as f32)), V2::new(0.25, -0.25)),
 			FourWayDir::W => (V2::new(0.25 - self.length as f32, -0.25), V2::new(-0.25, 0.25)),
@@ -692,7 +685,7 @@ impl GraphicSelectableItem for Wire {
 		let local_bb: (V2, V2) = merge_points_to_bb(vec![local_bb_unrectified.0, local_bb_unrectified.1]);
 		let offset = grid_offset + self.ui_data.position.to_v2();
 		(local_bb.0 + offset, local_bb.1 + offset)
-	}
+	}*/
 	fn is_connected_to_net(&self, net_id: u64) -> bool {
 		net_id == self.net
 	}
@@ -710,7 +703,7 @@ impl GraphicSelectableItem for Wire {
 		}
 	}
 	fn copy(&self) -> CopiedGraphicItem {
-		CopiedGraphicItem::Wire((self.ui_data.position, self.direction, self.length))
+		CopiedGraphicItem::Wire((self.ui_data.position, self.ui_data.direction, self.length))
 	}
 }
 
@@ -1455,16 +1448,7 @@ impl LogicCircuit {
 				if input_state.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::C)) {// TODO
 					let mut copied_items = Vec::<CopiedGraphicItem>::new();
 					// Get combined BB center
-					let mut bb_opt = Option::<(V2, V2)>::None;
-					for item_ref in selected_graphics.iter() {
-						let bb_float = self.run_function_on_graphic_item::<(V2, V2)>(item_ref.clone(), |item_box| item_box.bounding_box(V2::zeros()));
-						bb_opt = Some(match bb_opt.clone() {
-							Some(bb) => {
-								merge_points_to_bb(vec![bb_float.0, bb_float.1, bb.0, bb.1])
-							}
-							None => bb_float
-						});
-					}
+					let bb_opt = self.selected_bb(selected_graphics);
 					// If there is a BB then at least one selected item to copy, otherwise do nothing
 					if let Some(bb) = bb_opt {
 						let bb_center: V2 = (bb.1 + bb.0) / 2.0;
@@ -1499,6 +1483,13 @@ impl LogicCircuit {
 					recompute_pin_block_positions = true;
 					return_recompute_connections = true;
 					*selected_graphics = HashSet::new();
+				}
+				// Rotate w/ arrow keys
+				if input_state.consume_key(Modifiers::NONE, Key::ArrowLeft) {
+					self.rotate_selection(selected_graphics, false);
+				}
+				if input_state.consume_key(Modifiers::NONE, Key::ArrowRight) {
+					self.rotate_selection(selected_graphics, true);
 				}
 			},
 			Tool::HighlightNet(net_id) => {
@@ -1608,6 +1599,40 @@ impl LogicCircuit {
 		let new_comp_id = lowest_unused_key(&components);
 		components.insert(new_comp_id, RefCell::new(EnumAllLogicDevices::to_dynamic(comp_save.clone()).unwrap()));
 		GraphicSelectableItemRef::Component(new_comp_id)
+	}
+	fn selected_bb(&self, selected_graphics: &HashSet<GraphicSelectableItemRef>) -> Option<(V2, V2)> {
+		let mut bb_opt = Option::<(V2, V2)>::None;
+		for item_ref in selected_graphics.iter() {
+			let bb_float = self.run_function_on_graphic_item::<(V2, V2)>(item_ref.clone(), |item_box| item_box.bounding_box(V2::zeros()));
+			bb_opt = Some(match bb_opt.clone() {
+				Some(bb) => {
+					merge_points_to_bb(vec![bb_float.0, bb_float.1, bb.0, bb.1])
+				}
+				None => bb_float
+			});
+		}
+		bb_opt
+	}
+	pub fn rotate_selection(&self, selected_graphics: &HashSet<GraphicSelectableItemRef>, cw: bool) {
+		// Only do anything of there's at least one thing selected
+		if let Some(bb) = self.selected_bb(selected_graphics) {
+			let bb_center: IntV2 = round_v2_to_intv2((bb.1 + bb.0) / 2.0);
+			for item_ref in selected_graphics.iter() {
+				self.run_function_on_graphic_item_mut(item_ref.clone(), |item_box| {
+					let ui_data: &mut UIData = item_box.get_ui_data_mut();
+					let rotate_dir: FourWayDir = if cw {
+						ui_data.direction = ui_data.direction.turn_cw();
+						FourWayDir::S
+					}
+					else {
+						ui_data.direction = ui_data.direction.turn_ccw();
+						FourWayDir::N
+					};
+					ui_data.position = rotate_dir.rotate_intv2(ui_data.position - bb_center) + bb_center;
+					ui_data.position_before_dragging = rotate_dir.rotate_intv2(ui_data.position_before_dragging);
+				});
+			}
+		}
 	}
 	/// Checks: All wires, external pins, component pins
 	/// Returns: (Is termination point, Optional net, Optional shared wire connection set)
@@ -2138,7 +2163,7 @@ impl LogicCircuit {
 						WireConnection::Wire(new_wire_id),
 						connection.clone()
 					].into_iter())));
-					(Rc::clone(&wire.end_connections), end_conns, wire.direction.clone(), new_wire_len, wire.bit_width, wire.net)
+					(Rc::clone(&wire.end_connections), end_conns, wire.ui_data.direction.clone(), new_wire_len, wire.bit_width, wire.net)
 				};
 				// Update old end conns (`end_conns`) to remove old wire and add new wire
 				{
@@ -2323,7 +2348,7 @@ impl LogicCircuit {
 		let mut wires_save = HashMap::<u64, (IntV2, FourWayDir, u32)>::new();
 		for (ref_, wire_cell) in self.wires.borrow().iter() {
 			let wire = wire_cell.borrow();
-			wires_save.insert(*ref_, (wire.ui_data.position, wire.direction, wire.length));
+			wires_save.insert(*ref_, (wire.ui_data.position, wire.ui_data.direction, wire.length));
 		}
 		// First, actually save this circuit
 		let save = LogicCircuitSave {
@@ -2384,7 +2409,13 @@ impl LogicCircuit {
 			}
 		}
 		// Name
-		// TODO
+		draw.text(
+			self.type_name.clone(),
+			self.generic_device.ui_data.position.to_v2(),
+			Align2::CENTER_CENTER,
+			draw.styles.text_color,
+			draw.styles.text_size_grid
+		);
 	}
 }
 

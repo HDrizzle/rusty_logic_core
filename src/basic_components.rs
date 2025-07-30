@@ -121,7 +121,7 @@ impl GateNot {
 			save,
 			hash_map!(
 				0 => (IntV2(-3, 0), FourWayDir::W, 1.0, "a".to_owned()),
-				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned()),
+				1 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned()),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
 			1

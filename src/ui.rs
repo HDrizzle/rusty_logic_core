@@ -1,25 +1,30 @@
 use crate::{basic_components, prelude::*, resource_interface, simulator::{AncestryStack, Tool, SelectionState, GraphicSelectableItemRef}};
-use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, Align2, Button, DragValue, FontFamily, FontId, Frame, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, Ui}, epaint::PathStroke};
-use nalgebra::Transform2;
+use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, Align2, Button, DragValue, FontFamily, FontId, Frame, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, Ui, Vec2}, epaint::PathStroke};
+use nalgebra::{ComplexField, Transform2};
 use serde::{Serialize, Deserialize};
 use serde_json;
 use std::{collections::HashSet, f32::consts::TAU, ops::RangeInclusive};
+use mouse_rs;
 
 /// Style for the UI, loaded from /resources/styles.json
 #[derive(Clone, Deserialize)]
 pub struct Styles {
-    /// Show a grid in the background
+	/// Show a grid in the background
 	pub show_grid: bool,
+	pub default_grid_size: f32,
+	pub min_grid_size: f32,
+	pub max_grid_size: f32,
+	pub grid_scale_factor: f32,
 	/// Fraction of grid size that lines are drawn, 0.1 is probably good
 	pub line_size_grid: f32,
 	pub connection_dot_grid_size: f32,
-    pub color_wire_floating: [u8; 3],
-    pub color_wire_contested: [u8; 3],
-    pub color_wire_low: [u8; 3],
-    pub color_wire_high: [u8; 3],
-    pub color_background: [u8; 3],
-    pub color_foreground: [u8; 3],
-    pub color_grid: [u8; 3],
+	pub color_wire_floating: [u8; 3],
+	pub color_wire_contested: [u8; 3],
+	pub color_wire_low: [u8; 3],
+	pub color_wire_high: [u8; 3],
+	pub color_background: [u8; 3],
+	pub color_foreground: [u8; 3],
+	pub color_grid: [u8; 3],
 	pub select_rect_color: [u8; 4],
 	pub select_rect_edge_color: [u8; 3],
 	pub color_wire_in_progress: [u8; 3],
@@ -28,11 +33,11 @@ pub struct Styles {
 }
 
 impl Styles {
-    pub fn load() -> Result<Self, String> {
-        let raw_string: String = load_file_with_better_error(resource_interface::STYLES_FILE)?;
-        let styles: Self = to_string_err(serde_json::from_str(&raw_string))?;
-        Ok(styles)
-    }
+	pub fn load() -> Result<Self, String> {
+		let raw_string: String = load_file_with_better_error(resource_interface::STYLES_FILE)?;
+		let styles: Self = to_string_err(serde_json::from_str(&raw_string))?;
+		Ok(styles)
+	}
 	pub fn color_from_logic_state(&self, state: LogicState) -> [u8; 3] {
 		match state {
 			LogicState::Driven(value) => match value {
@@ -49,6 +54,10 @@ impl Default for Styles {
 	fn default() -> Self {
 		Self {
 			show_grid: true,
+			default_grid_size: 15.0,
+			min_grid_size: 1.0,
+			max_grid_size: 1000.0,
+			grid_scale_factor: 1.012,
 			line_size_grid: 0.1,
 			connection_dot_grid_size: 0.3,
 			color_wire_floating: [128, 128, 128],
@@ -365,7 +374,7 @@ impl<'a> ComponentDrawInfo<'a> {
 	}
 	pub fn grid_to_px(&self, grid: V2) -> egui::Pos2 {
 		// TODO
-		let nalgebra_v2 = ((self.direction.rotate_v2(grid) + self.offset_grid.to_v2()) * self.grid_size) + self.rect_center;
+		let nalgebra_v2 = ((self.direction.rotate_v2(grid) + self.offset_grid.to_v2() - self.screen_center_wrt_grid) * self.grid_size) + self.rect_center;
 		if cfg!(feature = "reverse_y") {
 			egui::Pos2{x: nalgebra_v2.x, y: self.rect_size_px.y - nalgebra_v2.y}
 		} else {
@@ -378,7 +387,7 @@ impl<'a> ComponentDrawInfo<'a> {
 		#[cfg(not(feature = "reverse_y"))]
 		let mouse_pos = emath_pos2_to_v2(mouse_pos_y_backwards);
 		// TODO
-		self.direction.rotate_v2_reverse(((mouse_pos - self.rect_center) / self.grid_size) - self.offset_grid.to_v2())
+		self.direction.rotate_v2_reverse(((mouse_pos - self.rect_center) / self.grid_size) - self.offset_grid.to_v2()) + self.screen_center_wrt_grid
 	}
 	/// `offset_unrotated` is wrt parent coordinates, dir_ is the direction of the local coordinates of whatever this new drawer is being created for
 	pub fn add_grid_pos_and_direction(&'a self, offset_unrotated: IntV2, dir_: FourWayDir) -> Self {
@@ -414,11 +423,11 @@ pub struct LogicCircuitToplevelView {
 }
 
 impl LogicCircuitToplevelView {
-	pub fn new(circuit: LogicCircuit, saved: bool) -> Self {
+	pub fn new(circuit: LogicCircuit, saved: bool, styles: &Styles) -> Self {
 		Self {
 			circuit,
 			screen_center_wrt_grid: V2::zeros(),
-			grid_size: 15.0,
+			grid_size: styles.default_grid_size,
 			logic_loop_error: false,
 			showing_component_popup: false,
 			showing_block_edit_popup: false,
@@ -429,11 +438,12 @@ impl LogicCircuitToplevelView {
 			recompute_conns_next_frame: false
 		}
 	}
-	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles) {
-		let inner_response = Frame::canvas(ui.style()).show(ui, |ui| {
+	/// Optional position to set the mouse to
+	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles, screen_top_left: Pos2) -> Option<Pos2> {
+		let mut return_new_mouse_pos = Option::<Pos2>::None;
+		let inner_response = Frame::canvas(ui.style()).show::<Vec2>(ui, |ui| {
 			let canvas_size = ui.available_size_before_wrap();
 			let mut propagate = true;// TODO: Change to false when rest of logic is implemented
-			// TODO
 			let (response, painter) = ui.allocate_painter(canvas_size, Sense::all());
 			let draw_info = ComponentDrawInfo::new(
 				self.screen_center_wrt_grid,
@@ -447,7 +457,33 @@ impl LogicCircuitToplevelView {
 			);
 			// First, detect user unput
 			let input_state = ui.ctx().input(|i| i.clone());
+			// Scrolling
+			let scroll = input_state.raw_scroll_delta.y;
+			if scroll != 0.0 {
+				// Set mouse position to center of screen and move grid offset along with it, inspired by KiCad
+				if let Some(og_mouse_pos) = response.hover_pos() {
+					// Make sure its rounded
+					let shift_grid: IntV2 = round_v2_to_intv2(emath_vec2_to_v2(response.rect.center() - og_mouse_pos) / self.grid_size);
+					return_new_mouse_pos = Some(response.rect.center() + screen_top_left.to_vec2());
+					self.screen_center_wrt_grid -= shift_grid.to_v2();
+				};
+				// Scroll
+				let scale = styles.grid_scale_factor.powf(scroll);
+				let new_grid_unclamped = self.grid_size.scale(scale);
+				self.grid_size = if new_grid_unclamped < styles.max_grid_size {
+					if new_grid_unclamped > styles.min_grid_size {
+						new_grid_unclamped
+					}
+					else {
+						styles.min_grid_size
+					}
+				}
+				else {
+					styles.max_grid_size
+				};
+			}
 			let recompute_connections: bool = self.circuit.toplevel_ui_interact(response, ui.ctx(), &draw_info, input_state);
+			// Reconnect wires and thingies if anything was changed
 			if recompute_connections || self.recompute_conns_next_frame {
 				self.saved = false;
 				self.circuit.check_wire_geometry_and_connections();
@@ -462,6 +498,7 @@ impl LogicCircuitToplevelView {
 			self.circuit.draw(&draw_info);
 			// Right side toolbar
 			self.circuit.tool.borrow().tool_select_ui(&draw_info);
+			canvas_size
 		});
 		// Top: general controls
 		Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::LEFT_TOP, child: Align2::LEFT_TOP}).id("top-left controls".into()).show(|ui| {
@@ -556,7 +593,7 @@ impl LogicCircuitToplevelView {
 						}
 					}
 					// Display them
-					for (prop, are_all_same, graphic_item_set) in unique_properties.iter_mut() {
+					for (prop, _, graphic_item_set) in unique_properties.iter_mut() {
 						ui.horizontal(|ui| {
 							ui.label(format!("{}:", prop.ui_name()));
 							if prop.add_to_ui(ui) {
@@ -598,9 +635,10 @@ impl LogicCircuitToplevelView {
 		}
 		else if self.showing_block_edit_popup {
 			Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
-				self.edit_block_layout(ui, styles);
+				self.edit_block_layout(ui, styles, inner_response.inner);
 			});
 		}
+		return_new_mouse_pos
 	}
 	/// Runs `compute_step()` repeatedly on the circuit until there are no changes, there must be a limit because there are circuits (ex. NOT gate connected to itself) where this would otherwise never end
 	pub fn propagate_until_stable(&mut self, propagation_limit: usize) -> bool {
@@ -612,10 +650,10 @@ impl LogicCircuitToplevelView {
 		}
 		return true;
 	}
-	fn edit_block_layout(&mut self, ui: &mut Ui, styles: &Styles) {
+	fn edit_block_layout(&mut self, ui: &mut Ui, styles: &Styles, maine_frame_size: Vec2) {
 		let inner_response = Frame::canvas(ui.style()).show(ui, |ui| {
-			let canvas_size = ui.available_size_before_wrap();
-			let (response, painter) = ui.allocate_painter(canvas_size, Sense::all());
+			//let canvas_size = ui.available_size_before_wrap();
+			let (response, painter) = ui.allocate_painter(maine_frame_size, Sense::all());
 			let draw_info = ComponentDrawInfo::new(
 				self.screen_center_wrt_grid,
 				self.grid_size,
@@ -624,7 +662,7 @@ impl LogicCircuitToplevelView {
 				FourWayDir::default(),
 				styles,
 				emath_pos2_to_v2(response.rect.center()),
-				emath_vec2_to_v2(canvas_size)
+				emath_vec2_to_v2(maine_frame_size)
 			);
 			self.circuit.draw_as_block(&draw_info, true);
 		});
@@ -693,7 +731,7 @@ impl LogicCircuitToplevelView {
 pub struct App {
 	styles: Styles,
 	circuit_tabs: Vec<LogicCircuitToplevelView>,
-    current_tab_index: usize,
+	current_tab_index: usize,
 	show_new_circuit_popup: bool,
 	new_circuit_name: String,
 	new_circuit_path: String,
@@ -723,7 +761,7 @@ impl App {
 }
 
 impl eframe::App for App {
-	fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+	fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
 		let circuit_names: Vec<String> = self.circuit_tabs.iter().map(|toplevel| toplevel.circuit.type_name.clone()).collect();
 		egui::CentralPanel::default().show(ctx, |ui: &mut Ui| {
 			// This function by default is only run upon user interaction, so copied this from https://users.rust-lang.org/t/issues-while-writing-a-clock-with-egui/102752
@@ -764,7 +802,7 @@ impl eframe::App for App {
 								ui.label(".json");
 							});
 							if ui.button("Create Circuit").clicked() {
-								self.circuit_tabs.push(LogicCircuitToplevelView::new(LogicCircuit::new_mostly_default(self.new_circuit_name.clone(), self.new_circuit_path.clone(), true), false));
+								self.circuit_tabs.push(LogicCircuitToplevelView::new(LogicCircuit::new_mostly_default(self.new_circuit_name.clone(), self.new_circuit_path.clone(), true), false, &self.styles));
 								self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
 							}
 						});
@@ -778,7 +816,7 @@ impl eframe::App for App {
 									if ui.selectable_label(false, &file_path).clicked() {
 										match resource_interface::load_circuit(&file_path, false, true, IntV2(0, 0), FourWayDir::default()) {
 											Ok(circuit) => {
-												self.circuit_tabs.push(LogicCircuitToplevelView::new(circuit, true));
+												self.circuit_tabs.push(LogicCircuitToplevelView::new(circuit, true, &self.styles));
 												self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
 											},
 											Err(e) => {
@@ -800,7 +838,11 @@ impl eframe::App for App {
 			}
 			else {
 				let circuit_toplevel: &mut LogicCircuitToplevelView = &mut self.circuit_tabs[self.current_tab_index - 1];
-				circuit_toplevel.draw(ui, &self.styles);
+				let new_mouse_pos_opt: Option<Pos2> = circuit_toplevel.draw(ui, &self.styles, ctx.screen_rect().min);// TODO: Get actual window top-left position
+				if let Some(new_pos) = new_mouse_pos_opt {
+					let mouse = mouse_rs::Mouse::new();
+					mouse.move_to(new_pos.x as i32, new_pos.y as i32).unwrap();
+				}
 			}
 		});
 	}
