@@ -570,25 +570,26 @@ impl LogicCircuitToplevelView {
 					// Vec<(Property, whether they are all the same, Set of selected items to update when property is edited)>
 					let mut unique_properties = Vec::<(SelectProperty, bool, HashSet<GraphicSelectableItemRef>)>::new();
 					for graphic_handle in selected_graphics.iter() {
-						let new_properties: Vec<SelectProperty> = self.circuit.run_function_on_graphic_item(graphic_handle.clone(), |item_box| item_box.get_properties());
-						for property in new_properties {
-							// Check if property enum variant is already included in `unique_properties`
-							let mut variant_included = false;// Optional index of `unique_properties`
-							for (prop_test, are_all_same, graphic_item_set) in unique_properties.iter_mut() {
-								if prop_test.ui_name() == property.ui_name() {
-									variant_included = true;
-									if *prop_test != property {
-										*are_all_same = false;
+						if let Some(new_properties) = self.circuit.run_function_on_graphic_item(graphic_handle.clone(), |item_box| item_box.get_properties()) {
+							for property in new_properties {
+								// Check if property enum variant is already included in `unique_properties`
+								let mut variant_included = false;// Optional index of `unique_properties`
+								for (prop_test, are_all_same, graphic_item_set) in unique_properties.iter_mut() {
+									if prop_test.ui_name() == property.ui_name() {
+										variant_included = true;
+										if *prop_test != property {
+											*are_all_same = false;
+										}
+										graphic_item_set.insert(graphic_handle.clone());
 									}
-									graphic_item_set.insert(graphic_handle.clone());
 								}
-							}
-							if !variant_included {
-								unique_properties.push((
-									property,
-									true,
-									HashSet::from_iter(vec![graphic_handle.clone()].into_iter())
-								));
+								if !variant_included {
+									unique_properties.push((
+										property,
+										true,
+										HashSet::from_iter(vec![graphic_handle.clone()].into_iter())
+									));
+								}
 							}
 						}
 					}

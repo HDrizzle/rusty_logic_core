@@ -1,6 +1,6 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{cell::RefCell, rc::Rc, collections::{HashMap, HashSet, VecDeque}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, time::{Duration, Instant}};
+use std::{cell::RefCell, rc::Rc, collections::{HashMap, hash_map, HashSet, VecDeque}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, time::{Duration, Instant}};
 use serde::{Deserialize, Serialize};
 use crate::{prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
@@ -533,7 +533,7 @@ impl ComponentPinReference {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Wire {
 	ui_data: UIData,
-	pub length: u32,
+	length: u32,
 	pub net: u64,
 	state: LogicState,
 	pub start_connections: Rc<RefCell<HashSet<WireConnection>>>,
@@ -555,7 +555,7 @@ impl Wire {
 		end_connections: Rc<RefCell<HashSet<WireConnection>>>
 	) -> Self {
 		Self {
-			ui_data: UIData::new(pos, direction, (V2::new(0.25, -0.25), V2::new(length as f32 - 0.25, 0.25))),
+			ui_data: UIData::new(pos, direction, Self::bb_from_len(length)),
 			length,
 			net,
 			state: LogicState::Floating,
@@ -566,6 +566,9 @@ impl Wire {
 			position_before_dragging: pos,
 			bit_width
 		}
+	}
+	fn bb_from_len(length: u32) -> (V2, V2) {
+		(V2::new(0.25, -0.25), V2::new(length as f32 - 0.25, 0.25))
 	}
 	/// Returns: (Start, Middle, End)
 	pub fn contains_point(&self, point: IntV2) -> ((bool, bool, bool), Option<Rc<RefCell<HashSet<WireConnection>>>>) {
@@ -646,6 +649,13 @@ impl Wire {
 	}
 	pub fn end_pos(&self) -> IntV2 {
 		self.ui_data.position + (self.ui_data.direction.to_unit_int().mult(self.length as i32))
+	}
+	pub fn set_length(&mut self, new_len: u32) {
+		self.length = new_len;
+		self.ui_data.local_bb = Self::bb_from_len(new_len);
+	}
+	pub fn get_len(&self) -> u32 {
+		self.length
 	}
 }
 
@@ -1335,7 +1345,7 @@ impl LogicCircuit {
 							for item_ref in selected_graphics.iter() {
 								self.run_function_on_graphic_item_mut(item_ref.clone(), |graphic_item| {
 									graphic_item.start_dragging(begining_mouse_pos_grid);
-								})
+								});
 							}
 						}
 						if response.clicked() {
@@ -1391,7 +1401,7 @@ impl LogicCircuit {
 									for item_ref in self.get_all_graphics_references() {
 										if self.run_function_on_graphic_item(item_ref.clone(), |graphic_item| -> bool {
 											bbs_overlap(graphic_item.bounding_box(V2::zeros()), select_bb)
-										}) {
+										}).unwrap_or_else(|| false) {
 											selected_graphics.insert(item_ref.clone());
 										}
 									}
@@ -1403,13 +1413,13 @@ impl LogicCircuit {
 								for item_ref in selected_graphics.iter() {
 									self.run_function_on_graphic_item_mut(item_ref.clone(), |graphic_item| {
 										graphic_item.dragging_to(*start_grid + *delta_grid);
-									})
+									});
 								}
 								if response.drag_stopped_by(PointerButton::Primary) {
 									for item_ref in selected_graphics.iter() {
 										self.run_function_on_graphic_item_mut(item_ref.clone(), |graphic_item| {
 											graphic_item.stop_dragging(*start_grid + *delta_grid);
-										})
+										});
 									}
 									*selected_graphics_state = SelectionState::Fixed;
 									return_recompute_connections = true;
@@ -1438,7 +1448,7 @@ impl LogicCircuit {
 							let new_bb = graphic_item.bounding_box(V2::zeros());
 							points.push(new_bb.0);
 							points.push(new_bb.1);
-						})
+						});
 					}
 					let bb = merge_points_to_bb(points);
 					draw.draw_rect(bb.0, bb.1, [0, 0, 0, 0], draw.styles.select_rect_edge_color);
@@ -1454,7 +1464,9 @@ impl LogicCircuit {
 						let bb_center: V2 = (bb.1 + bb.0) / 2.0;
 						//let bb_int = (IntV2(bb_float.0.x as i32, bb_float.0.y as i32), IntV2(bb_float.1.x as i32, bb_float.1.y as i32));
 						for item_ref in selected_graphics.iter() {
-							copied_items.push(self.copy_graphic_item(item_ref.clone()));
+							if let Some(copied_item) = self.copy_graphic_item(item_ref.clone()) {
+								copied_items.push(copied_item);
+							}
 						}
 						let item_set = CopiedItemSet::new(copied_items, round_v2_to_intv2(bb_center));
 						let raw_string = serde_json::to_string(&item_set).unwrap();
@@ -1603,13 +1615,14 @@ impl LogicCircuit {
 	fn selected_bb(&self, selected_graphics: &HashSet<GraphicSelectableItemRef>) -> Option<(V2, V2)> {
 		let mut bb_opt = Option::<(V2, V2)>::None;
 		for item_ref in selected_graphics.iter() {
-			let bb_float = self.run_function_on_graphic_item::<(V2, V2)>(item_ref.clone(), |item_box| item_box.bounding_box(V2::zeros()));
-			bb_opt = Some(match bb_opt.clone() {
-				Some(bb) => {
-					merge_points_to_bb(vec![bb_float.0, bb_float.1, bb.0, bb.1])
-				}
-				None => bb_float
-			});
+			if let Some(bb_float) = self.run_function_on_graphic_item::<(V2, V2)>(item_ref.clone(), |item_box| item_box.bounding_box(V2::zeros())) {
+				bb_opt = Some(match bb_opt.clone() {
+					Some(bb) => {
+						merge_points_to_bb(vec![bb_float.0, bb_float.1, bb.0, bb.1])
+					}
+					None => bb_float
+				});
+			}
 		}
 		bb_opt
 	}
@@ -1768,10 +1781,10 @@ impl LogicCircuit {
 	}
 	/// Fixes everything, should be run when a new circuit is created or when anything is moved, deleted, or placed
 	pub fn check_wire_geometry_and_connections(&mut self) {
+		// Find overlapping wires and correct them, connections can be ignored
+		// TODO
 		// Remove all wire connections except to themselves
 		self.check_wires_connected_to_just_themselves();
-		// Find overlapping wires and correct them, make sure to preserve connections
-		// TODO
 		// Combine overlapping but seperate end connection and T-connection HashSets
 		self.combine_overlapping_wire_connection_sets();
 		// Traverse wires by end connections, check that they are all on the same net, possibly merge nets
@@ -1801,29 +1814,33 @@ impl LogicCircuit {
 		// First: T-conn check
 		// vec<(Wire with end at pos, Wire to be sliced, Position)>
 		// The code is in a seperate block so that the self.wires borrow will be dropped and won't cause borrow issues when T connections are fixed
-		let t_conns_to_fix: Vec<(u64, u64, IntV2)> = {
-			let wires = self.wires.borrow();
-			let mut out = Vec::<(u64, u64, IntV2)>::new();
-			for (wire_id, wire_cell) in wires.iter() {
-				let wire = wire_cell.borrow();
+		//let wires = self.wires.borrow();
+		let mut unvisited_wires: Vec<u64> = self.wires.borrow().keys().map(|k| *k).collect();
+		while unvisited_wires.len() != 0 {
+			let t_conns_to_fix: Vec<(u64, u64, IntV2)> = {
+				let wire_id = unvisited_wires.pop().unwrap();
+				let wires = self.wires.borrow();
+				let wire = wires.get(&wire_id).unwrap().borrow();
 				let start_pos = wire.ui_data.position;
 				let end_pos = wire.end_pos();
-				if let Some((sliced_wire_id, _, intercept, _)) = self.is_point_on_wire(start_pos, Some(*wire_id)) {// Some(*wire_id) is provided to avoid detecting an interception with the same wire
+				let mut out = Vec::<(u64, u64, IntV2)>::new();
+				if let Some((sliced_wire_id, _, intercept, _)) = self.is_point_on_wire(start_pos, Some(wire_id)) {// Some(*wire_id) is provided to avoid detecting an interception with the same wire
 					if intercept == (false, true, false) {// Intercepting other wire in the middle
-						out.push((*wire_id, sliced_wire_id, start_pos));
+						out.push((wire_id, sliced_wire_id, start_pos));
 					}
 				}
-				if let Some((sliced_wire_id, _, intercept, _)) = self.is_point_on_wire(end_pos, Some(*wire_id)) {// Some(*wire_id) is provided to avoid detecting an interception with the same wire
+				if let Some((sliced_wire_id, _, intercept, _)) = self.is_point_on_wire(end_pos, Some(wire_id)) {// Some(*wire_id) is provided to avoid detecting an interception with the same wire
 					if intercept == (false, true, false) {// Intercepting other wire in the middle
-						out.push((*wire_id, sliced_wire_id, end_pos));
+						out.push((wire_id, sliced_wire_id, end_pos));
 					}
 				}
+				out
+			};
+			for t_conn in t_conns_to_fix {
+				let wire_conn = WireConnection::Wire(t_conn.0);
+				let (_, new_wire_opt) = self.add_connection_to_wire(wire_conn, t_conn.1, t_conn.2, (false, true, false));
+				unvisited_wires.push(new_wire_opt.expect("Running `self.add_connection_to_wire()` to fix a T connection should always create a new wire"));
 			}
-			out
-		};
-		for t_conn in t_conns_to_fix {
-			let wire_conn = WireConnection::Wire(t_conn.0);
-			self.add_connection_to_wire(wire_conn, t_conn.1, t_conn.2, (false, true, false));
 		}
 		// Now for end-to-end connections
 		let wires = self.wires.borrow();
@@ -2133,18 +2150,125 @@ impl LogicCircuit {
 	/// Checks for consecutive wire segments that are in the same direction and are only connected to each other. Wires like this can be merged into one wire segment
 	/// It also takes care of updating the end connections
 	/// Should be run AFTER the pin update and wire connection update functions
-	/// Does not deal with overlapping wires
+	/// Assumes that there are no overlapping wires
 	fn merge_consecutive_wires(&self) {
-		// TODO
+		let mut wires = self.wires.borrow_mut();
+		let mut wires_to_delete = HashSet::<u64>::new();
+		for (wire_id_1, wire_cell_1) in wires.iter() {
+			if wires_to_delete.contains(wire_id_1) {
+				continue;
+			}
+			let mut wire_1 = wire_cell_1.borrow_mut();
+			let end_conns: Vec<WireConnection> = {
+				let binding = wire_1.end_connections.borrow();
+				binding.iter().map(|conn| conn.clone()).collect()
+			};
+			if end_conns.len() == 2 {
+				for conn in end_conns {
+					if let WireConnection::Wire(wire_id_2) = conn {
+						if *wire_id_1 == wire_id_2 {// Avoid self-checking
+							continue;
+						}
+						let wire_2 = wires.get(&wire_id_2).unwrap().borrow();
+						let same_forward = wire_1.ui_data.direction == wire_2.ui_data.direction;
+						let same_backward = wire_1.ui_data.direction == wire_2.ui_data.direction.opposite_direction();
+						if same_forward {
+							// Get rid of wire 1 end and replace it with wire 2 end
+							// Remove wire 2 from new end and replace with reference to wire 1
+							// Wire1(1 start ... 1 end) + Wire2(2 start ... 2 end)
+							//           v
+							// Wire1(1 start ... 2 end)
+							let mut conns_2_end = wire_2.end_connections.borrow_mut();
+							conns_2_end.remove(&conn);
+							conns_2_end.insert(WireConnection::Wire(*wire_id_1));
+							wire_1.end_connections = Rc::clone(&wire_2.end_connections);
+						}
+						if same_backward {
+							// Get rid of wire 1 end and replace it with wire 2 start
+							// Remove wire 2 from new end and replace with reference to wire 1
+							// Wire1(1 start ... 1 end) + Wire2(2 end ... 2 start)
+							//           v
+							// Wire1(1 start ... 2 start)
+							let mut conns_2_start = wire_2.start_connections.borrow_mut();
+							conns_2_start.remove(&conn);
+							conns_2_start.insert(WireConnection::Wire(*wire_id_1));
+							wire_1.end_connections = Rc::clone(&wire_2.start_connections);
+						}
+						// Stuff that has to be done either way
+						if same_forward || same_backward {
+							let new_len = wire_1.get_len() + wire_2.get_len();
+							wire_1.set_length(new_len);
+							wires_to_delete.insert(wire_id_2);
+						}
+					}
+				}
+			}
+			let start_conns: Vec<WireConnection> = {
+				let binding = wire_1.start_connections.borrow();
+				binding.iter().map(|conn| conn.clone()).collect()
+			};
+			if start_conns.len() == 2 {
+				for conn in start_conns {
+					if let WireConnection::Wire(wire_id_2) = conn {
+						if *wire_id_1 == wire_id_2 {// Avoid self-checking
+							continue;
+						}
+						let wire_2 = wires.get(&wire_id_2).unwrap().borrow();
+						let same_forward = wire_1.ui_data.direction == wire_2.ui_data.direction;
+						let same_backward = wire_1.ui_data.direction == wire_2.ui_data.direction.opposite_direction();
+						if same_forward {
+							// Get rid of wire 1 start and replace it with wire 2 start
+							// Remove wire 2 from new start and replace with reference to wire 1
+							// Wire2(2 start ... 2 end) + Wire1(1 start ... 1 end)
+							//           v
+							// Wire1(2 start ... 1 end)
+							let mut conns_2_start = wire_2.start_connections.borrow_mut();
+							conns_2_start.remove(&conn);
+							conns_2_start.insert(WireConnection::Wire(*wire_id_1));
+							wire_1.start_connections = Rc::clone(&wire_2.end_connections);
+						}
+						if same_backward {
+							// Get rid of wire 1 start and replace it with wire 2 end
+							// Remove wire 2 from new start and replace with reference to wire 1
+							// Wire2(2 end ... 2 start) + Wire1(1 start ... 1 end)
+							//           v
+							// Wire1(2 end ... 1 end)
+							let mut conns_2_end = wire_2.end_connections.borrow_mut();
+							conns_2_end.remove(&conn);
+							conns_2_end.insert(WireConnection::Wire(*wire_id_1));
+							wire_1.start_connections = Rc::clone(&wire_2.end_connections);
+						}
+						// Stuff that has to be done either way
+						if same_forward || same_backward {
+							wire_1.ui_data.position = if same_forward {
+								wire_2.ui_data.position
+							}
+							else {
+								wire_2.end_pos()
+							};
+							let new_len = wire_1.get_len() + wire_2.get_len();
+							wire_1.set_length(new_len);
+							wires_to_delete.insert(wire_id_2);
+						}
+					}
+				}
+			}
+		}
+		for wire_id in wires_to_delete.iter() {
+			wires.remove(wire_id);
+		}
 	}
 	/// Will split a wire into two sections if the joint is somewhere in the middle, otherwise just adds it at one end
-	/// Returns: The shared connection set that should be used in case a wire is what is being connected
-	fn add_connection_to_wire(&self, connection: WireConnection, wire_id: u64, position: IntV2, wire_intercept_triple: (bool, bool, bool)) -> Rc<RefCell<HashSet<WireConnection>>> {
+	/// Returns: (
+	/// 	The shared connection set that should be used in case a wire is what is being connected
+	/// 	Optional new wire segment, only when wire has been split in the middle
+	/// )
+	fn add_connection_to_wire(&self, connection: WireConnection, wire_id: u64, position: IntV2, wire_intercept_triple: (bool, bool, bool)) -> (Rc<RefCell<HashSet<WireConnection>>>, Option<u64>) {
 		match wire_intercept_triple {
 			(true, false, false) => {
 				let conns = Rc::clone(&self.wires.borrow().get(&wire_id).unwrap().borrow().start_connections);
 				conns.borrow_mut().insert(connection);
-				conns
+				(conns, None)
 			},
 			(false, true, false) => {// Break wire in two
 				let new_wire_id: u64 = lowest_unused_key(&*self.wires.borrow());
@@ -2155,7 +2279,7 @@ impl LogicCircuit {
 					// Calculate new lengths
 					let wire_len = (position - wire.ui_data.position).taxicab();
 					let new_wire_len = (wire.end_pos() - position).taxicab();
-					wire.length = wire_len;// Assign this later so `wire.end_pos()` can be used
+					wire.set_length(wire_len);// Assign this later so `wire.end_pos()` can be used
 					// Change old wire's connections to just itself, the new wire, and the new connection
 					let end_conns = Rc::clone(&wire.end_connections);
 					wire.end_connections = Rc::new(RefCell::new(HashSet::from_iter(vec![
@@ -2173,12 +2297,12 @@ impl LogicCircuit {
 				}
 				// Create new wire
 				self.wires.borrow_mut().insert(new_wire_id, RefCell::new(Wire::new(position, new_length, direction, bit_width, net, Rc::clone(&middle_conns), end_conns)));
-				middle_conns
+				(middle_conns, Some(new_wire_id))
 			},
 			(false, false, true) => {
 				let conns = Rc::clone(&self.wires.borrow().get(&wire_id).unwrap().borrow().end_connections);
 				conns.borrow_mut().insert(connection);
-				conns
+				(conns, None)
 			},
 			other => panic!("LogicCircuit.add_connection_to_wire() provided with invalid wire intercept triple: {:?}", other)
 		}
@@ -2219,24 +2343,22 @@ impl LogicCircuit {
 		}
 		selected_opt
 	}
-	fn remove_graphic_item(&self, ref_: &GraphicSelectableItemRef) {
-		let error_msg = format!("Graphic item reference {:?} cannot be found", &ref_);
+	/// Returns: Whether it was removed
+	fn remove_graphic_item(&self, ref_: &GraphicSelectableItemRef) -> bool {
 		match ref_ {
-			GraphicSelectableItemRef::Component(comp_id) => {self.components.borrow_mut().remove(comp_id).expect(&error_msg);},
-			GraphicSelectableItemRef::Wire(wire_id) => {self.wires.borrow_mut().remove(wire_id).expect(&error_msg);},
-			GraphicSelectableItemRef::Pin(pin_id) => {self.generic_device.pins.borrow_mut().remove(pin_id).expect(&error_msg);},
+			GraphicSelectableItemRef::Component(comp_id) => self.components.borrow_mut().remove(comp_id).is_some(),
+			GraphicSelectableItemRef::Wire(wire_id) => self.wires.borrow_mut().remove(wire_id).is_some(),
+			GraphicSelectableItemRef::Pin(pin_id) => self.generic_device.pins.borrow_mut().remove(pin_id).is_some(),
 		}
 	}
-	pub fn run_function_on_graphic_item<T>(&self, ref_: GraphicSelectableItemRef, mut func: impl FnMut(Box<&dyn GraphicSelectableItem>) -> T) -> T {
-		let error_msg = format!("Graphic item reference {:?} cannot be found", &ref_);
+	/*pub fn run_function_on_graphic_item<T>(&self, ref_: GraphicSelectableItemRef, mut func: impl FnMut(Box<&dyn GraphicSelectableItem>) -> T) -> Option<T> {
 		match ref_ {
 			GraphicSelectableItemRef::Component(comp_id) => func(Box::new(logic_device_to_graphic_item(self.components.borrow().get(&comp_id).expect(&error_msg).borrow().deref().as_ref()))),
 			GraphicSelectableItemRef::Wire(wire_id) => func(Box::new(self.wires.borrow().get(&wire_id).expect(&error_msg).borrow().deref())),
 			GraphicSelectableItemRef::Pin(pin_id) => func(Box::new(self.generic_device.pins.borrow().get(&pin_id).expect(&error_msg).borrow().deref())),
 		}
 	}
-	pub fn run_function_on_graphic_item_mut<T>(&self, ref_: GraphicSelectableItemRef, mut func: impl FnMut(Box<&mut dyn GraphicSelectableItem>) -> T) -> T {
-		let error_msg = format!("Graphic item reference {:?} cannot be found", &ref_);
+	pub fn run_function_on_graphic_item_mut<T>(&self, ref_: GraphicSelectableItemRef, mut func: impl FnMut(Box<&mut dyn GraphicSelectableItem>) -> T) -> Option<T> {
 		match ref_ {
 			GraphicSelectableItemRef::Component(comp_id) => func(Box::new(logic_device_to_graphic_item_mut(self.components.borrow().get(&comp_id).expect(&error_msg).borrow_mut().deref_mut().as_mut()))),
 			GraphicSelectableItemRef::Wire(wire_id) => func(Box::new(self.wires.borrow().get(&wire_id).expect(&error_msg).borrow_mut().deref_mut())),
@@ -2244,12 +2366,90 @@ impl LogicCircuit {
 		}
 	}
 	/// Copy something(s) that have been selected and return a `CopiedGraphicItem` that can be put onto the clipboard as JSON
-	fn copy_graphic_item(&self, ref_: GraphicSelectableItemRef) -> CopiedGraphicItem {
-		let error_msg = format!("Graphic item reference {:?} cannot be found", &ref_);
+	fn copy_graphic_item(&self, ref_: GraphicSelectableItemRef) -> Option<CopiedGraphicItem> {
 		match ref_ {
 			GraphicSelectableItemRef::Component(comp_id) => self.components.borrow().get(&comp_id).expect(&error_msg).borrow().copy(),
 			GraphicSelectableItemRef::Wire(wire_id) => self.wires.borrow().get(&wire_id).expect(&error_msg).borrow().copy(),
 			GraphicSelectableItemRef::Pin(pin_id) => self.generic_device.pins.borrow().get(&pin_id).expect(&error_msg).borrow().copy(),
+		}
+	}*/
+	// Following 3 methods refactored by ChatGPT
+	pub fn run_function_on_graphic_item<T>(
+		&self,
+		ref_: GraphicSelectableItemRef,
+		mut func: impl FnMut(Box<&dyn GraphicSelectableItem>) -> T,
+	) -> Option<T> {
+		match ref_ {
+			GraphicSelectableItemRef::Component(comp_id) => {
+				let components_ref = self.components.borrow();
+				let comp_rc = components_ref.get(&comp_id)?;
+				let comp_borrow = comp_rc.borrow();
+				let graphic_item = logic_device_to_graphic_item(comp_borrow.deref().as_ref());
+				Some(func(Box::new(graphic_item)))
+			}
+			GraphicSelectableItemRef::Wire(wire_id) => {
+				let wires_ref = self.wires.borrow();
+				let wire_rc = wires_ref.get(&wire_id)?;
+				let wire_borrow = wire_rc.borrow();
+				Some(func(Box::new(wire_borrow.deref())))
+			}
+			GraphicSelectableItemRef::Pin(pin_id) => {
+				let pins_ref = self.generic_device.pins.borrow();
+				let pin_rc = pins_ref.get(&pin_id)?;
+				let pin_borrow = pin_rc.borrow();
+				Some(func(Box::new(pin_borrow.deref())))
+			}
+		}
+	}
+
+	pub fn run_function_on_graphic_item_mut<T>(
+		&self,
+		ref_: GraphicSelectableItemRef,
+		mut func: impl FnMut(Box<&mut dyn GraphicSelectableItem>) -> T,
+	) -> Option<T> {
+		match ref_ {
+			GraphicSelectableItemRef::Component(comp_id) => {
+				let mut components_ref = self.components.borrow_mut();
+				let comp_rc = components_ref.get_mut(&comp_id)?;
+				let mut comp_borrow = comp_rc.borrow_mut();
+				let graphic_item = logic_device_to_graphic_item_mut(comp_borrow.deref_mut().as_mut());
+				Some(func(Box::new(graphic_item)))
+			}
+			GraphicSelectableItemRef::Wire(wire_id) => {
+				let mut wires_ref = self.wires.borrow_mut();
+				let wire_rc = wires_ref.get_mut(&wire_id)?;
+				let mut wire_borrow = wire_rc.borrow_mut();
+				Some(func(Box::new(wire_borrow.deref_mut())))
+			}
+			GraphicSelectableItemRef::Pin(pin_id) => {
+				let mut pins_ref = self.generic_device.pins.borrow_mut();
+				let pin_rc = pins_ref.get_mut(&pin_id)?;
+				let mut pin_borrow = pin_rc.borrow_mut();
+				Some(func(Box::new(pin_borrow.deref_mut())))
+			}
+		}
+	}
+
+	fn copy_graphic_item(&self, ref_: GraphicSelectableItemRef) -> Option<CopiedGraphicItem> {
+		match ref_ {
+			GraphicSelectableItemRef::Component(comp_id) => {
+				let components_ref = self.components.borrow();
+				let comp_rc = components_ref.get(&comp_id)?;
+				let comp_borrow = comp_rc.borrow();
+				Some(comp_borrow.copy())
+			}
+			GraphicSelectableItemRef::Wire(wire_id) => {
+				let wires_ref = self.wires.borrow();
+				let wire_rc = wires_ref.get(&wire_id)?;
+				let wire_borrow = wire_rc.borrow();
+				Some(wire_borrow.copy())
+			}
+			GraphicSelectableItemRef::Pin(pin_id) => {
+				let pins_ref = self.generic_device.pins.borrow();
+				let pin_rc = pins_ref.get(&pin_id)?;
+				let pin_borrow = pin_rc.borrow();
+				Some(pin_borrow.copy())
+			}
 		}
 	}
 	/*fn delete_graphic_item(&mut self, ref_: GraphicSelectableItem) {
