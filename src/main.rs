@@ -112,6 +112,34 @@ pub mod prelude {
 		}
 		out
 	}
+	pub fn n_max<N: PartialOrd + Copy>(v: &Vec<N>) -> Option<N> {
+		let mut out = Option::<N>::None;
+		for n in v {
+			if let Some(current_n) = out {
+				if *n > current_n {
+					out = Some(*n);
+				}
+			}
+			else {
+				out = Some(*n);
+			}
+		}
+		out
+	}
+	pub fn n_min<N: PartialOrd + Copy>(v: &Vec<N>) -> Option<N> {
+		let mut out = Option::<N>::None;
+		for n in v {
+			if let Some(current_n) = out {
+				if *n < current_n {
+					out = Some(*n);
+				}
+			}
+			else {
+				out = Some(*n);
+			}
+		}
+		out
+	}
 	/*pub fn new_pin_name(pins: &HashMap<u64, RefCell<LogicConnectionPin>>) -> String {
 		let mut i: u64 = 0;
 		while pins.contains_key(&format!("pin_{}", i)) {
@@ -509,6 +537,9 @@ pub mod prelude {
 		}
 		pub fn taxicab(&self) -> u32 {
 			(self.0.abs() + self.1.abs()) as u32
+		}
+		pub fn dot(&self, other: Self) -> i32 {
+			self.0 * other.0 + self.1 * other.1
 		}
 	}
 

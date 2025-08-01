@@ -477,7 +477,10 @@ impl GraphicSelectableItem for LogicConnectionPin {
 		}
 	}
 	fn copy(&self) -> CopiedGraphicItem {
-		CopiedGraphicItem::ExternalConnection(self.clone())
+		let mut copy = self.clone();
+		copy.internal_source = None;// Drop any old net references
+		copy.internal_state = LogicState::Floating;
+		CopiedGraphicItem::ExternalConnection(copy)
 	}
 	fn accept_click(&mut self) -> bool {
 		match self.external_source.clone().expect("Pin being used as a graphic item must have an external source") {
@@ -1782,7 +1785,7 @@ impl LogicCircuit {
 	/// Fixes everything, should be run when a new circuit is created or when anything is moved, deleted, or placed
 	pub fn check_wire_geometry_and_connections(&mut self) {
 		// Find overlapping wires and correct them, connections can be ignored
-		// TODO
+		self.merge_overlapping_wires();
 		// Remove all wire connections except to themselves
 		self.check_wires_connected_to_just_themselves();
 		// Combine overlapping but seperate end connection and T-connection HashSets
@@ -1799,6 +1802,72 @@ impl LogicCircuit {
 		self.merge_consecutive_wires();
 		// Recompute BB for circuit internals
 		self.recompute_internals_bb();
+	}
+	/// Ignores connections, just check every wire against every other one, so O(n^2)
+	fn merge_overlapping_wires(&self) {
+		// If there are 3 or more overlapping wires, use this to keep track of the "original"
+		// If a wire is a key in this then go to its value, check if that's a key then keep going... until it isn't then that is the original wire and all others will be deleted
+		// {Wire to be deleted: Wire that will be kept (for now)}
+		let mut wires_big_daddy = HashMap::<u64, u64>::new();
+		let mut wires = self.wires.borrow_mut();
+		for (wire_id_1, wire_cell_1) in wires.iter() {
+			if wires_big_daddy.contains_key(wire_id_1) {
+				continue;
+			}
+			for (wire_id_2, wire_cell_2) in wires.iter() {
+				if wire_id_1 <= wire_id_2 {
+					continue;
+				}
+				let mut wire_1 = wire_cell_1.borrow_mut();
+				let mut wire_2 = wire_cell_2.borrow_mut();
+				// Determine if overlapping
+				let same_forward = wire_1.ui_data.direction == wire_2.ui_data.direction;
+				let same_backward = wire_1.ui_data.direction == wire_2.ui_data.direction.opposite_direction();
+				if same_forward || same_backward {
+					// Now compare difference in start positions and see if that is along a parallel axis
+					if let Some(axis_1_to_2) = (wire_2.ui_data.position - wire_1.ui_data.position).is_along_axis() {
+						if axis_1_to_2 == wire_1.ui_data.direction || axis_1_to_2 == wire_1.ui_data.direction.opposite_direction() {
+							// Now we know wires are colinear, find if they're diddling eachother
+							// Project them onto wire 1 axis, Thinking of Mr Byron (Beeran Ziddy) Ramirez!
+							let axis_unit = wire_1.ui_data.direction.to_unit_int();// Use this instead of `axis_1_to_2` so that overlapping check is simpler
+							let start_1_global = wire_1.ui_data.position;
+							// All relative to wire 1 start
+							let start_1 = 0;
+							let end_1 = (wire_1.ui_data.direction.to_unit_int().mult(wire_1.length as i32)).dot(axis_unit);
+							let start_2 = (wire_2.ui_data.position - start_1_global).dot(axis_unit);
+							let end_2 = (wire_2.end_pos() - start_1_global).dot(axis_unit);
+							if (start_1 < start_2 && start_2 < end_1) || (start_1 < end_2 && end_2 < end_1) {
+								// There is overlap (just the edges connecting is fine, and consecutive wires w/o T connections are handled by a different function)
+								// Check if wire 2 is already marked to be deleted, in which wire 1 should also be deleted w/o doing anything else
+								if wires_big_daddy.contains_key(wire_id_2) {
+									let mut daddy: u64 = *wire_id_2;
+									loop {
+										if let Some(new_target) = wires_big_daddy.get(&daddy) {
+											daddy = *new_target;
+										}
+										else {
+											break;
+										}
+									}
+									wires_big_daddy.insert(*wire_id_1, daddy);
+								}
+								else {
+									let proj_locations = vec![start_1, end_1, start_2, end_2];
+									let projection_min = n_min(&proj_locations).unwrap();
+									let projection_max = n_max(&proj_locations).unwrap();
+									wire_1.ui_data.position = start_1_global + axis_unit.mult(projection_min);
+									wire_1.set_length((projection_max - projection_min) as u32);
+									wires_big_daddy.insert(*wire_id_2, *wire_id_1);
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		for wire_to_del in wires_big_daddy.keys() {
+			wires.remove(wire_to_del);
+		}
 	}
 	fn check_wires_connected_to_just_themselves(&self) {
 		let wires = self.wires.borrow();
@@ -2580,7 +2649,7 @@ impl LogicCircuit {
 			let pin = pin_cell.borrow();
 			let pin_stroke = match for_block_layout_edit {
 				true => draw.styles.color_foreground,
-				false => draw.styles.color_from_logic_state(pin.state())
+				false => draw.styles.color_from_logic_state(pin.external_state)
 			};
 			draw.draw_polyline(
 				vec![
@@ -2611,7 +2680,7 @@ impl LogicCircuit {
 		// Name
 		draw.text(
 			self.type_name.clone(),
-			self.generic_device.ui_data.position.to_v2(),
+			V2::zeros(),// Relative
 			Align2::CENTER_CENTER,
 			draw.styles.text_color,
 			draw.styles.text_size_grid
