@@ -748,22 +748,25 @@ pub struct LogicDeviceGeneric {
 	pub ui_data: UIData,
 	pub name: String,
 	pub sub_compute_cycles: usize,
-	pub bit_width: Option<u32>
+	pub bit_width: Option<u32>,
+	pub show_name: bool
 }
 
 impl LogicDeviceGeneric {
 	pub fn new(
 		pin_config: HashMap<u64, (IntV2, FourWayDir, f32, String)>,
 		bounding_box: (V2, V2),
-		sub_compute_cycles: usize
+		sub_compute_cycles: usize,
+		show_name: bool
 	) -> Self {
-		Self::load(LogicDeviceSave::default(), pin_config, bounding_box, sub_compute_cycles)
+		Self::load(LogicDeviceSave::default(), pin_config, bounding_box, sub_compute_cycles, show_name)
 	}
 	pub fn load(
 		save: LogicDeviceSave,
 		pin_config: HashMap<u64, (IntV2, FourWayDir, f32, String)>,
 		bounding_box: (V2, V2),
-		sub_compute_cycles: usize
+		sub_compute_cycles: usize,
+		show_name: bool
 	) -> Self {
 		if sub_compute_cycles == 0 {
 			panic!("Sub-compute cycles cannot be 0");
@@ -782,7 +785,8 @@ impl LogicDeviceGeneric {
 			ui_data: UIData::new(save.pos, save.dir, bounding_box),
 			name: save.name,
 			sub_compute_cycles: 1,
-			bit_width: save.bit_width
+			bit_width: save.bit_width,
+			show_name
 		}
 	}
 	pub fn save(&self) -> LogicDeviceSave {
@@ -1045,7 +1049,15 @@ pub enum SelectionState {
 	#[default]
 	Fixed,
 	/// Being dragged by mouse, keeps track of where it started (wrt grid). If there aren't any selected items, then use this to drag a rectangle to select stuff
-	/// (Start, Delta)
+	/// (
+	/// 	Start,
+	/// 	Delta,
+	/// 	Vector of wires being dragged: (
+	/// 		Wire ID,
+	/// 		Whether start is selected,
+	/// 		Initial position of either start or end based on field 1
+	/// 	)
+	/// )
 	Dragging(V2, V2),
 	/// After Paste operation, the pasted stuff will remain selected and following the mouse until a left click
 	/// (Current or most recent mouse pos)
@@ -1138,7 +1150,8 @@ impl LogicCircuit {
 			generic_device: LogicDeviceGeneric::new(
 				vec_to_u64_keyed_hashmap(external_connections),
 				(V2::zeros(), V2::zeros()),
-				sub_compute_cycles
+				sub_compute_cycles,
+				displayed_as_block
 			),
 			components: RefCell::new(components),
 			nets: RefCell::new(hashmap_into_refcells(nets)),
@@ -1390,7 +1403,7 @@ impl LogicCircuit {
 					SelectionState::Dragging(start_grid, delta_grid) => {
 						let delta_grid_backwards_y = emath_vec2_to_v2(response.drag_delta()) / draw.grid_size;
 						*delta_grid += if cfg!(feature = "reverse_y") {
-							V2::new(delta_grid_backwards_y.x, -delta_grid_backwards_y.y)
+							v2_reverse_y(delta_grid_backwards_y)
 						} else {
 							delta_grid_backwards_y
 						};
@@ -1502,9 +1515,20 @@ impl LogicCircuit {
 				// Rotate w/ arrow keys
 				if input_state.consume_key(Modifiers::NONE, Key::ArrowLeft) {
 					self.rotate_selection(selected_graphics, false);
+					return_recompute_connections = true;
 				}
 				if input_state.consume_key(Modifiers::NONE, Key::ArrowRight) {
 					self.rotate_selection(selected_graphics, true);
+					return_recompute_connections = true;
+				}
+				// Flip w/ arrow keys
+				if input_state.consume_key(Modifiers::COMMAND, Key::ArrowLeft) || input_state.consume_key(Modifiers::COMMAND, Key::ArrowRight) {
+					self.flip_selection(selected_graphics, true);
+					return_recompute_connections = true;
+				}
+				if input_state.consume_key(Modifiers::COMMAND, Key::ArrowDown) || input_state.consume_key(Modifiers::COMMAND, Key::ArrowUp) {
+					self.flip_selection(selected_graphics, false);
+					return_recompute_connections = true;
 				}
 			},
 			Tool::HighlightNet(net_id) => {
@@ -1646,6 +1670,40 @@ impl LogicCircuit {
 					};
 					ui_data.position = rotate_dir.rotate_intv2(ui_data.position - bb_center) + bb_center;
 					ui_data.position_before_dragging = rotate_dir.rotate_intv2(ui_data.position_before_dragging);
+				});
+			}
+		}
+	}
+	/// Flips anything with direction W or E if horiz, otherwise anything with N or S
+	pub fn flip_selection(&self, selected_graphics: &HashSet<GraphicSelectableItemRef>, horiz: bool) {
+		// Only do anything of there's at least one thing selected
+		if let Some(bb) = self.selected_bb(selected_graphics) {
+			let bb_center: IntV2 = round_v2_to_intv2((bb.1 + bb.0) / 2.0);
+			for item_ref in selected_graphics.iter() {
+				self.run_function_on_graphic_item_mut(item_ref.clone(), |item_box| {
+					let ui_data: &mut UIData = item_box.get_ui_data_mut();
+					// Fixed by Gemini
+					if horiz {
+						// Check if the item has a horizontal direction to flip
+						if ui_data.direction == FourWayDir::E || ui_data.direction == FourWayDir::W {
+							// Flip the item's direction (e.g., East becomes West)
+							ui_data.direction = ui_data.direction.opposite_direction();
+						}
+						// Reflect the item's absolute position across the center's X-coordinate
+						ui_data.position.0 = 2 * bb_center.0 - ui_data.position.0;
+						// Reflect the relative dragging offset by negating its X-component
+						ui_data.position_before_dragging.0 = -ui_data.position_before_dragging.0;
+					} else { // Vertical flip
+						// Check if the item has a vertical direction to flip
+						if ui_data.direction == FourWayDir::S || ui_data.direction == FourWayDir::N {
+							// Flip the item's direction (e.g., North becomes South)
+							ui_data.direction = ui_data.direction.opposite_direction();
+						}
+						// Reflect the item's absolute position across the center's Y-coordinate
+						ui_data.position.1 = 2 * bb_center.1 - ui_data.position.1;
+						// Reflect the relative dragging offset by negating its Y-component
+						ui_data.position_before_dragging.1 = -ui_data.position_before_dragging.1;
+					}
 				});
 			}
 		}
@@ -1803,7 +1861,7 @@ impl LogicCircuit {
 		// Recompute BB for circuit internals
 		self.recompute_internals_bb();
 	}
-	/// Ignores connections, just check every wire against every other one, so O(n^2)
+	/// Ignores connections, just checks every wire against every other one, so O(n^2)
 	fn merge_overlapping_wires(&self) {
 		// If there are 3 or more overlapping wires, use this to keep track of the "original"
 		// If a wire is a key in this then go to its value, check if that's a key then keep going... until it isn't then that is the original wire and all others will be deleted
@@ -1819,7 +1877,7 @@ impl LogicCircuit {
 					continue;
 				}
 				let mut wire_1 = wire_cell_1.borrow_mut();
-				let mut wire_2 = wire_cell_2.borrow_mut();
+				let wire_2 = wire_cell_2.borrow();
 				// Determine if overlapping
 				let same_forward = wire_1.ui_data.direction == wire_2.ui_data.direction;
 				let same_backward = wire_1.ui_data.direction == wire_2.ui_data.direction.opposite_direction();
@@ -1838,27 +1896,33 @@ impl LogicCircuit {
 							let end_2 = (wire_2.end_pos() - start_1_global).dot(axis_unit);
 							if (start_1 < start_2 && start_2 < end_1) || (start_1 < end_2 && end_2 < end_1) {
 								// There is overlap (just the edges connecting is fine, and consecutive wires w/o T connections are handled by a different function)
-								// Check if wire 2 is already marked to be deleted, in which wire 1 should also be deleted w/o doing anything else
-								if wires_big_daddy.contains_key(wire_id_2) {
-									let mut daddy: u64 = *wire_id_2;
-									loop {
-										if let Some(new_target) = wires_big_daddy.get(&daddy) {
-											daddy = *new_target;
-										}
-										else {
-											break;
-										}
+								// Check if wire 2 is already marked to be deleted
+								// Wrt wire 1 start
+								// If wire 2 already has a daddy then wire 1 becomes its granpa
+								let mut daddy_id: u64 = *wire_id_2;
+								loop {
+									if let Some(new_target) = wires_big_daddy.get(&daddy_id) {
+										daddy_id = *new_target;
 									}
-									wires_big_daddy.insert(*wire_id_1, daddy);
+									else {
+										break;
+									}
 								}
-								else {
-									let proj_locations = vec![start_1, end_1, start_2, end_2];
-									let projection_min = n_min(&proj_locations).unwrap();
-									let projection_max = n_max(&proj_locations).unwrap();
-									wire_1.ui_data.position = start_1_global + axis_unit.mult(projection_min);
-									wire_1.set_length((projection_max - projection_min) as u32);
-									wires_big_daddy.insert(*wire_id_2, *wire_id_1);
+								if daddy_id == *wire_id_1 {
+									continue;
 								}
+								drop(wire_2);// Avoid borrow issues
+								wires_big_daddy.insert(daddy_id, *wire_id_1);
+								let daddy = wires.get(&daddy_id).unwrap().borrow();
+								let start_son = (daddy.ui_data.position - start_1_global).dot(axis_unit);
+								let end_son = (daddy.end_pos() - start_1_global).dot(axis_unit);
+								let son_id = daddy_id;
+								// Now modify wire 1
+								let proj_locations = vec![start_1, end_1, start_son, end_son];
+								let projection_min = n_min(&proj_locations).unwrap();
+								let projection_max = n_max(&proj_locations).unwrap();
+								wire_1.ui_data.position = start_1_global + axis_unit.mult(projection_min);
+								wire_1.set_length((projection_max - projection_min) as u32);
 							}
 						}
 					}
@@ -2666,12 +2730,7 @@ impl LogicCircuit {
 				draw.text(
 					pin.name.clone(),
 					pin_alternate_config.0.to_v2() - (pin_alternate_config.1.to_unit()*1.2),
-					match pin_alternate_config.1 {
-						FourWayDir::E => Align2::RIGHT_CENTER,
-						FourWayDir::N => Align2::CENTER_BOTTOM,
-						FourWayDir::W => Align2::LEFT_CENTER,
-						FourWayDir::S => Align2::CENTER_TOP
-					},
+					pin_alternate_config.1.rotate_intv2(draw.direction.to_unit_int()).is_along_axis().unwrap().to_egui_align2(),
 					draw.styles.text_color,
 					draw.styles.text_size_grid
 				);

@@ -21,8 +21,10 @@ pub mod prelude {
 	pub const APP_NAME: &str = "Rusty Logic";
 	pub const PROPAGATION_LIMIT: usize = 1;
 	pub const CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH: usize = 10;
+	/// Square box shown around wire ends and unconnected pins to start a wire from
+	pub const WIRE_START_POINT_HALF_WIDTH: f32 = 0.25;
 	pub type V2 = Vector2<f32>;
-	use eframe::egui::{Color32, CornerRadius};
+	use eframe::egui::{Align2, Color32, CornerRadius};
 	pub use ui::{Styles, LogicCircuitToplevelView, App, ComponentDrawInfo, GraphicSelectableItem, SelectProperty, UIData, CopiedGraphicItem, CopiedItemSet};
 	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection, LogicDeviceSave};
 	pub use resource_interface::{load_file_with_better_error, EnumAllLogicDevices};
@@ -40,6 +42,9 @@ pub mod prelude {
 	}
 	pub fn round_v2_to_intv2(in_: V2) -> IntV2 {
 		IntV2(in_.x.round() as i32, in_.y.round() as i32)
+	}
+	pub fn v2_reverse_y(v: V2) -> V2 {
+		V2::new(v.x, -v.y)
 	}
 	pub fn angle_radius_to_v2(angle_deg: f32, radius: f32) -> V2 {
 		let angle_rad = angle_deg * PI / 180.0;
@@ -92,6 +97,15 @@ pub mod prelude {
 
 		!(a_max.x <= b_min.x || a_min.x >= b_max.x ||
 		a_max.y <= b_min.y || a_min.y >= b_max.y)
+	}
+	pub fn bb_to_polyline(bb: (V2, V2)) -> Vec<V2> {
+		vec![
+			bb.0,
+			V2::new(bb.1.x, bb.0.y),
+			bb.1,
+			V2::new(bb.0.x, bb.1.y),
+			bb.0
+		]
 	}
 	pub fn lowest_unused_key<V>(map: &HashMap<u64, V>) -> u64 {
 		let mut i: u64 = 0;
@@ -242,6 +256,14 @@ pub mod prelude {
 				Self::N => (0, 1),
 				Self::W => (-1, 0),
 				Self::S => (0, -1)
+			}
+		}
+		pub fn to_egui_align2(&self) -> Align2 {
+			match &self {
+				Self::E => Align2::RIGHT_CENTER,
+				Self::N => Align2::CENTER_TOP,
+				Self::W => Align2::LEFT_CENTER,
+				Self::S => Align2::CENTER_BOTTOM
 			}
 		}
 		/// 2D rotation matrix multiplication
@@ -540,6 +562,9 @@ pub mod prelude {
 		}
 		pub fn dot(&self, other: Self) -> i32 {
 			self.0 * other.0 + self.1 * other.1
+		}
+		pub fn reverse_y(&self) -> Self {
+			Self(self.0, -self.1)
 		}
 	}
 

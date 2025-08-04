@@ -29,7 +29,8 @@ pub struct Styles {
 	pub select_rect_edge_color: [u8; 3],
 	pub color_wire_in_progress: [u8; 3],
 	pub text_size_grid: f32,
-	pub text_color: [u8; 3]
+	pub text_color: [u8; 3],
+	pub wire_start_point_outline_color: [u8; 3]
 }
 
 impl Styles {
@@ -71,7 +72,8 @@ impl Default for Styles {
 			select_rect_edge_color: [252, 7, 7],
 			color_wire_in_progress: [2, 156, 99],
 			text_size_grid: 0.9,
-			text_color: [243, 118, 252]
+			text_color: [243, 118, 252],
+			wire_start_point_outline_color: [93, 252, 167]
 		}
 	}
 }
@@ -114,7 +116,7 @@ pub trait GraphicSelectableItem {
 	fn get_properties(&self) -> Vec<SelectProperty>;
 	fn set_property(&mut self, property: SelectProperty);
 	fn copy(&self) -> CopiedGraphicItem;
-	/// Meant for external connections so that clickes can do something special instead of just selecting them
+	/// Meant for external connections so that clicks can do something special instead of just selecting them
 	/// Returns: Whether the click was "used", if so then it won't be selected normally but can still be command-clicked and included in a dragged rectangle
 	fn accept_click(&mut self) -> bool {
 		false
@@ -189,7 +191,9 @@ pub enum SelectProperty {
 	ClockEnabled(bool),
 	ClockFreq(f32),
 	ClockState(bool),
-	Name(String)
+	Name(String),
+	FixedSourceState(bool),
+	AddressWidth(u8)
 }
 
 impl SelectProperty {
@@ -204,7 +208,9 @@ impl SelectProperty {
 			Self::ClockEnabled(_) => "Clock Enable".to_owned(),
 			Self::ClockFreq(_) => "Clock Frequency".to_owned(),
 			Self::ClockState(_) => "Clock State".to_owned(),
-			Self::Name(_) => "Name".to_owned()
+			Self::Name(_) => "Name".to_owned(),
+			Self::FixedSourceState(_) => "State".to_owned(),
+			Self::AddressWidth(_) => "Address Width".to_owned()
 		}
 	}
 	/// Add this property to a list on the UI
@@ -300,6 +306,21 @@ impl SelectProperty {
 			}
 			Self::Name(name) => {
 				ui.text_edit_singleline(name).changed()
+			},
+			Self::FixedSourceState(state) => {
+				if ui.button(match state {
+					true => "1",
+					false => "0"
+				}).clicked() {
+					*state = !(*state);
+					true
+				}
+				else {
+					false
+				}
+			},
+			Self::AddressWidth(n) => {
+				ui.add(DragValue::new(n).range(RangeInclusive::new(1, 255)).clamp_existing_to_range(true)).changed()
 			}
 		}
 	}
@@ -348,8 +369,9 @@ impl<'a> ComponentDrawInfo<'a> {
 	pub fn draw_rect(&self, start_grid: V2, end_grid: V2, inside_stroke: [u8; 4], border_stroke: [u8; 3]) {
 		let rectified_bb: (V2, V2) = merge_points_to_bb(vec![start_grid, end_grid]);
 		let (start, end) = (self.grid_to_px(rectified_bb.0), self.grid_to_px(rectified_bb.1));
-		self.painter.rect_filled(Rect{min: start, max: end}, 0, u8_4_to_color32(inside_stroke));
-		self.painter.rect_stroke(Rect{min: start, max: end}, 0, Stroke::new(1.0, u8_3_to_color32(border_stroke)), StrokeKind::Outside);
+		let px_rectified_bb = Rect{min: Pos2::new(start.x, end.y), max: Pos2::new(end.x, start.y)};// After Y is flipped, Y needs to be swapped so that the bb is correct in pixel coordinates, Gemini helped find this problem
+		self.painter.rect_filled(px_rectified_bb, 0, u8_4_to_color32(inside_stroke));
+		self.painter.rect_stroke(px_rectified_bb, 0, Stroke::new(1.0, u8_3_to_color32(border_stroke)), StrokeKind::Outside);
 	}
 	pub fn draw_circle(&self, center: V2, radius: f32, stroke: [u8; 3]) {
 		self.painter.circle_stroke(self.grid_to_px(center), radius * self.grid_size, Stroke::new(self.grid_size * self.styles.line_size_grid, u8_3_to_color32(stroke)));
@@ -465,7 +487,7 @@ impl LogicCircuitToplevelView {
 					// Make sure its rounded
 					let shift_grid: IntV2 = round_v2_to_intv2(emath_vec2_to_v2(response.rect.center() - og_mouse_pos) / self.grid_size);
 					return_new_mouse_pos = Some(response.rect.center() + screen_top_left.to_vec2());
-					self.screen_center_wrt_grid -= shift_grid.to_v2();
+					self.screen_center_wrt_grid -= V2::new(shift_grid.0 as f32, -shift_grid.1 as f32);
 				};
 				// Scroll
 				let scale = styles.grid_scale_factor.powf(scroll);

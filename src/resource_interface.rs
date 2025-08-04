@@ -49,9 +49,15 @@ pub enum EnumAllLogicDevices {
 		position_grid: IntV2,
 		direction: FourWayDir,
 		name: String
-	}/*,
-	FixedGround(basic_components::Ground),
-	FixedPower(basic_components::Power)*/
+	},
+	FixedSource(LogicDeviceSave, bool),
+	EncoderOrDecoder(LogicDeviceSave, u8, bool),
+	Memory(
+		LogicDeviceSave,
+		u8,
+		/// If this is Some then it is nonvolotile memory, otherwise it is RAM
+		Option<Vec<u8>>
+	)
 }
 
 impl EnumAllLogicDevices {
@@ -65,7 +71,10 @@ impl EnumAllLogicDevices {
 			Self::GateNor(gate) => Ok(Box::new(basic_components::GateNor::from_save(gate))),
 			Self::GateXor(gate) => Ok(Box::new(basic_components::GateXor::from_save(gate))),
 			Self::GateXnor(gate) => Ok(Box::new(basic_components::GateXnor::from_save(gate))),
-			Self::Clock{enabled, state, freq, position_grid, direction, name} => Ok(Box::new(basic_components::Clock::from_save(enabled, state, freq, position_grid, direction, name)))
+			Self::Clock{enabled, state, freq, position_grid, direction, name} => Ok(Box::new(basic_components::Clock::from_save(enabled, state, freq, position_grid, direction, name))),
+			Self::FixedSource(save, state) => Ok(Box::new(basic_components::FixedSource::from_save(save, state))),
+			Self::EncoderOrDecoder(save, addr_size, is_encoder) => Ok(Box::new(basic_components::EncoderOrDecoder::from_save(save, addr_size, is_encoder))),
+			Self::Memory(save, addr_size, data_opt) => Ok(Box::new(basic_components::Memory::from_save(save, addr_size, data_opt)))
 		}
 	}
 	/// Example: "AND Gate" or "D Latch", for the component search UI
@@ -79,7 +88,10 @@ impl EnumAllLogicDevices {
 			Self::GateNor(_) => "NOR Gate".to_owned(),
 			Self::GateXor(_) => "XOR Gate".to_owned(),
 			Self::GateXnor(_) => "XNOR Gate".to_owned(),
-			Self::Clock{enabled: _, state: _, freq: _, position_grid: _, direction: _, name: _} => "Clock Source".to_owned()
+			Self::Clock{enabled: _, state: _, freq: _, position_grid: _, direction: _, name: _} => "Clock Source".to_owned(),
+			Self::FixedSource(_, state) => match state {true => "V+", false => "GND"}.to_owned(),
+			Self::EncoderOrDecoder(_, _, is_encoder) => match *is_encoder {true => "Encoder", false => "Decoder"}.to_owned(),
+			Self::Memory(_, _, _) => "Memory".to_owned()
 		}
 	}
 }
