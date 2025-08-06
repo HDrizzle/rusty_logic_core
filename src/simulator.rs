@@ -366,7 +366,9 @@ pub struct LogicConnectionPin {
 	pub ui_data: UIData,
 	pub bit_width: u32,
 	/// Only for user, defaults to ""
-	pub name: String
+	pub name: String,
+	#[serde(default)]
+	pub show_name: bool
 }
 
 impl LogicConnectionPin {
@@ -375,7 +377,8 @@ impl LogicConnectionPin {
 		external_source: Option<LogicConnectionPinExternalSource>,
 		relative_end_grid: IntV2,
 		direction: FourWayDir,
-		length: f32
+		length: f32,
+		show_name: bool
 	) -> Self {
 		Self {
 			internal_source,
@@ -385,7 +388,8 @@ impl LogicConnectionPin {
 			length,
 			ui_data: UIData::new(relative_end_grid, direction, (V2::new(1.0, -1.0), V2::new(3.0, 1.0))),
 			bit_width: 1,
-			name: String::new()
+			name: String::new(),
+			show_name
 		}
 	}
 	pub fn set_drive_internal(&mut self, state: LogicState) {
@@ -754,7 +758,7 @@ pub struct LogicDeviceGeneric {
 
 impl LogicDeviceGeneric {
 	pub fn new(
-		pin_config: HashMap<u64, (IntV2, FourWayDir, f32, String)>,
+		pin_config: HashMap<u64, (IntV2, FourWayDir, f32, String, bool)>,
 		bounding_box: (V2, V2),
 		sub_compute_cycles: usize,
 		show_name: bool
@@ -763,7 +767,7 @@ impl LogicDeviceGeneric {
 	}
 	pub fn load(
 		save: LogicDeviceSave,
-		pin_config: HashMap<u64, (IntV2, FourWayDir, f32, String)>,
+		pin_config: HashMap<u64, (IntV2, FourWayDir, f32, String, bool)>,
 		bounding_box: (V2, V2),
 		sub_compute_cycles: usize,
 		show_name: bool
@@ -773,11 +777,12 @@ impl LogicDeviceGeneric {
 		}
 		let mut pins = HashMap::<u64, RefCell<LogicConnectionPin>>::new();
 		for (pin_id, config) in pin_config {
-			let mut pin = LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, config.0, config.1, config.2);
-			pin.internal_state = match save.pin_states.get(&pin_id) {
+			let mut pin = LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, config.0, config.1, config.2, config.4);
+			pin.name = config.3;
+			/*pin.internal_state = match save.pin_states.get(&pin_id) {
 				Some(state) => *state,
 				None => LogicState::Floating
-			};
+			};*/
 			pins.insert(pin_id.clone(), RefCell::new(pin));
 		}
 		Self {
@@ -890,6 +895,7 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 impl<T: LogicDevice> GraphicSelectableItem for T {
 	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.get_generic().ui_data.position, self.get_generic().ui_data.direction);
+		self.draw_except_pins(&draw);
 		if !self.is_toplevel_circuit() {
 			for (pin_id, pin_cell) in self.get_pins_cell().borrow().iter() {
 				let pin = pin_cell.borrow();
@@ -901,9 +907,21 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 					],
 					draw.styles.color_from_logic_state(pin.state())
 				);
+				// TODO: Vertical text for N or S pins
+				let global_dir = position.1.rotate_intv2(draw.direction.to_unit_int()).is_along_axis().unwrap();
+				let vertical = global_dir == FourWayDir::N || global_dir == FourWayDir::S;
+				if pin.show_name {
+					draw.text(
+						pin.name.clone(),//"test".to_owned(),
+						position.0.to_v2() - (position.1.to_unit()*1.2),
+						global_dir.to_egui_align2(),
+						draw.styles.text_color,
+						draw.styles.text_size_grid,
+						vertical
+					);
+				}
 			}
 		}
-		self.draw_except_pins(&draw);
 	}
 	fn get_ui_data(&self) -> &UIData {
 		&self.get_generic().ui_data
@@ -1148,7 +1166,7 @@ impl LogicCircuit {
 		}
 		let mut new = Self {
 			generic_device: LogicDeviceGeneric::new(
-				vec_to_u64_keyed_hashmap(external_connections),
+				vec_to_u64_keyed_hashmap(external_connections.into_iter().map(|t| (t.0, t.1, t.2, t.3, true)).collect()),
 				(V2::zeros(), V2::zeros()),
 				sub_compute_cycles,
 				displayed_as_block
@@ -1368,7 +1386,7 @@ impl LogicCircuit {
 							// Find if command/ctrl is being held down
 							let multi_select_key: bool = input_state.key_down(Key::A);// TODO: Command / Control
 							// Find what was clicked (if anything)
-							match self.was_anything_clicked(draw.mouse_pos2_to_grid(response.interact_pointer_pos().expect("Interact pointer pos should work when clicked"))) {
+							match self.was_anything_clicked(draw.mouse_pos2_to_grid(response.interact_pointer_pos().expect("Interact pointer pos should work when clicked")), multi_select_key) {
 								Some(new_selected_item) => match multi_select_key {
 									true => match selected_graphics.contains(&new_selected_item) {
 										true => {
@@ -1497,7 +1515,7 @@ impl LogicCircuit {
 					match serde_json::from_str::<CopiedItemSet>(&string_raw) {
 						Ok(item_set) => {
 							let pasted_selected_graphics = self.paste(&item_set);
-							new_tool_opt = Some(Tool::Select{selected_graphics: HashSet::from_iter(pasted_selected_graphics.into_iter()), selected_graphics_state: SelectionState::FollowingMouse(mouse_pos_grid_opt.unwrap())});
+							new_tool_opt = Some(Tool::Select{selected_graphics: HashSet::from_iter(pasted_selected_graphics.into_iter()), selected_graphics_state: SelectionState::FollowingMouse(mouse_pos_grid_opt.unwrap_or_default())});
 						},
 						Err(_) => {}
 					}
@@ -2463,12 +2481,15 @@ impl LogicCircuit {
 			self.circuit_internals_bb = (V2::zeros(), V2::zeros())
 		}
 	}
-	fn was_anything_clicked<'a>(&self, grid_pos: V2) -> Option<GraphicSelectableItemRef> {
+	fn was_anything_clicked<'a>(&self, grid_pos: V2, multi_select_key: bool) -> Option<GraphicSelectableItemRef> {
 		let mut selected_opt = Option::<GraphicSelectableItemRef>::None;
 		for ref_ in self.get_all_graphics_references() {
 			self.run_function_on_graphic_item_mut(ref_.clone(), |graphic_item| {
 				if graphic_item.is_click_hit(grid_pos, V2::zeros()) {
-					if !graphic_item.accept_click() {
+					if multi_select_key {
+						selected_opt = Some(ref_.clone());
+					}
+					else if !graphic_item.accept_click() {
 						selected_opt = Some(ref_.clone());
 					}
 				}
@@ -2726,7 +2747,7 @@ impl LogicCircuit {
 				draw.draw_circle_filled(pin_alternate_config.0.to_v2(), draw.styles.connection_dot_grid_size, draw.styles.color_wire_floating);
 			}
 			// Pin name
-			if pin_alternate_config.2 {
+			/*if pin_alternate_config.2 {
 				draw.text(
 					pin.name.clone(),
 					pin_alternate_config.0.to_v2() - (pin_alternate_config.1.to_unit()*1.2),
@@ -2734,7 +2755,7 @@ impl LogicCircuit {
 					draw.styles.text_color,
 					draw.styles.text_size_grid
 				);
-			}
+			}*/
 		}
 		// Name
 		draw.text(
@@ -2742,7 +2763,8 @@ impl LogicCircuit {
 			V2::zeros(),// Relative
 			Align2::CENTER_CENTER,
 			draw.styles.text_color,
-			draw.styles.text_size_grid
+			draw.styles.text_size_grid,
+			false
 		);
 	}
 }

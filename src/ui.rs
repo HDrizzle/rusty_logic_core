@@ -1,9 +1,9 @@
 use crate::{basic_components, prelude::*, resource_interface, simulator::{AncestryStack, Tool, SelectionState, GraphicSelectableItemRef}};
-use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, Align2, Button, DragValue, FontFamily, FontId, Frame, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, Ui, Vec2}, epaint::PathStroke};
+use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, ComboBox, DragValue, FontFamily, FontId, Frame, Galley, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2}, emath, epaint::{PathStroke, TextShape}};
 use nalgebra::{ComplexField, Transform2};
 use serde::{Serialize, Deserialize};
 use serde_json;
-use std::{collections::HashSet, f32::consts::TAU, ops::RangeInclusive};
+use std::{collections::HashSet, f32::consts::TAU, ops::{AddAssign, RangeInclusive, SubAssign}, sync::Arc};
 use mouse_rs;
 
 /// Style for the UI, loaded from /resources/styles.json
@@ -193,7 +193,10 @@ pub enum SelectProperty {
 	ClockState(bool),
 	Name(String),
 	FixedSourceState(bool),
-	AddressWidth(u8)
+	/// Address size, Max
+	AddressWidth(u8, u8),
+	MemoryNonvolatile(bool),
+	EncoderOrDecoder(bool)
 }
 
 impl SelectProperty {
@@ -210,7 +213,9 @@ impl SelectProperty {
 			Self::ClockState(_) => "Clock State".to_owned(),
 			Self::Name(_) => "Name".to_owned(),
 			Self::FixedSourceState(_) => "State".to_owned(),
-			Self::AddressWidth(_) => "Address Width".to_owned()
+			Self::AddressWidth(_, _) => "Address Width".to_owned(),
+			Self::MemoryNonvolatile(_) => "Memory Nonvolatile".to_owned(),
+			Self::EncoderOrDecoder(_) => "Encoder/Decoder".to_owned()
 		}
 	}
 	/// Add this property to a list on the UI
@@ -221,32 +226,10 @@ impl SelectProperty {
 				ui.add(DragValue::new(n).range(RangeInclusive::new(1, 256)).clamp_existing_to_range(true)).changed()
 			},
 			Self::PositionX(x) => {
-				if ui.button("<").clicked() {
-					*x -= 1;
-					return true;
-				}
-				if ui.add(DragValue::new(x)).changed() {
-					return true;
-				}
-				if ui.button(">").clicked() {
-					*x += 1;
-					return true;
-				}
-				false
+				ui_drag_value_with_arrows(ui, x, None)
 			},
 			Self::PositionY(y) => {
-				if ui.button("<").clicked() {
-					*y -= 1;
-					return true;
-				}
-				if ui.add(DragValue::new(y)).changed() {
-					return true;
-				}
-				if ui.button(">").clicked() {
-					*y += 1;
-					return true;
-				}
-				false
+				ui_drag_value_with_arrows(ui, y, None)
 			},
 			Self::GlobalConnectionState(driven) => {
 				let mut return_update = false;
@@ -319,8 +302,23 @@ impl SelectProperty {
 					false
 				}
 			},
-			Self::AddressWidth(n) => {
-				ui.add(DragValue::new(n).range(RangeInclusive::new(1, 255)).clamp_existing_to_range(true)).changed()
+			Self::AddressWidth(n, max) => {
+				ui_drag_value_with_arrows(ui, n, Some((1, *max)))
+			}
+			Self::MemoryNonvolatile(nonv) => {
+				ui.checkbox(nonv, "").changed()
+			}
+			Self::EncoderOrDecoder(encoder) => {
+				if ui.button(match encoder {
+					true => "Encoder",
+					false => "Decoder"
+				}).clicked() {
+					*encoder = !*encoder;
+					true
+				}
+				else {
+					false
+				}
 			}
 		}
 	}
@@ -391,8 +389,29 @@ impl<'a> ComponentDrawInfo<'a> {
 		}
 		self.draw_polyline(polyline, stroke);
 	}
-	pub fn text(&self, text: String, pos: V2, align: Align2, color: [u8; 3], size_grid: f32) {
-		self.painter.text(self.grid_to_px(pos), align, text, FontId::new(self.grid_size * size_grid, FontFamily::Monospace), u8_3_to_color32(color));
+	pub fn text(&self, text: String, pos: V2, align: Align2, color: [u8; 3], size_grid: f32, vertical: bool) {
+		let color32 = u8_3_to_color32(color);
+		let pos_px = self.grid_to_px(pos);
+		let font_id = FontId::new(self.grid_size * size_grid, FontFamily::Monospace);
+		if vertical {
+			let galley = self.painter.fonts::<Arc<Galley>>(|fonts| {
+				let mut job: LayoutJob = LayoutJob::default();
+				job.append(&text, 0.0, TextFormat::simple(font_id, color32));
+				fonts.layout_job(job)
+			});
+			let y_offet = if align == Align2::CENTER_BOTTOM {
+				galley.size().x
+			}
+			else {
+				0.0
+			};
+			let mut shape = TextShape::new(pos_px + Vec2::new(galley.size().y / 2.0, -y_offet), galley, color32);
+			shape.angle = std::f32::consts::FRAC_PI_2;
+			self.painter.add(shape);
+		}
+		else {
+			self.painter.text(pos_px, align, text, font_id, color32);
+		}
 	}
 	pub fn grid_to_px(&self, grid: V2) -> egui::Pos2 {
 		// TODO
@@ -540,12 +559,12 @@ impl LogicCircuitToplevelView {
 				ui.menu_button("+ I/O Pin", |ui| {
 					let mut new_pin_opt = Option::<LogicConnectionPin>::None;
 					if ui.button("Input").clicked() {
-						let mut new_pin = LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(0, 0), FourWayDir::W, 1.0);
+						let mut new_pin = LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(0, 0), FourWayDir::W, 1.0, true);
 						new_pin.external_state = LogicState::Driven(false);
 						new_pin_opt = Some(new_pin);
 					}
 					if ui.button("Output").clicked() {
-						new_pin_opt = Some(LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(0, 0), FourWayDir::E, 1.0));
+						new_pin_opt = Some(LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(0, 0), FourWayDir::E, 1.0, true));
 					}
 					if let Some(new_pin) = new_pin_opt {
 						let handles: Vec<GraphicSelectableItemRef> = self.circuit.paste(&CopiedItemSet::new(vec![CopiedGraphicItem::ExternalConnection(new_pin)], IntV2(0, 0)));
@@ -869,4 +888,35 @@ impl eframe::App for App {
 			}
 		});
 	}
+}
+
+fn ui_drag_value_with_arrows<N: emath::Numeric + SubAssign + AddAssign + From<u8> + Into<i32>>(ui: &mut Ui, value: &mut N, range_opt: Option<(N, N)>) -> bool {
+	let mut down_enable = true;
+	let mut up_enable = true;
+	let value_copy = *value;
+	if let Some(range) = range_opt {
+		if value_copy <= range.0 {
+			down_enable = false;
+		}
+		if value_copy >= range.1 {
+			up_enable = false;
+		}
+	}
+	if ui.add_enabled(down_enable, Button::new("<")).clicked() {
+		*value -= 1_u8.into();
+		return true;
+	}
+	let mut drag_value = DragValue::new(value);
+	if let Some(range) = range_opt {
+		drag_value = drag_value.range(RangeInclusive::new(range.0, range.1));
+		drag_value = drag_value.clamp_existing_to_range(true);
+	}
+	if ui.add(drag_value).changed() {
+		return true;
+	}
+	if ui.add_enabled(up_enable, Button::new(">")).clicked() {
+		*value += 1_u8.into();
+		return true;
+	}
+	false
 }

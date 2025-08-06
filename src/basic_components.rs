@@ -32,9 +32,9 @@ impl GateAnd {
 		Self(LogicDeviceGeneric::load(
 			save,
 			hash_map!(
-				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned()),
-				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned()),
-				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned()),
+				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned(), false),
+				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned(), false),
+				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
 			1,
@@ -78,9 +78,9 @@ impl GateNand {
 		Self(LogicDeviceGeneric::load(
 			save,
 			hash_map!(
-				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned()),
-				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned()),
-				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned()),
+				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned(), false),
+				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned(), false),
+				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
 			1,
@@ -126,8 +126,8 @@ impl GateNot {
 		Self(LogicDeviceGeneric::load(
 			save,
 			hash_map!(
-				0 => (IntV2(-3, 0), FourWayDir::W, 1.0, "a".to_owned()),
-				1 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned()),
+				0 => (IntV2(-3, 0), FourWayDir::W, 1.0, "a".to_owned(), false),
+				1 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
 			1,
@@ -171,9 +171,9 @@ impl GateOr {
 		Self(LogicDeviceGeneric::load(
 			save,
 			hash_map!(
-				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned()),
-				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned()),
-				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned()),
+				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned(), false),
+				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned(), false),
+				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
 			1,
@@ -221,9 +221,9 @@ impl GateNor {
 		Self(LogicDeviceGeneric::load(
 			save,
 			hash_map!(
-				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned()),
-				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned()),
-				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned()),
+				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned(), false),
+				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned(), false),
+				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
 			1,
@@ -272,9 +272,9 @@ impl GateXor {
 		Self(LogicDeviceGeneric::load(
 			save,
 			hash_map!(
-				0 => (IntV2(-3, -1), FourWayDir::W, 0.7, "a".to_owned()),
-				1 => (IntV2(-3, 1), FourWayDir::W, 0.7, "b".to_owned()),
-				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned()),
+				0 => (IntV2(-3, -1), FourWayDir::W, 0.7, "a".to_owned(), false),
+				1 => (IntV2(-3, 1), FourWayDir::W, 0.7, "b".to_owned(), false),
+				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
 			1,
@@ -323,9 +323,9 @@ impl GateXnor {
 		Self(LogicDeviceGeneric::load(
 			save,
 			hash_map!(
-				0 => (IntV2(-3, -1), FourWayDir::W, 0.7, "a".to_owned()),
-				1 => (IntV2(-3, 1), FourWayDir::W, 0.7, "b".to_owned()),
-				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned()),
+				0 => (IntV2(-3, -1), FourWayDir::W, 0.7, "a".to_owned(), false),
+				1 => (IntV2(-3, 1), FourWayDir::W, 0.7, "b".to_owned(), false),
+				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
 			1,
@@ -388,7 +388,7 @@ impl Clock {
 			generic: LogicDeviceGeneric::load(
 				LogicDeviceSave::default(),
 				hash_map!(
-					0 => (IntV2(0, 0), FourWayDir::W, 1.0, "CLK".to_owned())
+					0 => (IntV2(0, 0), FourWayDir::W, 1.0, "CLK".to_owned(), false)
 				),
 				(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
 				1,
@@ -482,7 +482,7 @@ impl FixedSource {
 		Self {
 			generic: LogicDeviceGeneric::load(
 				save,
-				hash_map!(0 => (IntV2(0, 0), direction, 1.0, name)),
+				hash_map!(0 => (IntV2(0, 0), direction, 1.0, name, false)),
 				bb,
 				1,
 			false
@@ -530,7 +530,7 @@ impl LogicDevice for FixedSource {
 /// Returns: (Address X start, in/out Y start, BB)
 fn encoder_decoder_geometry(addr_size: u8) -> (i32, i32, (V2, V2)) {
 	let (addr_x_start, fanout_y_start) = (-((addr_size / 2 + 1) as i32), -2_i32.pow((addr_size - 1) as u32));
-		let fanout_size = 2_i32.pow(addr_size as u32);
+	let fanout_size = 2_i32.pow(addr_size as u32);
 	(
 		addr_x_start,
 		fanout_y_start,
@@ -563,17 +563,17 @@ impl EncoderOrDecoder {
 		let fanout_size = 2_i32.pow(addr_size as u32);
 		let addr_size_i32 = addr_size as i32;
 		// Generate pins
-		let mut pin_config = HashMap::<u64, (IntV2, FourWayDir, f32, String)>::new();
+		let mut pin_config = HashMap::<u64, (IntV2, FourWayDir, f32, String, bool)>::new();
 		// Input/Enable
-		pin_config.insert(0, (IntV2(addr_x_start - 1, 0), FourWayDir::W, 1.0, "Enable".to_owned()));
+		pin_config.insert(0, (IntV2(addr_x_start - 2, 0), FourWayDir::W, 1.0, "Enable".to_owned(), true));
 		// Addresses
 		for a_u8 in 0..addr_size {
 			let a = a_u8 as i32;
-			pin_config.insert((a_u8+1) as u64, (IntV2(addr_x_start + a, fanout_y_start - 1), FourWayDir::S, 1.0, format!("A{}", a_u8)));
+			pin_config.insert((a_u8+1) as u64, (IntV2(addr_x_start + a, fanout_y_start - 2), FourWayDir::S, 1.0, format!("A{}", a_u8), true));
 		}
 		// Outputs
 		for d in 0..fanout_size {
-			pin_config.insert((1+addr_size_i32+d) as u64, (IntV2(addr_x_start + addr_size_i32, fanout_y_start + d), FourWayDir::E, 1.0, format!("D{}", d)));
+			pin_config.insert((1+addr_size_i32+d) as u64, (IntV2(addr_x_start + addr_size_i32 + 2, fanout_y_start + d), FourWayDir::E, 1.0, format!("D{}", d), true));
 		}
 		Self {
 			generic: LogicDeviceGeneric::load(
@@ -588,13 +588,14 @@ impl EncoderOrDecoder {
 		}
 	}
 	fn get_fanout_pin_id(&self, address: u8) -> u64 {
-		(1+2_u8.pow(self.addr_size as u32) + address) as u64
+		assert!(2_u16.pow(self.addr_size as u32) > address as u16);
+		1 + (self.addr_size as u64) + (address as u64)
 	}
 	fn get_address(&self) -> u8 {
 		let mut out: u8 = 0;
 		for a in 0..self.addr_size {
 			if self.get_pin_state_panic(a as u64 + 1).to_bool() {
-				out += 2_u8.pow(out as u32);
+				out += 2_u8.pow(a as u32);
 			}
 		}
 		out
@@ -610,12 +611,13 @@ impl LogicDevice for EncoderOrDecoder {
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack) {
 		if self.is_encoder {
-			let input = self.get_pin_state_panic(0).to_bool();
-			self.set_pin_internal_state_panic(self.get_fanout_pin_id(self.get_address()), input.into());
+			let input = self.get_pin_state_panic(self.get_fanout_pin_id(self.get_address())).to_bool();
+			self.set_pin_internal_state_panic(0, input.into());
 		}
 		else {
 			let addr = self.get_address();
-			for d in 0..2_u8.pow(self.addr_size as u32) {
+			for d_16 in 0..2_u16.pow(self.addr_size as u32) {
+				let d = d_16 as u8;
 				self.set_pin_internal_state_panic(
 					self.get_fanout_pin_id(d),
 					match d == addr {
@@ -631,6 +633,20 @@ impl LogicDevice for EncoderOrDecoder {
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(bb_to_polyline(self.generic.ui_data.local_bb), draw.styles.color_foreground);
+	}
+	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
+		vec![
+			SelectProperty::AddressWidth(self.addr_size, 8),
+			SelectProperty::EncoderOrDecoder(self.is_encoder)
+		]
+	}
+	fn device_set_special_select_property(&mut self, property: SelectProperty) {
+		if let SelectProperty::AddressWidth(new_addr_size, _) = property {
+			*self = Self::from_save(self.generic.save(), new_addr_size, self.is_encoder);
+		}
+		if let SelectProperty::EncoderOrDecoder(new_encoder_state) = property {
+			*self = Self::from_save(self.generic.save(), self.addr_size, new_encoder_state);
+		}
 	}
 }
 
@@ -661,27 +677,27 @@ impl Memory {
 		Self::from_save(LogicDeviceSave::default(), 8, None)
 	}
 	/// Returns: (BB, pin config)
-	fn compute_geometry_and_pins(addr_size: u8) -> ((IntV2, IntV2), HashMap<u64, (IntV2, FourWayDir, f32, String)>) {
+	fn compute_geometry_and_pins(addr_size: u8) -> ((IntV2, IntV2), HashMap<u64, (IntV2, FourWayDir, f32, String, bool)>) {
 		let height: i32 = match addr_size < 12 {
 			true => 14,
 			false => addr_size as i32 + 2
 		};
 		let data_y_start = -2;
-		let addr_y_start = addr_size as i32 / 2;
+		let addr_y_start = -6;
 		let bb_int = (IntV2(-Self::HALF_WIDTH, -height/2), IntV2(Self::HALF_WIDTH, height/2));
-		let mut pin_config = HashMap::<u64, (IntV2, FourWayDir, f32, String)>::new();
+		let mut pin_config = HashMap::<u64, (IntV2, FourWayDir, f32, String, bool)>::new();
 		// Pin config
 		// Controls
-		pin_config.insert(0, (IntV2(-Self::HALF_WIDTH, data_y_start - 2), FourWayDir::W, 1.0, "CE".to_owned()));
-		pin_config.insert(1, (IntV2(-Self::HALF_WIDTH, data_y_start - 3), FourWayDir::W, 1.0, "WE".to_owned()));
-		pin_config.insert(2, (IntV2(-Self::HALF_WIDTH, data_y_start - 4), FourWayDir::W, 1.0, "RE".to_owned()));
+		pin_config.insert(0, (IntV2(-Self::HALF_WIDTH - 1, data_y_start - 2), FourWayDir::W, 1.0, "CE".to_owned(), true));
+		pin_config.insert(1, (IntV2(-Self::HALF_WIDTH - 1, data_y_start - 3), FourWayDir::W, 1.0, "WE".to_owned(), true));
+		pin_config.insert(2, (IntV2(-Self::HALF_WIDTH - 1, data_y_start - 4), FourWayDir::W, 1.0, "RE".to_owned(), true));
 		// Data
 		for d in 0..8_i32 {
-			pin_config.insert(d as u64 + 3, (IntV2(-Self::HALF_WIDTH - 1, data_y_start + d), FourWayDir::W, 1.0, format!("D{}", d)));
+			pin_config.insert(d as u64 + 3, (IntV2(-Self::HALF_WIDTH - 1, data_y_start + d), FourWayDir::W, 1.0, format!("D{}", d), true));
 		}
 		// Addresses
 		for a in 0..(addr_size as i32) {
-			pin_config.insert(a as u64 + 11, (IntV2(Self::HALF_WIDTH + 1, addr_y_start + a), FourWayDir::E, 1.0, format!("A{}", a)));
+			pin_config.insert(a as u64 + 11, (IntV2(Self::HALF_WIDTH + 1, addr_y_start + a), FourWayDir::E, 1.0, format!("A{}", a), true));
 		}
 		(
 			bb_int,
@@ -723,6 +739,15 @@ impl Memory {
 			nonvolatile
 		}
 	}
+	fn get_address(&self) -> u16 {
+		let mut out: u16 = 0;
+		for a in 0..self.addr_size {
+			if self.get_pin_state_panic(a as u64 + 11).to_bool() {
+				out += 2_u16.pow(a as u32);
+			}
+		}
+		out
+	}
 }
 
 impl LogicDevice for Memory {
@@ -732,8 +757,33 @@ impl LogicDevice for Memory {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, ancestors: &AncestryStack) {
-		// TODO
+	fn compute_step(&mut self, _ancestors: &AncestryStack) {
+		let ce: bool = self.get_pin_state_panic(0).to_bool();
+		let we: bool = self.get_pin_state_panic(1).to_bool();
+		let re: bool = self.get_pin_state_panic(2).to_bool();
+		let address = self.get_address() as usize;
+		if !re || !ce {// Set all data lines floating
+			for i in 3..11_u64 {
+				self.set_pin_internal_state_panic(i, LogicState::Floating);
+			}
+		}
+		if ce {
+			if re {// Memory read
+				let byte: u8 = self.data[address];
+				for i in 3..11_u64 {
+					self.set_pin_internal_state_panic(i, match (byte >> (i - 3)) & 1 {0 => false, 1 => true, _ => panic!("bruh")}.into());
+				}
+			}
+			else if we {
+				let mut new_byte: u8 = 0;
+				for i in 3..11_u64 {
+					if self.get_pin_state_panic(i).to_bool() {
+						new_byte += 2_u8.pow((i - 3) as u32);
+					}
+				}
+				self.data[address] = new_byte;
+			}
+		}
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::Memory(
@@ -747,5 +797,19 @@ impl LogicDevice for Memory {
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(bb_to_polyline(self.generic.ui_data.local_bb), draw.styles.color_foreground);
+	}
+	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
+		vec![
+			SelectProperty::AddressWidth(self.addr_size, 16),
+			SelectProperty::MemoryNonvolatile(self.nonvolatile)
+		]
+	}
+	fn device_set_special_select_property(&mut self, property: SelectProperty) {
+		if let SelectProperty::AddressWidth(new_addr_size, _) = property {
+			*self = Self::from_save(self.generic.save(), new_addr_size, Some(self.data.clone()));
+		}
+		if let SelectProperty::MemoryNonvolatile(nonvolatile) = property {
+			self.nonvolatile = nonvolatile;
+		}
 	}
 }
