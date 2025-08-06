@@ -779,10 +779,10 @@ impl LogicDeviceGeneric {
 		for (pin_id, config) in pin_config {
 			let mut pin = LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, config.0, config.1, config.2, config.4);
 			pin.name = config.3;
-			/*pin.internal_state = match save.pin_states.get(&pin_id) {
+			pin.internal_state = match save.pin_states.get(&pin_id) {
 				Some(state) => *state,
 				None => LogicState::Floating
-			};*/
+			};
 			pins.insert(pin_id.clone(), RefCell::new(pin));
 		}
 		Self {
