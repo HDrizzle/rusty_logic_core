@@ -81,23 +81,23 @@ fn basic_sim_and_gate() {
 	circuit.set_pin_external_state(0, true.into()).unwrap();
 	circuit.set_pin_external_state(1, true.into()).unwrap();
 	// Compute
-	circuit.compute(&AncestryStack::new());
-	circuit.compute(&AncestryStack::new());
+	circuit.compute(&AncestryStack::new(), 0);
+	circuit.compute(&AncestryStack::new(), 0);
 	// AND gate output
 	assert_eq!(circuit.get_pin_state_panic(2), true.into());
 	// Set global inputs
 	circuit.set_pin_external_state(0, false.into()).unwrap();
 	// Compute
-	circuit.compute(&AncestryStack::new());
-	circuit.compute(&AncestryStack::new());
+	circuit.compute(&AncestryStack::new(), 0);
+	circuit.compute(&AncestryStack::new(), 0);
 	// AND gate output
 	assert_eq!(circuit.get_pin_state_panic(2), false.into());
 	// Set global inputs
 	circuit.set_pin_external_state(0, true.into()).unwrap();
 	circuit.set_pin_external_state(1, false.into()).unwrap();
 	// Compute
-	circuit.compute(&AncestryStack::new());
-	circuit.compute(&AncestryStack::new());
+	circuit.compute(&AncestryStack::new(), 0);
+	circuit.compute(&AncestryStack::new(), 0);
 	// AND gate output
 	assert_eq!(circuit.get_pin_state_panic(2), false.into());
 }

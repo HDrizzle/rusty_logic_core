@@ -57,7 +57,8 @@ pub enum EnumAllLogicDevices {
 		u8,
 		/// If this is Some then it is nonvolotile memory, otherwise it is RAM
 		Option<Vec<u8>>
-	)
+	),
+	TriStateBuffer(LogicDeviceSave)
 }
 
 impl EnumAllLogicDevices {
@@ -74,7 +75,8 @@ impl EnumAllLogicDevices {
 			Self::Clock{enabled, state, freq, position_grid, direction, name} => Ok(Box::new(basic_components::Clock::from_save(enabled, state, freq, position_grid, direction, name))),
 			Self::FixedSource(save, state) => Ok(Box::new(basic_components::FixedSource::from_save(save, state))),
 			Self::EncoderOrDecoder(save, addr_size, is_encoder) => Ok(Box::new(basic_components::EncoderOrDecoder::from_save(save, addr_size, is_encoder))),
-			Self::Memory(save, addr_size, data_opt) => Ok(Box::new(basic_components::Memory::from_save(save, addr_size, data_opt)))
+			Self::Memory(save, addr_size, data_opt) => Ok(Box::new(basic_components::Memory::from_save(save, addr_size, data_opt))),
+			Self::TriStateBuffer(save) => Ok(Box::new(basic_components::TriStateBuffer::from_save(save)))
 		}
 	}
 	/// Example: "AND Gate" or "D Latch", for the component search UI
@@ -91,7 +93,8 @@ impl EnumAllLogicDevices {
 			Self::Clock{enabled: _, state: _, freq: _, position_grid: _, direction: _, name: _} => "Clock Source".to_owned(),
 			Self::FixedSource(_, state) => match state {true => "V+", false => "GND"}.to_owned(),
 			Self::EncoderOrDecoder(_, _, is_encoder) => match *is_encoder {true => "Encoder", false => "Decoder"}.to_owned(),
-			Self::Memory(_, _, _) => "Memory".to_owned()
+			Self::Memory(_, _, _) => "Memory".to_owned(),
+			Self::TriStateBuffer(_) => "Tri-State Buffer".to_owned()
 		}
 	}
 }

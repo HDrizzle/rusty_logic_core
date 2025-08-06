@@ -1,6 +1,6 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{cell::RefCell, rc::Rc, collections::{HashMap, hash_map, HashSet, VecDeque}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, time::{Duration, Instant}};
+use std::{cell::RefCell, rc::Rc, collections::{HashMap, HashSet, VecDeque}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}};
 use serde::{Deserialize, Serialize};
 use crate::{prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
@@ -130,11 +130,11 @@ pub fn merge_logic_states(a: LogicState, b: LogicState) -> LogicState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubCircuitPath(Vec<String>);
+pub struct SubCircuitPath(Vec<u64>);
 
 impl SubCircuitPath {
 	pub fn to_string(&self) -> String {
-		self.0.join("/") + "/"
+		self.0.iter().map(|id| id.to_string()).collect::<Vec<String>>().join("/") + "/"
 	}
 }
 
@@ -205,7 +205,7 @@ impl LogicNet {
 		let mut out = Vec::<(GlobalSourceReference, LogicState)>::new();
 		for connection in &self.connections {
 			match self_ancestors.parent() {
-				Some(circuit) => match connection {
+				Some((circuit, circuit_id)) => match connection {
 					CircuitWidePinReference::ComponentPin(component_pin_ref) => match circuit.components.borrow().get(&component_pin_ref.component_id) {
 						Some(component_cell) => match component_cell.borrow().get_pins_cell().borrow().get(&component_pin_ref.pin_id) {
 							Some(pin) => {
@@ -217,7 +217,7 @@ impl LogicNet {
 											let component = component_cell.borrow();
 											let circuit = component.get_circuit();
 											match circuit.nets.borrow().get(&child_circuit_net_id) {
-												Some(child_net) => out.append(&mut child_net.borrow().resolve_sources(&self_ancestors.push(circuit), *child_circuit_net_id, &new_caller_history)),
+												Some(child_net) => out.append(&mut child_net.borrow().resolve_sources(&self_ancestors.push((circuit, circuit_id)), *child_circuit_net_id, &new_caller_history)),
 												None => panic!("Internal connection in circuit \"{}\" references net {:?} inside sub-circuit \"{}\", the net does not exist", circuit.get_generic().name, &child_circuit_net_id, component_cell.borrow().get_generic().name)
 											};
 										},
@@ -242,7 +242,7 @@ impl LogicNet {
 										// External pin is connected to a net in a circuit that contains the circuit that this net is a part of
 										// Check that this net's "grandparent" is a circuit and not toplevel
 										match self_ancestors.grandparent() {
-											Some(parent_circuit) => match parent_circuit.nets.borrow().get(parent_circuit_net_id) {
+											Some((parent_circuit, _)) => match parent_circuit.nets.borrow().get(parent_circuit_net_id) {
 												Some(parent_circuit_net) => out.append(&mut parent_circuit_net.borrow().resolve_sources(&self_ancestors.trim(), *parent_circuit_net_id, &new_caller_history)),
 												None => panic!("External connection is referencing a net ({}) which does not exist in this circuit's parent", parent_circuit_net_id)
 											},
@@ -814,7 +814,7 @@ impl LogicDeviceGeneric {
 pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn get_generic(&self) -> &LogicDeviceGeneric;
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric;
-	fn compute_step(&mut self, ancestors: &AncestryStack);
+	fn compute_step(&mut self, ancestors: &AncestryStack, self_component_id: u64);
 	fn save(&self) -> Result<EnumAllLogicDevices, String>;
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>);
 	/// In CircuitVerse there can be, for example, one AND gate that acts like 8 gates, with 8-bit busses going in and out of it
@@ -841,9 +841,9 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 			None => None
 		}
 	}
-	fn compute(&mut self, ancestors: &AncestryStack) {
+	fn compute(&mut self, ancestors: &AncestryStack, self_component_id: u64) {
 		for _ in 0..self.get_generic().sub_compute_cycles {
-			self.compute_step(ancestors);
+			self.compute_step(ancestors, self_component_id);
 		}
 	}
 	fn get_circuit(&self) -> &LogicCircuit {
@@ -896,10 +896,12 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.get_generic().ui_data.position, self.get_generic().ui_data.direction);
 		self.draw_except_pins(&draw);
-		if !self.is_toplevel_circuit() {
-			for (pin_id, pin_cell) in self.get_pins_cell().borrow().iter() {
-				let pin = pin_cell.borrow();
-				let position: (IntV2, FourWayDir, f32) = self.get_pin_position_override(*pin_id).unwrap();
+		for (pin_id, pin_cell) in self.get_pins_cell().borrow().iter() {
+			let pin = pin_cell.borrow();
+			let position: (IntV2, FourWayDir, f32) = self.get_pin_position_override(*pin_id).unwrap();
+			let global_dir = position.1.rotate_intv2(draw.direction.to_unit_int()).is_along_axis().unwrap();
+			let vertical = global_dir == FourWayDir::N || global_dir == FourWayDir::S;
+			if !self.is_toplevel_circuit() {
 				draw.draw_polyline(
 					vec![
 						position.0.to_v2(),
@@ -907,14 +909,23 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 					],
 					draw.styles.color_from_logic_state(pin.state())
 				);
-				// TODO: Vertical text for N or S pins
-				let global_dir = position.1.rotate_intv2(draw.direction.to_unit_int()).is_along_axis().unwrap();
-				let vertical = global_dir == FourWayDir::N || global_dir == FourWayDir::S;
 				if pin.show_name {
 					draw.text(
 						pin.name.clone(),//"test".to_owned(),
 						position.0.to_v2() - (position.1.to_unit()*1.2),
 						global_dir.to_egui_align2(),
+						draw.styles.text_color,
+						draw.styles.text_size_grid,
+						vertical
+					);
+				}
+			}
+			else {
+				if pin.show_name {
+					draw.text(
+						pin.name.clone(),//"test".to_owned(),
+						position.0.to_v2() + (position.1.to_unit()*3.2),
+						global_dir.opposite_direction().to_egui_align2(),
 						draw.styles.text_color,
 						draw.styles.text_size_grid,
 						vertical
@@ -991,27 +1002,29 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 	}
 }
 
+/// Used to keep track of sub-circuit levels, tracks ancester circuits and their component IDs
+/// The toplevel circuit will just put 0 as its ID
 #[derive(Clone)]
-pub struct AncestryStack<'a>(Vec<&'a LogicCircuit>);
+pub struct AncestryStack<'a>(Vec<(&'a LogicCircuit, u64)>);
 
 impl<'a> AncestryStack<'a> {
 	pub fn new() -> Self {
 		Self(Vec::new())
 	}
-	pub fn parent(&self) -> Option<&'a LogicCircuit> {
+	pub fn parent(&self) -> Option<(&'a LogicCircuit, u64)> {
 		if self.0.len() == 0 {
 			None
 		}
 		else {
-			Some(self.0.last().expect("Ancestor stack should not be empty"))
+			Some(*self.0.last().expect("Ancestor stack should not be empty"))
 		}
 	}
-	pub fn grandparent(&self) -> Option<&'a LogicCircuit> {
+	pub fn grandparent(&self) -> Option<(&'a LogicCircuit, u64)> {
 		if self.0.len() < 2 {
 			None
 		}
 		else {
-			Some(&self.0[self.0.len() - 2])
+			Some(self.0[self.0.len() - 2])
 		}
 	}
 	pub fn trim(&self) -> Self {
@@ -1022,19 +1035,19 @@ impl<'a> AncestryStack<'a> {
 		out.0.pop();
 		out
 	}
-	pub fn push(&self, new_node: &'a LogicCircuit) -> Self {
+	pub fn push(&self, new_node: (&'a LogicCircuit, u64)) -> Self {
 		let mut out = self.clone();
 		out.0.push(new_node);
 		out
 	}
 	/// IMPORTANT: The first entry here will be ignored when creating the path because it would otherwise be redundant
 	pub fn to_sub_circuit_path(&self) -> SubCircuitPath {
-		let mut out = Vec::<String>::new();
-		for (i, circuit) in self.0.iter().enumerate() {
+		let mut out = Vec::<u64>::new();
+		for (i, (_, circuit_id)) in self.0.iter().enumerate() {
 			if i ==  0 {
 				continue;
 			}
-			out.push(circuit.get_generic().name.clone());
+			out.push(*circuit_id);
 		}
 		SubCircuitPath(out)
 	}
@@ -1046,7 +1059,7 @@ impl<'a> PartialEq for AncestryStack<'a> {
 			return false;
 		}
 		for i in 0..self.0.len() {
-			if self.0[i].get_generic().name != other.0[i].get_generic().name {// TODO: maybe make this better
+			if self.0[i].1 != other.0[i].1 {// Compare IDs
 				return false;
 			}
 		}
@@ -1116,7 +1129,7 @@ impl Tool {
 			Self::PlaceWire{perp_pairs: _, start_net_opt: _, start_wire_connections_opt: _} => false,
 		}
 	}
-	pub fn tool_select_ui(&self, draw: &ComponentDrawInfo) {
+	pub fn tool_select_ui(&self, _draw: &ComponentDrawInfo) {
 		// TODO
 	}
 }
@@ -1549,7 +1562,7 @@ impl LogicCircuit {
 					return_recompute_connections = true;
 				}
 			},
-			Tool::HighlightNet(net_id) => {
+			Tool::HighlightNet(_net_id) => {
 				// TODO
 			},
 			Tool::PlaceWire{perp_pairs, start_net_opt, start_wire_connections_opt} => {
@@ -1934,7 +1947,6 @@ impl LogicCircuit {
 								let daddy = wires.get(&daddy_id).unwrap().borrow();
 								let start_son = (daddy.ui_data.position - start_1_global).dot(axis_unit);
 								let end_son = (daddy.end_pos() - start_1_global).dot(axis_unit);
-								let son_id = daddy_id;
 								// Now modify wire 1
 								let proj_locations = vec![start_1, end_1, start_son, end_son];
 								let projection_min = n_min(&proj_locations).unwrap();
@@ -2628,8 +2640,8 @@ impl LogicCircuit {
 		// TODO: Text boxes once I implement them
 		out
 	}
-	fn compute_immutable(&self, ancestors_above: &AncestryStack) {
-		let ancestors = ancestors_above.push(&self);
+	fn compute_immutable(&self, ancestors_above: &AncestryStack, self_component_id: u64) {
+		let ancestors = ancestors_above.push((&self, self_component_id));
 		// Update net states
 		let mut new_net_states = HashMap::<u64, (LogicState, Vec<GlobalSourceReference>)>::new();
 		for (net_id, net) in self.nets.borrow().iter() {
@@ -2679,16 +2691,16 @@ impl LogicCircuit {
 			}
 		}
 		// THIS GOES LAST, has to be seperate loop then before
-		let ancestors = ancestors_above.push(&self);
-		for (_, comp) in self.components.borrow().iter() {
+		let ancestors = ancestors_above.push((&self, self_component_id));
+		for (comp_id, comp) in self.components.borrow().iter() {
 			let is_circuit = comp.borrow().is_circuit();
 			if is_circuit {
 				for _ in 0..comp.borrow().get_generic().sub_compute_cycles {
-					comp.borrow().get_circuit().compute_immutable(&ancestors);
+					comp.borrow().get_circuit().compute_immutable(&ancestors, *comp_id);
 				}
 			}
 			else {
-				comp.borrow_mut().compute(&ancestors);
+				comp.borrow_mut().compute(&ancestors, *comp_id);
 			}
 		}
 	}
@@ -2776,8 +2788,8 @@ impl LogicDevice for LogicCircuit {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic_device
 	}
-	fn compute_step(&mut self, ancestors_above: &AncestryStack) {
-		self.compute_immutable(ancestors_above);
+	fn compute_step(&mut self, ancestors_above: &AncestryStack, self_component_id: u64) {
+		self.compute_immutable(ancestors_above, self_component_id);
 	}
 	/// Returns handle to file for inclusion in other circuits
 	/// The actual save is done with `LogicCircuit::save_circuit()`

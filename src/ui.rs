@@ -1,6 +1,6 @@
 use crate::{basic_components, prelude::*, resource_interface, simulator::{AncestryStack, Tool, SelectionState, GraphicSelectableItemRef}};
-use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, ComboBox, DragValue, FontFamily, FontId, Frame, Galley, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2}, emath, epaint::{PathStroke, TextShape}};
-use nalgebra::{ComplexField, Transform2};
+use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, DragValue, FontFamily, FontId, Frame, Galley, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2}, emath, epaint::{PathStroke, TextShape}};
+use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
 use serde_json;
 use std::{collections::HashSet, f32::consts::TAU, ops::{AddAssign, RangeInclusive, SubAssign}, sync::Arc};
@@ -59,8 +59,8 @@ impl Default for Styles {
 			min_grid_size: 1.0,
 			max_grid_size: 1000.0,
 			grid_scale_factor: 1.012,
-			line_size_grid: 0.1,
-			connection_dot_grid_size: 0.3,
+			line_size_grid: 0.15,
+			connection_dot_grid_size: 0.4,
 			color_wire_floating: [128, 128, 128],
 			color_wire_contested: [255, 0, 0],
 			color_wire_low: [0, 0, 255],
@@ -484,7 +484,7 @@ impl LogicCircuitToplevelView {
 		let mut return_new_mouse_pos = Option::<Pos2>::None;
 		let inner_response = Frame::canvas(ui.style()).show::<Vec2>(ui, |ui| {
 			let canvas_size = ui.available_size_before_wrap();
-			let mut propagate = true;// TODO: Change to false when rest of logic is implemented
+			let propagate = true;// TODO: Change to false when rest of logic is implemented
 			let (response, painter) = ui.allocate_painter(canvas_size, Sense::all());
 			let draw_info = ComponentDrawInfo::new(
 				self.screen_center_wrt_grid,
@@ -687,7 +687,7 @@ impl LogicCircuitToplevelView {
 		let mut count: usize = 0;
 		// TODO: keep track of state
 		while count < propagation_limit {
-			self.circuit.compute(&AncestryStack::new());
+			self.circuit.compute(&AncestryStack::new(), 0);
 			count += 1;
 		}
 		return true;
@@ -774,7 +774,6 @@ pub struct App {
 	styles: Styles,
 	circuit_tabs: Vec<LogicCircuitToplevelView>,
 	current_tab_index: usize,
-	show_new_circuit_popup: bool,
 	new_circuit_name: String,
 	new_circuit_path: String,
 	load_circuit_err_opt: Option<String>
@@ -794,7 +793,6 @@ impl App {
 			styles,
 			circuit_tabs: Vec::new(),//vec![LogicCircuitToplevelView::new(create_simple_circuit(), false)],
 			current_tab_index: 0,
-			show_new_circuit_popup: false,
 			new_circuit_name: String::new(),
 			new_circuit_path: String::new(),
 			load_circuit_err_opt: None
@@ -803,7 +801,7 @@ impl App {
 }
 
 impl eframe::App for App {
-	fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+	fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
 		let circuit_names: Vec<String> = self.circuit_tabs.iter().map(|toplevel| toplevel.circuit.type_name.clone()).collect();
 		egui::CentralPanel::default().show(ctx, |ui: &mut Ui| {
 			// This function by default is only run upon user interaction, so copied this from https://users.rust-lang.org/t/issues-while-writing-a-clock-with-egui/102752

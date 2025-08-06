@@ -4,7 +4,6 @@ use std::{marker::PhantomData, cell::RefCell, ops, f32::consts::PI};
 use serde::{Serialize, Deserialize};
 use nalgebra::Vector2;
 use eframe::emath;
-use common_macros::hash_map;
 
 pub mod simulator;
 pub mod ui;

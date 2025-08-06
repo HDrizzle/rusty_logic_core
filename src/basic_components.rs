@@ -1,7 +1,6 @@
 use crate::{prelude::*, simulator::AncestryStack};
 use serde::{Deserialize, Serialize};
 use common_macros::hash_map;
-use serde_json::to_string;
 use std::{collections::HashMap, time::{Duration, Instant}};
 
 /// For the component search popup
@@ -17,7 +16,8 @@ pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
 		Clock::new().save().unwrap(),
 		FixedSource::new().save().unwrap(),
 		EncoderOrDecoder::new().save().unwrap(),
-		Memory::new().save().unwrap()
+		Memory::new().save().unwrap(),
+		TriStateBuffer::new().save().unwrap()
 	]
 }
 
@@ -50,7 +50,7 @@ impl LogicDevice for GateAnd {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
 		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() && self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -96,7 +96,7 @@ impl LogicDevice for GateNand {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
 		let and: bool = self.get_pin_state_panic(0).to_bool() && self.get_pin_state_panic(1).to_bool();
 		self.set_pin_internal_state_panic(2, (!and).into());
 	}
@@ -143,7 +143,7 @@ impl LogicDevice for GateNot {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
 		self.set_pin_internal_state_panic(1, (!self.get_pin_state_panic(0).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -189,7 +189,7 @@ impl LogicDevice for GateOr {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
 		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() || self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -239,7 +239,7 @@ impl LogicDevice for GateNor {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
 		self.set_pin_internal_state_panic(2, (!(self.get_pin_state_panic(0).to_bool() || self.get_pin_state_panic(1).to_bool())).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -290,7 +290,7 @@ impl LogicDevice for GateXor {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
 		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() != self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -341,7 +341,7 @@ impl LogicDevice for GateXnor {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
 		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() == self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -413,7 +413,7 @@ impl LogicDevice for Clock {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
 		if self.enabled && self.last_change.elapsed() > Duration::from_secs_f32(0.5 / self.freq) {// The frequency is based on a whole period, it must change twice per period, so 0.5/f not 1/f
 			self.set_pin_internal_state_panic(0, (!self.get_pin_state_panic(0).to_bool()).into());
 			self.last_change = Instant::now();
@@ -499,7 +499,7 @@ impl LogicDevice for FixedSource {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
 		self.set_pin_internal_state_panic(0, self.state.into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -508,7 +508,7 @@ impl LogicDevice for FixedSource {
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		match self.state {
 			true => {
-				draw.draw_polyline(vec![V2::new(0.0, 1.0), V2::new(1.0, 1.0), V2::new(-1.0, 1.0)], draw.styles.color_foreground);
+				draw.draw_polyline(vec![V2::new(0.0, 2.0), V2::new(1.0, 1.0), V2::new(-1.0, 1.0), V2::new(0.0, 2.0)], draw.styles.color_foreground);
 			},
 			false => {
 				draw.draw_polyline(vec![V2::new(1.0, -1.0), V2::new(-1.0, -1.0)], draw.styles.color_foreground);
@@ -609,7 +609,7 @@ impl LogicDevice for EncoderOrDecoder {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
 		if self.is_encoder {
 			let input = self.get_pin_state_panic(self.get_fanout_pin_id(self.get_address())).to_bool();
 			self.set_pin_internal_state_panic(0, input.into());
@@ -757,7 +757,7 @@ impl LogicDevice for Memory {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
 		let ce: bool = self.get_pin_state_panic(0).to_bool();
 		let we: bool = self.get_pin_state_panic(1).to_bool();
 		let re: bool = self.get_pin_state_panic(2).to_bool();
@@ -811,5 +811,55 @@ impl LogicDevice for Memory {
 		if let SelectProperty::MemoryNonvolatile(nonvolatile) = property {
 			self.nonvolatile = nonvolatile;
 		}
+	}
+}
+
+#[derive(Debug)]
+pub struct TriStateBuffer(LogicDeviceGeneric);
+
+impl TriStateBuffer {
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default())
+	}
+	pub fn from_save(save: LogicDeviceSave) -> Self {
+		Self(LogicDeviceGeneric::load(
+			save,
+			hash_map!(
+				0 => (IntV2(-3, 0), FourWayDir::W, 1.0, "a".to_owned(), false),
+				1 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
+				2 => (IntV2(0, -2), FourWayDir::S, 1.0, "En".to_owned(), false),
+			),
+			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			1,
+			false
+		))
+	}
+}
+
+impl LogicDevice for TriStateBuffer {
+	fn get_generic(&self) -> &LogicDeviceGeneric {
+		&self.0
+	}
+	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
+		&mut self.0
+	}
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
+		if self.get_pin_state_panic(2).to_bool() {
+			self.set_pin_internal_state_panic(1, self.get_pin_state_panic(0).to_bool().into());
+		}
+		else {
+			self.set_pin_internal_state_panic(1, LogicState::Floating);
+		}
+	}
+	fn save(&self) -> Result<EnumAllLogicDevices, String> {
+		Ok(EnumAllLogicDevices::TriStateBuffer(self.0.save()))
+	}
+	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+		draw.draw_polyline(vec![
+			V2::new(2.0, 0.0),
+			V2::new(-2.0, -2.0),
+			V2::new(-2.0, 2.0),
+			V2::new(2.0, 0.0)
+		], draw.styles.color_foreground);
 	}
 }
