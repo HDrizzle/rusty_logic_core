@@ -751,7 +751,6 @@ pub struct LogicDeviceGeneric {
 	pub pins: RefCell<HashMap<u64, RefCell<LogicConnectionPin>>>,
 	pub ui_data: UIData,
 	pub name: String,
-	pub sub_compute_cycles: usize,
 	pub bit_width: Option<u32>,
 	pub show_name: bool
 }
@@ -779,17 +778,16 @@ impl LogicDeviceGeneric {
 		for (pin_id, config) in pin_config {
 			let mut pin = LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None, config.0, config.1, config.2, config.4);
 			pin.name = config.3;
-			pin.internal_state = match save.pin_states.get(&pin_id) {
+			/*pin.internal_state = match save.pin_states.get(&pin_id) {
 				Some(state) => *state,
 				None => LogicState::Floating
-			};
+			};*/
 			pins.insert(pin_id.clone(), RefCell::new(pin));
 		}
 		Self {
 			pins: RefCell::new(pins),
 			ui_data: UIData::new(save.pos, save.dir, bounding_box),
 			name: save.name,
-			sub_compute_cycles: 1,
 			bit_width: save.bit_width,
 			show_name
 		}
@@ -842,9 +840,9 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 		}
 	}
 	fn compute(&mut self, ancestors: &AncestryStack, self_component_id: u64) {
-		for _ in 0..self.get_generic().sub_compute_cycles {
+		//for _ in 0..self.get_generic().sub_compute_cycles {
 			self.compute_step(ancestors, self_component_id);
-		}
+		//}
 	}
 	fn get_circuit(&self) -> &LogicCircuit {
 		panic!("LogicDevice::get_circuit only works on the LogicCircuit class which overrides it");
@@ -1158,7 +1156,9 @@ pub struct LogicCircuit {
 	/// The block diagram BB can be found at `self.generic_device.bounding_box`
 	pub circuit_internals_bb: (V2, V2),
 	/// For example, "D Latch", not "Register #7"
-	pub type_name: String
+	pub type_name: String,
+	/// For something like a flip flop that might oscillate without ever being stable, use this to fix the sub compute cycles of that circuit so it will ALWAYS be run that many times per cycle of the parent circuit and it's changed state will be ignored
+	pub fixed_sub_cycles_opt: Option<usize>
 }
 
 impl LogicCircuit {
@@ -1193,7 +1193,8 @@ impl LogicCircuit {
 			tool: RefCell::new(Tool::default()),
 			is_toplevel,
 			circuit_internals_bb: (V2::zeros(), V2::zeros()),
-			type_name
+			type_name,
+			fixed_sub_cycles_opt: None
 		};
 		new.recompute_default_layout();
 		new.check_wire_geometry_and_connections();
@@ -1258,7 +1259,8 @@ impl LogicCircuit {
 			tool: RefCell::new(Tool::default()),
 			is_toplevel: toplevel,
 			circuit_internals_bb: (V2::zeros(), V2::zeros()),
-			type_name: save.type_name
+			type_name: save.type_name,
+			fixed_sub_cycles_opt: save.fixed_sub_cycles_opt
 		};
 		out.check_wire_geometry_and_connections();
 		out.update_pin_block_positions();
@@ -2640,7 +2642,9 @@ impl LogicCircuit {
 		// TODO: Text boxes once I implement them
 		out
 	}
-	fn compute_immutable(&self, ancestors_above: &AncestryStack, self_component_id: u64) {
+	/// Returns: Whether anything changed
+	pub fn compute_immutable(&self, ancestors_above: &AncestryStack, self_component_id: u64) -> bool {
+		let mut changed = false;
 		let ancestors = ancestors_above.push((&self, self_component_id));
 		// Update net states
 		let mut new_net_states = HashMap::<u64, (LogicState, Vec<GlobalSourceReference>)>::new();
@@ -2651,6 +2655,7 @@ impl LogicCircuit {
 		for (net_id, (state, sources)) in new_net_states.into_iter() {
 			let binding = self.nets.borrow();
 			let mut net_mut_ref = binding.get(&net_id).unwrap().borrow_mut();
+			changed |= net_mut_ref.state != state;
 			net_mut_ref.state = state;
 			net_mut_ref.sources = sources;
 		}
@@ -2692,17 +2697,26 @@ impl LogicCircuit {
 		}
 		// THIS GOES LAST, has to be seperate loop then before
 		let ancestors = ancestors_above.push((&self, self_component_id));
-		for (comp_id, comp) in self.components.borrow().iter() {
-			let is_circuit = comp.borrow().is_circuit();
+		for (comp_id, comp_cell) in self.components.borrow().iter() {
+			let is_circuit = comp_cell.borrow().is_circuit();
 			if is_circuit {
-				for _ in 0..comp.borrow().get_generic().sub_compute_cycles {
-					comp.borrow().get_circuit().compute_immutable(&ancestors, *comp_id);
+				let comp = comp_cell.borrow();
+				let circuit: &LogicCircuit = comp.get_circuit();
+				if let Some(compute_cycles) = circuit.fixed_sub_cycles_opt {
+					for _ in 0..compute_cycles {
+						circuit.compute_immutable(&ancestors, *comp_id);
+					}
+				}
+				else {
+					changed |= circuit.compute_immutable(&ancestors, *comp_id);
 				}
 			}
 			else {
-				comp.borrow_mut().compute(&ancestors, *comp_id);
+				comp_cell.borrow_mut().compute(&ancestors, *comp_id);
 			}
 		}
+		// Done
+		changed
 	}
 	pub fn save_circuit(&self) -> Result<(), String> {
 		// Convert components to enum variants to be serialized
@@ -2722,7 +2736,8 @@ impl LogicCircuit {
 			components: components_save,
 			wires: wires_save,
 			block_pin_positions: self.block_pin_positions.clone(),
-			type_name: self.type_name.clone()
+			type_name: self.type_name.clone(),
+			fixed_sub_cycles_opt: self.fixed_sub_cycles_opt
 		};
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_path), &raw_string))?;

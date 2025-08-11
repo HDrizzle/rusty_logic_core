@@ -1,5 +1,5 @@
 use crate::{basic_components, prelude::*, resource_interface, simulator::{AncestryStack, Tool, SelectionState, GraphicSelectableItemRef}};
-use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, DragValue, FontFamily, FontId, Frame, Galley, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2}, emath, epaint::{PathStroke, TextShape}};
+use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, DragValue, FontFamily, FontId, Frame, Galley, Label, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2}, emath, epaint::{PathStroke, TextShape}};
 use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
 use serde_json;
@@ -60,7 +60,7 @@ impl Default for Styles {
 			max_grid_size: 1000.0,
 			grid_scale_factor: 1.012,
 			line_size_grid: 0.15,
-			connection_dot_grid_size: 0.4,
+			connection_dot_grid_size: 0.3,
 			color_wire_floating: [128, 128, 128],
 			color_wire_contested: [255, 0, 0],
 			color_wire_low: [0, 0, 255],
@@ -460,7 +460,9 @@ pub struct LogicCircuitToplevelView {
 	all_logic_devices_search: Vec<EnumAllLogicDevices>,
 	saved: bool,
 	new_sub_cycles_entry: String,
-	recompute_conns_next_frame: bool
+	recompute_conns_next_frame: bool,
+	/// 1 Less than actual number of times the compute function was called because the last call doesn't change anything and ends the loop
+	frame_compute_cycles: usize
 }
 
 impl LogicCircuitToplevelView {
@@ -476,7 +478,8 @@ impl LogicCircuitToplevelView {
 			all_logic_devices_search: Vec::new(),
 			saved,
 			new_sub_cycles_entry: String::new(),
-			recompute_conns_next_frame: false
+			recompute_conns_next_frame: false,
+			frame_compute_cycles: 0
 		}
 	}
 	/// Optional position to set the mouse to
@@ -531,7 +534,7 @@ impl LogicCircuitToplevelView {
 			}
 			// Update
 			if recompute_connections || propagate {
-				self.logic_loop_error = self.propagate_until_stable(PROPAGATION_LIMIT);
+				self.logic_loop_error = self.propagate_until_stable(CIRCUIT_MAX_COMPUTE_CYCLES);
 				self.recompute_conns_next_frame = false;
 			}
 			// graphics help from https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/painting.rs
@@ -576,20 +579,25 @@ impl LogicCircuitToplevelView {
 					}
 				});
 			}
+			// Compute cycles text
+			match self.frame_compute_cycles == CIRCUIT_MAX_COMPUTE_CYCLES {
+				true => {ui.colored_label(u8_3_to_color32([255, 0, 0]), format!("Compute cycles: {}", self.frame_compute_cycles));}
+				false => {ui.label(format!("Compute cycles: {}", self.frame_compute_cycles));}
+			}
 			// Circuit settings (clock speed, etc)
 			ui.collapsing("Circuit Settings", |ui| {
 				ui.horizontal(|ui| {
 					ui.label("Name");
 					ui.add(TextEdit::singleline(&mut self.circuit.type_name).desired_width(100.0));
 				});
-				ui.horizontal(|ui| {
-					ui.label("Sub compute cycles");
+				ui.horizontal(|ui| {// TODO: fix UI to make it optional
+					ui.label("Fixed sub cycles");
 					ui.add(TextEdit::singleline(&mut self.new_sub_cycles_entry).desired_width(50.0));
 					let button = Button::new("Update");
 					match self.new_sub_cycles_entry.parse::<usize>() {
 						Ok(sub_cycles) => {
 							if ui.add(button).clicked() {
-								self.circuit.generic_device.sub_compute_cycles = sub_cycles;
+								self.circuit.fixed_sub_cycles_opt = Some(sub_cycles);
 							}
 						},
 						Err(_) => {
@@ -687,9 +695,13 @@ impl LogicCircuitToplevelView {
 		let mut count: usize = 0;
 		// TODO: keep track of state
 		while count < propagation_limit {
-			self.circuit.compute(&AncestryStack::new(), 0);
+			if !self.circuit.compute_immutable(&AncestryStack::new(), 0) {
+				self.frame_compute_cycles = count;
+				return false;
+			}
 			count += 1;
 		}
+		self.frame_compute_cycles = count;
 		return true;
 	}
 	fn edit_block_layout(&mut self, ui: &mut Ui, styles: &Styles, maine_frame_size: Vec2) {

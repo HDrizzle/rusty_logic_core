@@ -18,7 +18,7 @@ pub mod prelude {
 	use super::*;
 	// Name of this app
 	pub const APP_NAME: &str = "Rusty Logic";
-	pub const PROPAGATION_LIMIT: usize = 1;
+	pub const CIRCUIT_MAX_COMPUTE_CYCLES: usize = 100;
 	pub const CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH: usize = 10;
 	/// Square box shown around wire ends and unconnected pins to start a wire from
 	pub const WIRE_START_POINT_HALF_WIDTH: f32 = 0.25;

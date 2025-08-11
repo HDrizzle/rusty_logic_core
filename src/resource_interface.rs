@@ -27,7 +27,9 @@ pub struct LogicCircuitSave {
 	pub components: HashMap<u64, EnumAllLogicDevices>,
 	pub wires: HashMap<u64, (IntV2, FourWayDir, u32)>,
 	pub block_pin_positions: HashMap<u64, (IntV2, FourWayDir, bool)>,
-	pub type_name: String
+	pub type_name: String,
+	#[serde(default)]
+	pub fixed_sub_cycles_opt: Option<usize>
 }
 
 /// Not great but I can't think of anything else
