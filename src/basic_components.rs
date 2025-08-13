@@ -1,7 +1,8 @@
 use crate::{prelude::*, simulator::AncestryStack};
+use eframe::egui::Ui;
 use serde::{Deserialize, Serialize};
 use common_macros::hash_map;
-use std::{collections::HashMap, time::{Duration, Instant}};
+use std::{collections::HashMap, time::{Duration, Instant}, cell::RefCell, rc::Rc};
 
 /// For the component search popup
 pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
@@ -668,7 +669,9 @@ pub struct Memory {
 	pub generic: LogicDeviceGeneric,
 	pub addr_size: u8,
 	pub data: Vec<u8>,
-	pub nonvolatile: bool
+	pub nonvolatile: bool,
+	ui_csv_paste_string: Rc<RefCell<String>>,
+	ui_error_opt: Option<String>
 }
 
 impl Memory {
@@ -736,7 +739,9 @@ impl Memory {
 			),
 			addr_size,
 			data: Self::format_data(data_opt, addr_size),
-			nonvolatile
+			nonvolatile,
+			ui_csv_paste_string: Rc::new(RefCell::new(String::new())),
+			ui_error_opt: None
 		}
 	}
 	fn get_address(&self) -> u16 {
@@ -801,16 +806,89 @@ impl LogicDevice for Memory {
 	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
 		vec![
 			SelectProperty::AddressWidth(self.addr_size, 16),
-			SelectProperty::MemoryNonvolatile(self.nonvolatile)
+			SelectProperty::MemoryProperties(MemoryPropertiesUI::new(self.nonvolatile, self.ui_csv_paste_string.clone(), self.ui_error_opt.clone()))
 		]
 	}
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		if let SelectProperty::AddressWidth(new_addr_size, _) = property {
 			*self = Self::from_save(self.generic.save(), new_addr_size, Some(self.data.clone()));
 		}
-		if let SelectProperty::MemoryNonvolatile(nonvolatile) = property {
-			self.nonvolatile = nonvolatile;
+		if let SelectProperty::MemoryProperties(props) = property {
+			let mut new_err_opt = Option::<String>::None;
+			self.nonvolatile = props.nonvolatile;
+			if props.erase {
+				for i in 0..self.data.len() {
+					self.data[i] = 0;
+				}
+			}
+			if props.paste {
+				let csv_string = self.ui_csv_paste_string.borrow();
+				for (i, number_string) in csv_string.split(",").into_iter().enumerate() {
+					match number_string.parse::<u8>() {
+						Ok(new_elem) => {
+							self.data[i] = new_elem;
+						}
+						Err(e) => {
+							new_err_opt = Some(format!("CSV paste error: {}", e));
+							break;
+						}
+					}
+				}
+			}
+			if let Some(new_err) = new_err_opt {
+				self.ui_error_opt = Some(new_err);
+			}
+			else {
+				if props.changed {
+					self.ui_error_opt = None;
+				}
+			}
 		}
+	}
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MemoryPropertiesUI {
+	pub nonvolatile: bool,
+	pub erase: bool,
+	pub csv_paste_string: Rc<RefCell<String>>,
+	pub paste: bool,
+	pub error_opt: Option<String>,
+	pub changed: bool
+}
+
+impl MemoryPropertiesUI {
+	pub fn new(
+		nonvolatile: bool,
+		csv_paste_string: Rc<RefCell<String>>,
+		error_opt: Option<String>
+	) -> Self {
+		Self {
+			nonvolatile,
+			erase: false,
+			csv_paste_string,
+			paste: false,
+			error_opt,
+			changed: false
+		}
+	}
+	pub fn show_ui(&mut self, ui: &mut Ui) -> bool {
+		ui.vertical(|ui| {
+			self.changed |= ui.checkbox(&mut self.nonvolatile, "Nonvolatile").changed();
+			ui.horizontal(|ui| {
+				ui.label("Paste in CSV");
+				ui.text_edit_singleline(&mut *self.csv_paste_string.borrow_mut());
+			});
+			self.paste = ui.button("Write").clicked();
+			ui.separator();
+			self.erase = ui.button("Erase").clicked();
+			self.changed |= self.paste || self.erase;
+			if let Some(error) = &self.error_opt {
+				ui.separator();
+				ui.colored_label(u8_3_to_color32([255, 0, 0]), error);
+			} 
+		});
+		self.changed
 	}
 }
 

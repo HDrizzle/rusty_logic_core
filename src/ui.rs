@@ -1,5 +1,5 @@
 use crate::{basic_components, prelude::*, resource_interface, simulator::{AncestryStack, Tool, SelectionState, GraphicSelectableItemRef}};
-use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, DragValue, FontFamily, FontId, Frame, Galley, Label, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2}, emath, epaint::{PathStroke, TextShape}};
+use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, DragValue, FontFamily, FontId, Frame, Galley, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2}, emath, epaint::{PathStroke, TextShape}};
 use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
 use serde_json;
@@ -195,8 +195,10 @@ pub enum SelectProperty {
 	FixedSourceState(bool),
 	/// Address size, Max
 	AddressWidth(u8, u8),
-	MemoryNonvolatile(bool),
-	EncoderOrDecoder(bool)
+	MemoryProperties(basic_components::MemoryPropertiesUI),
+	EncoderOrDecoder(bool),
+	/// Whether to reload, optional error message
+	ReloadCircuit(bool, Option<String>)
 }
 
 impl SelectProperty {
@@ -214,8 +216,9 @@ impl SelectProperty {
 			Self::Name(_) => "Name".to_owned(),
 			Self::FixedSourceState(_) => "State".to_owned(),
 			Self::AddressWidth(_, _) => "Address Width".to_owned(),
-			Self::MemoryNonvolatile(_) => "Memory Nonvolatile".to_owned(),
-			Self::EncoderOrDecoder(_) => "Encoder/Decoder".to_owned()
+			Self::MemoryProperties(_) => "Memory Properties".to_owned(),
+			Self::EncoderOrDecoder(_) => "Encoder/Decoder".to_owned(),
+			Self::ReloadCircuit(_, _) => "Reload circuit".to_owned()
 		}
 	}
 	/// Add this property to a list on the UI
@@ -305,8 +308,8 @@ impl SelectProperty {
 			Self::AddressWidth(n, max) => {
 				ui_drag_value_with_arrows(ui, n, Some((1, *max)))
 			}
-			Self::MemoryNonvolatile(nonv) => {
-				ui.checkbox(nonv, "").changed()
+			Self::MemoryProperties(props) => {
+				props.show_ui(ui)
 			}
 			Self::EncoderOrDecoder(encoder) => {
 				if ui.button(match encoder {
@@ -319,6 +322,13 @@ impl SelectProperty {
 				else {
 					false
 				}
+			},
+			Self::ReloadCircuit(reload, err_opt) => {
+				*reload = ui.button("Reload").clicked();
+				if let Some(err) = err_opt {
+					ui.colored_label(u8_3_to_color32([255, 0, 0]), err);
+				}
+				*reload
 			}
 		}
 	}
@@ -462,7 +472,9 @@ pub struct LogicCircuitToplevelView {
 	new_sub_cycles_entry: String,
 	recompute_conns_next_frame: bool,
 	/// 1 Less than actual number of times the compute function was called because the last call doesn't change anything and ends the loop
-	frame_compute_cycles: usize
+	frame_compute_cycles: usize,
+	showing_flatten_opoup: bool,
+	flatten_error: Option<String>
 }
 
 impl LogicCircuitToplevelView {
@@ -479,12 +491,15 @@ impl LogicCircuitToplevelView {
 			saved,
 			new_sub_cycles_entry: String::new(),
 			recompute_conns_next_frame: false,
-			frame_compute_cycles: 0
+			frame_compute_cycles: 0,
+			showing_flatten_opoup: false,
+			flatten_error: None
 		}
 	}
-	/// Optional position to set the mouse to
-	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles, screen_top_left: Pos2) -> Option<Pos2> {
+	/// Returns: (Optional position to set the mouse to, Optional new circuit tab to open)
+	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles, screen_top_left: Pos2) -> (Option<Pos2>, Option<String>) {
 		let mut return_new_mouse_pos = Option::<Pos2>::None;
+		let mut return_new_circuit_tab = Option::<String>::None;
 		let inner_response = Frame::canvas(ui.style()).show::<Vec2>(ui, |ui| {
 			let canvas_size = ui.available_size_before_wrap();
 			let propagate = true;// TODO: Change to false when rest of logic is implemented
@@ -605,8 +620,12 @@ impl LogicCircuitToplevelView {
 						}
 					}
 				});
-				if ui.button("Edit block layout").clicked() {
+				if ui.button("Edit block layout...").clicked() {
 					self.showing_block_edit_popup = true;
+				}
+				if ui.button("Flatten circuit...").clicked() {
+					self.showing_flatten_opoup = true;
+					self.flatten_error = None;
 				}
 			});
 			// Active selection features
@@ -688,7 +707,36 @@ impl LogicCircuitToplevelView {
 				self.edit_block_layout(ui, styles, inner_response.inner);
 			});
 		}
-		return_new_mouse_pos
+		else if self.showing_flatten_opoup {
+			Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
+				ui.label("Recursively flatten sub circuits");
+				ui.separator();
+				ui.label(format!("This feature will create a copy of this circuit but all the wires and components of sub-circuits extracted into the \"top layer\". Sub-circuits with fixed compute cycles will not be extracted but flattened versions of them will still be created. The intended use-case of this is to make a circuit faster to simulate. The flattened copy file size will be approximately the sum of all sub-circuits plus the toplevel wires and components. Running this function will create large files in the {} directory.", resource_interface::CIRCUITS_DIR));
+				ui.horizontal(|ui| {
+					if ui.button("Flatten Circuit").clicked() {
+						match self.circuit.flatten() {
+							Ok(device_save) => if let EnumAllLogicDevices::SubCircuit(save_path, _, _, _) = device_save {
+								return_new_circuit_tab = Some(save_path);
+								self.showing_flatten_opoup = false;
+							}
+							else {
+								panic!("Circuit flatten() should return the EnumAllLogicDevices::SubCircuit variant of EnumAllLogicDevices");
+							},
+							Err(e) => {
+								self.flatten_error = Some(e)
+							}
+						}
+					}
+					if ui.button("Cancel").clicked() {
+						self.showing_flatten_opoup = false;
+					}
+				});
+				if let Some(flatten_error) = &self.flatten_error {
+					ui.colored_label(u8_3_to_color32([255, 0, 0]), flatten_error);
+				}
+			});
+		}
+		(return_new_mouse_pos, return_new_circuit_tab)
 	}
 	/// Runs `compute_step()` repeatedly on the circuit until there are no changes, there must be a limit because there are circuits (ex. NOT gate connected to itself) where this would otherwise never end
 	pub fn propagate_until_stable(&mut self, propagation_limit: usize) -> bool {
@@ -810,6 +858,17 @@ impl App {
 			load_circuit_err_opt: None
 		}
 	}
+	fn load_circuit_tab(&mut self, file_path: &str) {
+		match resource_interface::load_circuit(file_path, false, true, IntV2(0, 0), FourWayDir::default()) {
+			Ok(circuit) => {
+				self.circuit_tabs.push(LogicCircuitToplevelView::new(circuit, true, &self.styles));
+				self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
+			},
+			Err(e) => {
+				self.load_circuit_err_opt = Some(e);
+			}
+		}
+	}
 }
 
 impl eframe::App for App {
@@ -866,15 +925,7 @@ impl eframe::App for App {
 							ScrollArea::vertical().show(ui, |ui| {
 								for file_path in files_list {
 									if ui.selectable_label(false, &file_path).clicked() {
-										match resource_interface::load_circuit(&file_path, false, true, IntV2(0, 0), FourWayDir::default()) {
-											Ok(circuit) => {
-												self.circuit_tabs.push(LogicCircuitToplevelView::new(circuit, true, &self.styles));
-												self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
-											},
-											Err(e) => {
-												self.load_circuit_err_opt = Some(e);
-											}
-										}
+										self.load_circuit_tab(&file_path);
 									}
 								}
 							});
@@ -890,10 +941,13 @@ impl eframe::App for App {
 			}
 			else {
 				let circuit_toplevel: &mut LogicCircuitToplevelView = &mut self.circuit_tabs[self.current_tab_index - 1];
-				let new_mouse_pos_opt: Option<Pos2> = circuit_toplevel.draw(ui, &self.styles, ctx.screen_rect().min);// TODO: Get actual window top-left position
+				let (new_mouse_pos_opt, new_circuit_tab_opt): (Option<Pos2>, Option<String>) = circuit_toplevel.draw(ui, &self.styles, ctx.screen_rect().min);// TODO: Get actual window top-left position
 				if let Some(new_pos) = new_mouse_pos_opt {
 					let mouse = mouse_rs::Mouse::new();
 					mouse.move_to(new_pos.x as i32, new_pos.y as i32).unwrap();
+				}
+				if let Some(new_circuit_tab) = new_circuit_tab_opt {
+					self.load_circuit_tab(&new_circuit_tab);
 				}
 			}
 		});

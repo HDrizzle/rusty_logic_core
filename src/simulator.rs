@@ -1158,7 +1158,8 @@ pub struct LogicCircuit {
 	/// For example, "D Latch", not "Register #7"
 	pub type_name: String,
 	/// For something like a flip flop that might oscillate without ever being stable, use this to fix the sub compute cycles of that circuit so it will ALWAYS be run that many times per cycle of the parent circuit and it's changed state will be ignored
-	pub fixed_sub_cycles_opt: Option<usize>
+	pub fixed_sub_cycles_opt: Option<usize>,
+	self_reload_err_opt: Option<String>
 }
 
 impl LogicCircuit {
@@ -1194,7 +1195,8 @@ impl LogicCircuit {
 			is_toplevel,
 			circuit_internals_bb: (V2::zeros(), V2::zeros()),
 			type_name,
-			fixed_sub_cycles_opt: None
+			fixed_sub_cycles_opt: None,
+			self_reload_err_opt: None
 		};
 		new.recompute_default_layout();
 		new.check_wire_geometry_and_connections();
@@ -1260,7 +1262,8 @@ impl LogicCircuit {
 			is_toplevel: toplevel,
 			circuit_internals_bb: (V2::zeros(), V2::zeros()),
 			type_name: save.type_name,
-			fixed_sub_cycles_opt: save.fixed_sub_cycles_opt
+			fixed_sub_cycles_opt: save.fixed_sub_cycles_opt,
+			self_reload_err_opt: None
 		};
 		out.check_wire_geometry_and_connections();
 		out.update_pin_block_positions();
@@ -2642,6 +2645,62 @@ impl LogicCircuit {
 		// TODO: Text boxes once I implement them
 		out
 	}
+	/// Creates a new flatened circuit and saves it, returning the path to the saved circuit
+	pub fn flatten(&self) -> Result<EnumAllLogicDevices, String> {
+		let mut save = self.create_save_circuit().unwrap();
+		let (wires, comps) = self.flatten_recursive()?;
+		save.wires = vec_to_u64_keyed_hashmap(wires);
+		save.components = vec_to_u64_keyed_hashmap(comps);
+		let save_path = format!("{}_flattened", self.save_path);
+		save.type_name = format!("{} (flattened)", save.type_name);
+		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
+		to_string_err(fs::write(resource_interface::get_circuit_file_path(&save_path), &raw_string))?;
+		Ok(EnumAllLogicDevices::SubCircuit(save_path, self.displayed_as_block, self.generic_device.ui_data.position, self.generic_device.ui_data.direction))
+	}
+	/// Recursively extracts all sub-circuits that don't have a fixed sub-cycle count
+	pub fn flatten_recursive(&self) -> Result<(Vec<(IntV2, FourWayDir, u32)>, Vec<EnumAllLogicDevices>), String> {
+		let mut wire_geometry = Vec::<(IntV2, FourWayDir, u32)>::new();
+		let mut components = Vec::<EnumAllLogicDevices>::new();
+		// Wires
+		for (_, wire_cell) in self.wires.borrow().iter() {
+			let wire = wire_cell.borrow();
+			wire_geometry.push((wire.ui_data.position, wire.ui_data.direction, wire.length));
+		}
+		// Components
+		for (_, comp_cell) in self.components.borrow().iter() {
+			let comp = comp_cell.borrow();
+			if comp.is_circuit() {
+				let circuit: &LogicCircuit = comp.get_circuit();
+				if circuit.fixed_sub_cycles_opt.is_some() {
+					components.push(circuit.flatten()?);
+				}
+				else {
+					let (mut sub_wires, mut sub_comps) = circuit.flatten_recursive()?;
+					wire_geometry.append(&mut sub_wires);
+					components.append(&mut sub_comps);
+				}
+			}
+			else {
+				components.push(comp.save().unwrap());
+			}
+		}
+		// Apply transformation for this circuit
+		let transform = |pos: &mut IntV2, dir: &mut FourWayDir| {
+			// Rotate direction and local pos by circuit direction and add circuit pos
+			*dir = self.generic_device.ui_data.direction.rotate_intv2(dir.to_unit_int()).is_along_axis().unwrap();
+			*pos = self.generic_device.ui_data.direction.rotate_intv2(*pos) + self.generic_device.ui_data.position;
+		};
+		for wire in wire_geometry.iter_mut() {
+			transform(&mut wire.0, &mut wire.1);
+		}
+		for comp_save in components.iter_mut() {
+			let mut comp = EnumAllLogicDevices::to_dynamic(comp_save.clone()).unwrap();
+			let ui_data = comp.get_ui_data_mut();
+			transform(&mut ui_data.position, &mut ui_data.direction);
+			*comp_save = comp.save().unwrap();
+		}
+		Ok((wire_geometry, components))
+	}
 	/// Returns: Whether anything changed
 	pub fn compute_immutable(&self, ancestors_above: &AncestryStack, self_component_id: u64) -> bool {
 		let mut changed = false;
@@ -2718,7 +2777,7 @@ impl LogicCircuit {
 		// Done
 		changed
 	}
-	pub fn save_circuit(&self) -> Result<(), String> {
+	pub fn create_save_circuit(&self) -> Result<LogicCircuitSave, String> {
 		// Convert components to enum variants to be serialized
 		let mut components_save = HashMap::<u64, EnumAllLogicDevices>::new();
 		for (ref_, component) in self.components.borrow().iter() {
@@ -2731,14 +2790,17 @@ impl LogicCircuit {
 			wires_save.insert(*ref_, (wire.ui_data.position, wire.ui_data.direction, wire.length));
 		}
 		// First, actually save this circuit
-		let save = LogicCircuitSave {
+		Ok(LogicCircuitSave {
 			generic_device: self.generic_device.clone(),
 			components: components_save,
 			wires: wires_save,
 			block_pin_positions: self.block_pin_positions.clone(),
 			type_name: self.type_name.clone(),
 			fixed_sub_cycles_opt: self.fixed_sub_cycles_opt
-		};
+		})
+	}
+	pub fn save_circuit(&self) -> Result<(), String> {
+		let save = self.create_save_circuit()?;
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_path), &raw_string))?;
 		Ok(())
@@ -2849,6 +2911,25 @@ impl LogicDevice for LogicCircuit {
 		}
 		else {
 			self.get_pin_position(pin_id)
+		}
+	}
+	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
+		vec![
+			SelectProperty::ReloadCircuit(false, self.self_reload_err_opt.clone())
+		]
+	}
+	fn device_set_special_select_property(&mut self, property: SelectProperty) {
+		if let SelectProperty::ReloadCircuit(reload, _) = property {
+			if reload {
+				match resource_interface::load_circuit(&self.save_path, self.displayed_as_block, false, self.generic_device.ui_data.position, self.generic_device.ui_data.direction) {
+					Ok(new) => {
+						*self = new;
+					},
+					Err(err) => {
+						self.self_reload_err_opt = Some(err);
+					}
+				}
+			}
 		}
 	}
 }
