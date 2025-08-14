@@ -23,13 +23,31 @@ pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: 
 /// Like LogicCircuit but serializable
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogicCircuitSave {
-	pub generic_device: LogicDeviceGeneric,
+	pub generic_device: LogicCircuitSaveGenericDevice,
 	pub components: HashMap<u64, EnumAllLogicDevices>,
 	pub wires: HashMap<u64, (IntV2, FourWayDir, u32)>,
 	pub block_pin_positions: HashMap<u64, (IntV2, FourWayDir, bool)>,
 	pub type_name: String,
 	#[serde(default)]
 	pub fixed_sub_cycles_opt: Option<usize>
+}
+
+/// LogicDeviceGeneric shouldn't be serialized, so this struct has feilds to be compatible with old save files
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LogicCircuitSaveGenericDevice {
+	pub pins: HashMap<u64, LogicConnectionPin>,
+	#[serde(default)]
+	pub graphic_pins: HashMap<u64, (IntV2, FourWayDir, f32, String, bool, Vec<u64>)>,
+	pub ui_data: UIData,
+	pub name: String,
+	pub bit_width: Option<u32>,
+	pub show_name: bool
+}
+
+impl Into<LogicDeviceGeneric> for LogicCircuitSaveGenericDevice {
+	fn into(self) -> LogicDeviceGeneric {
+		// TODO
+	}
 }
 
 /// Not great but I can't think of anything else

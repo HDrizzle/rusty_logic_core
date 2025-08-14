@@ -80,7 +80,7 @@ impl BlockLayoutHelper {
 	}
 }*/
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct GateAnd(LogicDeviceGeneric);
 
 impl GateAnd {
@@ -126,7 +126,7 @@ impl LogicDevice for GateAnd {
 	}
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct GateNand(LogicDeviceGeneric);
 
 impl GateNand {
@@ -174,7 +174,7 @@ impl LogicDevice for GateNand {
 	}
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct GateNot(LogicDeviceGeneric);
 
 impl GateNot {
@@ -219,7 +219,7 @@ impl LogicDevice for GateNot {
 	}
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct GateOr(LogicDeviceGeneric);
 
 impl GateOr {
@@ -269,7 +269,7 @@ impl LogicDevice for GateOr {
 	}
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct GateNor(LogicDeviceGeneric);
 
 impl GateNor {
@@ -320,7 +320,7 @@ impl LogicDevice for GateNor {
 	}
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct GateXor(LogicDeviceGeneric);
 
 impl GateXor {
@@ -371,7 +371,7 @@ impl LogicDevice for GateXor {
 	}
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct GateXnor(LogicDeviceGeneric);
 
 impl GateXnor {

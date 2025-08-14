@@ -361,35 +361,19 @@ pub struct LogicConnectionPin {
 	internal_state: LogicState,
 	pub external_source: Option<LogicConnectionPinExternalSource>,
 	pub external_state: LogicState,
-	/// Usually 1, may be something else if theres a curve on an OR input or something
-	pub length: f32,
-	pub ui_data: UIData,
-	pub bit_width: u32,
-	/// Only for user, defaults to ""
-	pub name: String,
-	#[serde(default)]
-	pub show_name: bool
+	
 }
 
 impl LogicConnectionPin {
 	pub fn new(
 		internal_source: Option<LogicConnectionPinInternalSource>,
-		external_source: Option<LogicConnectionPinExternalSource>,
-		relative_end_grid: IntV2,
-		direction: FourWayDir,
-		length: f32,
-		show_name: bool
+		external_source: Option<LogicConnectionPinExternalSource>
 	) -> Self {
 		Self {
 			internal_source,
 			internal_state: LogicState::Floating,
 			external_source,
-			external_state: LogicState::Floating,
-			length,
-			ui_data: UIData::new(relative_end_grid, direction, (V2::new(1.0, -1.0), V2::new(3.0, 1.0))),
-			bit_width: 1,
-			name: String::new(),
-			show_name
+			external_state: LogicState::Floating
 		}
 	}
 	pub fn set_drive_internal(&mut self, state: LogicState) {
@@ -403,8 +387,39 @@ impl LogicConnectionPin {
 	}
 }
 
+#[derive(Clone, Debug)]
+pub struct GraphicPin {
+	pub logic_pins: Vec<Rc<RefCell<LogicConnectionPin>>>,
+	/// Usually 1, may be something else if theres a curve on an OR input or something
+	pub length: f32,
+	pub ui_data: UIData,
+	pub bit_width: u32,
+	/// Only for user, defaults to ""
+	pub name: String,
+	pub show_name: bool
+}
+
+impl GraphicPin {
+	pub fn new(
+		logic_pins: Vec<Rc<RefCell<LogicConnectionPin>>>,
+		relative_end_grid: IntV2,
+		direction: FourWayDir,
+		length: f32,
+		show_name: bool
+	) -> Self {
+		Self {
+			logic_pins,
+			length,
+			ui_data: UIData::new(relative_end_grid, direction, (V2::new(1.0, -1.0), V2::new(3.0, 1.0))),
+			bit_width: 1,
+			name: String::new(),
+			show_name
+		}
+	}
+}
+
 /// ONLY meant to be used on external pins on the toplevel circuit, all other pins are just rendered as part of the component
-impl GraphicSelectableItem for LogicConnectionPin {
+impl GraphicSelectableItem for GraphicPin {
 	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
 		draw.draw_polyline(
@@ -729,7 +744,7 @@ impl GraphicSelectableItem for Wire {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum WireConnection {
 	/// Component or external pin
-	Pin(CircuitWidePinReference),
+	Pin(CircuitWideGraphicPinReference),
 	/// Another straight wire segment
 	Wire(u64)
 }
@@ -746,9 +761,10 @@ pub struct LogicDeviceSave {
 }
 
 /// It is recommended for anything implementing the trait `LogicDevice` to have a field for this
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LogicDeviceGeneric {
 	pub pins: RefCell<HashMap<u64, RefCell<LogicConnectionPin>>>,
+	pub graphic_pins: HashMap<u64, GraphicPin>,
 	pub ui_data: UIData,
 	pub name: String,
 	pub bit_width: Option<u32>,
@@ -830,10 +846,9 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 		self.get_pin_position(pin_id)
 	}
 	/// DO NOT DIRECTLY CALL THIS
-	fn get_pin_position(&self, pin_id: u64) -> Option<(IntV2, FourWayDir, f32)> {
-		match self.get_generic().pins.borrow().get(&pin_id) {
-			Some(pin_cell) => {
-				let pin = pin_cell.borrow();
+	fn get_pin_position(&self, graphic_pin_id: u64) -> Option<(IntV2, FourWayDir, f32)> {
+		match self.get_generic().graphic_pins.get(&graphic_pin_id) {
+			Some(pin) => {
 				Some((pin.ui_data.position, pin.ui_data.direction, pin.length))
 			},
 			None => None
@@ -1223,13 +1238,14 @@ impl LogicCircuit {
 		// Set position and direction correctly
 		save.generic_device.ui_data.position = pos;
 		save.generic_device.ui_data.direction = dir;
+		let generic_device: LogicDeviceGeneric = save.generic_device.into();
 		// Init compnents
 		let mut components = HashMap::<u64, RefCell<Box<dyn LogicDevice>>>::new();
 		for (ref_, save_comp) in save.components.into_iter() {
 			components.insert(ref_, RefCell::new(EnumAllLogicDevices::to_dynamic(save_comp)?));
 		}
 		// Get rid of Global pin sources if not toplevel and nets if toplevel
-		for (_, pin_cell) in &mut save.generic_device.pins.borrow().iter() {
+		for (_, pin_cell) in &mut generic_device.pins.borrow().iter() {
 			let mut pin = pin_cell.borrow_mut();
 			if let Some(source) = &pin.external_source {
 				if toplevel {
@@ -1251,7 +1267,7 @@ impl LogicCircuit {
 			reconstructed_wires.insert(wire_id, RefCell::new(Wire::new(wire_geom.0, wire_geom.2, wire_geom.1, 1, 0, Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new())))));
 		}
 		let mut out = Self {
-			generic_device: save.generic_device,
+			generic_device: generic_device,
 			components: RefCell::new(components),
 			nets: RefCell::new(hash_map!(0 => RefCell::new(LogicNet::new(Vec::new())))),
 			wires: RefCell::new(reconstructed_wires),
