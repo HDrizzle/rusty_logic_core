@@ -22,6 +22,64 @@ pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
 	]
 }
 
+/// For dealing with the geometry of a lot of pins
+/// Vec<(
+/// 	Block side/pin direction,
+/// 	Margin,
+/// 	Number of pins,
+/// 	Name (before numbering if more than 1 pin),
+/// 	Whether to group them all into a multi-bit-width pin,
+/// 	Whether to list pins in order of whatever axis they are along, false means backwards
+/// )>
+/*#[derive(Debug)]
+struct BlockLayoutHelper {
+	pin_groups: Vec<(
+		FourWayDir,
+		u32,
+		u32,
+		String,
+		bool,
+		bool
+	)>,
+	group_beginning_indices: HashMap<(String, u32), u64>
+}
+impl BlockLayoutHelper {
+	pub fn new(
+		pin_groups: Vec<(
+			FourWayDir,
+			u32,
+			u32,
+			String,
+			bool,
+			bool
+		)>
+	) -> Self {
+		// Sort pin groups by direction
+		let mut groups_per_side = HashMap::<FourWayDir, Vec<(u32, u32, String, bool, bool)>>::new();
+		for group in pin_groups {
+			let group_wo_dir = (group.1, group.2, group.3, group.4, group.5);
+			if let Some(v) = groups_per_side.get_mut(&group.0) {
+				v.push(group_wo_dir);
+			}
+			else {
+				groups_per_side.insert(group.0, vec![group_wo_dir]);
+			}
+		}
+		let mut out = HashMap::<u64, (IntV2, FourWayDir, f32, String, bool)>::new();
+		let mut pins_width: i32 = 0;
+		let mut pins_height: i32 = 0;
+		for dir in [FourWayDir::W, FourWayDir::E, FourWayDir::S, FourWayDir::N] {
+
+		}
+		Self {
+			pin_groups
+		}
+	}
+	pub fn pin_config(&self) -> HashMap<u64, (IntV2, FourWayDir, f32, String, bool)> {
+		// TODO
+	}
+}*/
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GateAnd(LogicDeviceGeneric);
 
@@ -941,3 +999,30 @@ impl LogicDevice for TriStateBuffer {
 		], draw.styles.color_foreground);
 	}
 }
+
+/*/// Parameterized Adder
+#[derive(Debug)]
+pub struct Adder {
+	generic: LogicDeviceGeneric,
+	/// 0 to 256
+	bits: u16
+}
+
+impl Adder {
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default())
+	}
+	pub fn from_save(save: LogicDeviceSave) -> Self {
+		Self(LogicDeviceGeneric::load(
+			save,
+			hash_map!(
+				0 => (IntV2(-3, 0), FourWayDir::W, 1.0, "a".to_owned(), false),
+				1 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
+				2 => (IntV2(0, -2), FourWayDir::S, 1.0, "En".to_owned(), false),
+			),
+			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			1,
+			false
+		))
+	}
+}*/

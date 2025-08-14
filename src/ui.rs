@@ -1,4 +1,4 @@
-use crate::{basic_components, prelude::*, resource_interface, simulator::{AncestryStack, Tool, SelectionState, GraphicSelectableItemRef}};
+use crate::{builtin_components, prelude::*, resource_interface, simulator::{AncestryStack, Tool, SelectionState, GraphicSelectableItemRef}};
 use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, DragValue, FontFamily, FontId, Frame, Galley, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2}, emath, epaint::{PathStroke, TextShape}};
 use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
@@ -195,7 +195,7 @@ pub enum SelectProperty {
 	FixedSourceState(bool),
 	/// Address size, Max
 	AddressWidth(u8, u8),
-	MemoryProperties(basic_components::MemoryPropertiesUI),
+	MemoryProperties(builtin_components::MemoryPropertiesUI),
 	EncoderOrDecoder(bool),
 	/// Whether to reload, optional error message
 	ReloadCircuit(bool, Option<String>)
@@ -567,7 +567,7 @@ impl LogicCircuitToplevelView {
 			}
 			if ui.button("+ Component / Subcircuit").clicked() {
 				// Update component search list
-				self.all_logic_devices_search = basic_components::list_all_basic_components();
+				self.all_logic_devices_search = builtin_components::list_all_basic_components();
 				for file_path in resource_interface::list_all_circuit_files().unwrap() {
 					self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(file_path, false, IntV2(0, 0), FourWayDir::default()));
 				}
@@ -711,10 +711,10 @@ impl LogicCircuitToplevelView {
 			Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
 				ui.label("Recursively flatten sub circuits");
 				ui.separator();
-				ui.label(format!("This feature will create a copy of this circuit but all the wires and components of sub-circuits extracted into the \"top layer\". Sub-circuits with fixed compute cycles will not be extracted but flattened versions of them will still be created. The intended use-case of this is to make a circuit faster to simulate. The flattened copy file size will be approximately the sum of all sub-circuits plus the toplevel wires and components. Running this function will create large files in the {} directory.", resource_interface::CIRCUITS_DIR));
+				ui.label(format!("This feature will create a copy of this circuit but all the wires and components of sub-circuits extracted into the \"top layer\". Sub-circuits with fixed compute cycles will not be extracted but flattened versions of them will still be created. The intended use-case of this is to make a circuit faster to simulate. The flattened copy file size will be approximately the sum of all sub-circuits plus the toplevel wires and components. Running this function might create large files in the {} directory.", resource_interface::CIRCUITS_DIR));
 				ui.horizontal(|ui| {
 					if ui.button("Flatten Circuit").clicked() {
-						match self.circuit.flatten() {
+						match self.circuit.flatten(true) {
 							Ok(device_save) => if let EnumAllLogicDevices::SubCircuit(save_path, _, _, _) = device_save {
 								return_new_circuit_tab = Some(save_path);
 								self.showing_flatten_opoup = false;
@@ -777,7 +777,7 @@ impl LogicCircuitToplevelView {
 					let pin_config: &mut (IntV2, FourWayDir, bool) = self.circuit.block_pin_positions.get_mut(pin_id).unwrap();
 					ui.horizontal(|ui| {
 						ui.add(TextEdit::singleline(&mut pin.name).desired_width(50.0));
-						ui.checkbox(&mut pin_config.2, "");
+						ui.checkbox(&mut pin.show_name, "");
 						ui.separator();
 						ui.label("X:");
 						if ui.button("<").clicked() {

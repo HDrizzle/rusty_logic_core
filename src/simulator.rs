@@ -2646,9 +2646,9 @@ impl LogicCircuit {
 		out
 	}
 	/// Creates a new flatened circuit and saves it, returning the path to the saved circuit
-	pub fn flatten(&self) -> Result<EnumAllLogicDevices, String> {
+	pub fn flatten(&self, apply_transform: bool) -> Result<EnumAllLogicDevices, String> {
 		let mut save = self.create_save_circuit().unwrap();
-		let (wires, comps) = self.flatten_recursive()?;
+		let (wires, comps) = self.flatten_recursive(apply_transform)?;
 		save.wires = vec_to_u64_keyed_hashmap(wires);
 		save.components = vec_to_u64_keyed_hashmap(comps);
 		let save_path = format!("{}_flattened", self.save_path);
@@ -2658,7 +2658,7 @@ impl LogicCircuit {
 		Ok(EnumAllLogicDevices::SubCircuit(save_path, self.displayed_as_block, self.generic_device.ui_data.position, self.generic_device.ui_data.direction))
 	}
 	/// Recursively extracts all sub-circuits that don't have a fixed sub-cycle count
-	pub fn flatten_recursive(&self) -> Result<(Vec<(IntV2, FourWayDir, u32)>, Vec<EnumAllLogicDevices>), String> {
+	pub fn flatten_recursive(&self, apply_transform: bool) -> Result<(Vec<(IntV2, FourWayDir, u32)>, Vec<EnumAllLogicDevices>), String> {
 		let mut wire_geometry = Vec::<(IntV2, FourWayDir, u32)>::new();
 		let mut components = Vec::<EnumAllLogicDevices>::new();
 		// Wires
@@ -2672,10 +2672,10 @@ impl LogicCircuit {
 			if comp.is_circuit() {
 				let circuit: &LogicCircuit = comp.get_circuit();
 				if circuit.fixed_sub_cycles_opt.is_some() {
-					components.push(circuit.flatten()?);
+					components.push(circuit.flatten(false)?);
 				}
 				else {
-					let (mut sub_wires, mut sub_comps) = circuit.flatten_recursive()?;
+					let (mut sub_wires, mut sub_comps) = circuit.flatten_recursive(true)?;
 					wire_geometry.append(&mut sub_wires);
 					components.append(&mut sub_comps);
 				}
@@ -2690,14 +2690,16 @@ impl LogicCircuit {
 			*dir = self.generic_device.ui_data.direction.rotate_intv2(dir.to_unit_int()).is_along_axis().unwrap();
 			*pos = self.generic_device.ui_data.direction.rotate_intv2(*pos) + self.generic_device.ui_data.position;
 		};
-		for wire in wire_geometry.iter_mut() {
-			transform(&mut wire.0, &mut wire.1);
-		}
-		for comp_save in components.iter_mut() {
-			let mut comp = EnumAllLogicDevices::to_dynamic(comp_save.clone()).unwrap();
-			let ui_data = comp.get_ui_data_mut();
-			transform(&mut ui_data.position, &mut ui_data.direction);
-			*comp_save = comp.save().unwrap();
+		if apply_transform {
+			for wire in wire_geometry.iter_mut() {
+				transform(&mut wire.0, &mut wire.1);
+			}
+			for comp_save in components.iter_mut() {
+				let mut comp = EnumAllLogicDevices::to_dynamic(comp_save.clone()).unwrap();
+				let ui_data = comp.get_ui_data_mut();
+				transform(&mut ui_data.position, &mut ui_data.direction);
+				*comp_save = comp.save().unwrap();
+			}
 		}
 		Ok((wire_geometry, components))
 	}

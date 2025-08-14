@@ -4,7 +4,7 @@ use std::{fs, collections::HashMap};
 use crate::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json;
-use crate::basic_components;
+use crate::builtin_components;
 
 
 // STATICS
@@ -67,18 +67,18 @@ impl EnumAllLogicDevices {
 	pub fn to_dynamic(self_instance: Self) -> Result<Box<dyn LogicDevice>, String> {
 		match self_instance {
 			Self::SubCircuit(circuit_rel_path, displayed_as_block, pos, dir) => Ok(Box::new(load_circuit(&circuit_rel_path, displayed_as_block, false, pos, dir)?)),
-			Self::GateAnd(gate) => Ok(Box::new(basic_components::GateAnd::from_save(gate))),
-			Self::GateNand(gate) => Ok(Box::new(basic_components::GateNand::from_save(gate))),
-			Self::GateNot(gate) => Ok(Box::new(basic_components::GateNot::from_save(gate))),
-			Self::GateOr(gate) => Ok(Box::new(basic_components::GateOr::from_save(gate))),
-			Self::GateNor(gate) => Ok(Box::new(basic_components::GateNor::from_save(gate))),
-			Self::GateXor(gate) => Ok(Box::new(basic_components::GateXor::from_save(gate))),
-			Self::GateXnor(gate) => Ok(Box::new(basic_components::GateXnor::from_save(gate))),
-			Self::Clock{enabled, state, freq, position_grid, direction, name} => Ok(Box::new(basic_components::Clock::from_save(enabled, state, freq, position_grid, direction, name))),
-			Self::FixedSource(save, state) => Ok(Box::new(basic_components::FixedSource::from_save(save, state))),
-			Self::EncoderOrDecoder(save, addr_size, is_encoder) => Ok(Box::new(basic_components::EncoderOrDecoder::from_save(save, addr_size, is_encoder))),
-			Self::Memory(save, addr_size, data_opt) => Ok(Box::new(basic_components::Memory::from_save(save, addr_size, data_opt))),
-			Self::TriStateBuffer(save) => Ok(Box::new(basic_components::TriStateBuffer::from_save(save)))
+			Self::GateAnd(gate) => Ok(Box::new(builtin_components::GateAnd::from_save(gate))),
+			Self::GateNand(gate) => Ok(Box::new(builtin_components::GateNand::from_save(gate))),
+			Self::GateNot(gate) => Ok(Box::new(builtin_components::GateNot::from_save(gate))),
+			Self::GateOr(gate) => Ok(Box::new(builtin_components::GateOr::from_save(gate))),
+			Self::GateNor(gate) => Ok(Box::new(builtin_components::GateNor::from_save(gate))),
+			Self::GateXor(gate) => Ok(Box::new(builtin_components::GateXor::from_save(gate))),
+			Self::GateXnor(gate) => Ok(Box::new(builtin_components::GateXnor::from_save(gate))),
+			Self::Clock{enabled, state, freq, position_grid, direction, name} => Ok(Box::new(builtin_components::Clock::from_save(enabled, state, freq, position_grid, direction, name))),
+			Self::FixedSource(save, state) => Ok(Box::new(builtin_components::FixedSource::from_save(save, state))),
+			Self::EncoderOrDecoder(save, addr_size, is_encoder) => Ok(Box::new(builtin_components::EncoderOrDecoder::from_save(save, addr_size, is_encoder))),
+			Self::Memory(save, addr_size, data_opt) => Ok(Box::new(builtin_components::Memory::from_save(save, addr_size, data_opt))),
+			Self::TriStateBuffer(save) => Ok(Box::new(builtin_components::TriStateBuffer::from_save(save)))
 		}
 	}
 	/// Example: "AND Gate" or "D Latch", for the component search UI

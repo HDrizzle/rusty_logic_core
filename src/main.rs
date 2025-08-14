@@ -8,7 +8,7 @@ use eframe::emath;
 pub mod simulator;
 pub mod ui;
 pub mod resource_interface;
-pub mod basic_components;
+pub mod builtin_components;
 #[cfg(test)]
 pub mod tests;
 
@@ -177,7 +177,7 @@ pub mod prelude {
 			base.insert(other_item.clone());
 		}
 	}
-	#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+	#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 	pub enum FourWayDir {
 		E,
 		N,
@@ -598,7 +598,7 @@ pub mod prelude {
 	pub fn create_simple_circuit() -> LogicCircuit {
 		LogicCircuit::new(
 			vec_to_u64_keyed_hashmap(vec![
-				Box::new(basic_components::GateAnd::new()).into_box()
+				Box::new(builtin_components::GateAnd::new()).into_box()
 			]),
 			vec![
 				(IntV2(-4, -1), FourWayDir::W, 1.0, "a".to_owned()),
