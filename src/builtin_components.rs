@@ -91,12 +91,11 @@ impl GateAnd {
 		Self(LogicDeviceGeneric::load(
 			save,
 			hash_map!(
-				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned(), false),
-				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned(), false),
-				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
+				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned(), false, vec![0]),
+				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned(), false, vec![1]),
+				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![2]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
-			1,
 			false
 		))
 	}
@@ -137,12 +136,11 @@ impl GateNand {
 		Self(LogicDeviceGeneric::load(
 			save,
 			hash_map!(
-				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned(), false),
-				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned(), false),
-				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
+				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned(), false, vec![0]),
+				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned(), false, vec![1]),
+				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![2]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
-			1,
 			false
 		))
 	}
@@ -185,11 +183,10 @@ impl GateNot {
 		Self(LogicDeviceGeneric::load(
 			save,
 			hash_map!(
-				0 => (IntV2(-3, 0), FourWayDir::W, 1.0, "a".to_owned(), false),
-				1 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
+				0 => (IntV2(-3, 0), FourWayDir::W, 1.0, "a".to_owned(), false, vec![0]),
+				1 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![1]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
-			1,
 			false
 		))
 	}
@@ -230,12 +227,11 @@ impl GateOr {
 		Self(LogicDeviceGeneric::load(
 			save,
 			hash_map!(
-				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned(), false),
-				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned(), false),
-				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
+				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned(), false, vec![0]),
+				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned(), false, vec![1]),
+				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![2]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
-			1,
 			false
 		))
 	}
@@ -280,12 +276,11 @@ impl GateNor {
 		Self(LogicDeviceGeneric::load(
 			save,
 			hash_map!(
-				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned(), false),
-				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned(), false),
-				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
+				0 => (IntV2(-3, -1), FourWayDir::W, 1.0, "a".to_owned(), false, vec![0]),
+				1 => (IntV2(-3, 1), FourWayDir::W, 1.0, "b".to_owned(), false, vec![1]),
+				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![2]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
-			1,
 			false
 		))
 	}
@@ -331,12 +326,11 @@ impl GateXor {
 		Self(LogicDeviceGeneric::load(
 			save,
 			hash_map!(
-				0 => (IntV2(-3, -1), FourWayDir::W, 0.7, "a".to_owned(), false),
-				1 => (IntV2(-3, 1), FourWayDir::W, 0.7, "b".to_owned(), false),
-				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
+				0 => (IntV2(-3, -1), FourWayDir::W, 0.7, "a".to_owned(), false, vec![0]),
+				1 => (IntV2(-3, 1), FourWayDir::W, 0.7, "b".to_owned(), false, vec![1]),
+				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![2]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
-			1,
 			false
 		))
 	}
@@ -382,12 +376,11 @@ impl GateXnor {
 		Self(LogicDeviceGeneric::load(
 			save,
 			hash_map!(
-				0 => (IntV2(-3, -1), FourWayDir::W, 0.7, "a".to_owned(), false),
-				1 => (IntV2(-3, 1), FourWayDir::W, 0.7, "b".to_owned(), false),
-				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
+				0 => (IntV2(-3, -1), FourWayDir::W, 0.7, "a".to_owned(), false, vec![0]),
+				1 => (IntV2(-3, 1), FourWayDir::W, 0.7, "b".to_owned(), false, vec![1]),
+				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![2]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
-			1,
 			false
 		))
 	}
@@ -447,11 +440,10 @@ impl Clock {
 			generic: LogicDeviceGeneric::load(
 				LogicDeviceSave::default(),
 				hash_map!(
-					0 => (IntV2(0, 0), FourWayDir::W, 1.0, "CLK".to_owned(), false)
+					0 => (IntV2(0, 0), FourWayDir::W, 1.0, "CLK".to_owned(), false, vec![0])
 				),
 				(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
-				1,
-			false
+				false
 			),
 			enabled,
 			freq,
@@ -541,10 +533,9 @@ impl FixedSource {
 		Self {
 			generic: LogicDeviceGeneric::load(
 				save,
-				hash_map!(0 => (IntV2(0, 0), direction, 1.0, name, false)),
+				hash_map!(0 => (IntV2(0, 0), direction, 1.0, name, false, vec![0])),
 				bb,
-				1,
-			false
+				false
 			),
 			state
 		}
@@ -639,7 +630,6 @@ impl EncoderOrDecoder {
 				save,
 				pin_config,
 				bb,
-				1,
 			false
 			),
 			addr_size,
@@ -792,7 +782,6 @@ impl Memory {
 				save,
 				pin_config,
 				(bb_int.0.to_v2(), bb_int.1.to_v2()),
-				1,
 			true
 			),
 			addr_size,
@@ -961,12 +950,11 @@ impl TriStateBuffer {
 		Self(LogicDeviceGeneric::load(
 			save,
 			hash_map!(
-				0 => (IntV2(-3, 0), FourWayDir::W, 1.0, "a".to_owned(), false),
-				1 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
-				2 => (IntV2(0, -2), FourWayDir::S, 1.0, "En".to_owned(), false),
+				0 => (IntV2(-3, 0), FourWayDir::W, 1.0, "a".to_owned(), false, vec![0]),
+				1 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![1]),
+				2 => (IntV2(0, -2), FourWayDir::S, 1.0, "En".to_owned(), false, vec![2]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
-			1,
 			false
 		))
 	}

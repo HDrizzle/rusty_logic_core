@@ -14,47 +14,132 @@ pub static STYLES_FILE: &str = "resources/styles.json";
 
 /// Loads circuit, path is relative to `CIRCUITS_DIR` and does not include .json extension
 /// Example: File is located at `resources/circuits/sequential/d_latch.json` -> circuit path is `sequential/d_latch`
-pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir) -> Result<LogicCircuit, String> {
+pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String) -> Result<LogicCircuit, String> {
 	let path = get_circuit_file_path(circuit_rel_path);
 	let string_raw = load_file_with_better_error(&path)?;
-	LogicCircuit::from_save(to_string_err(serde_json::from_str(&string_raw))?, circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir)
+	LogicCircuit::from_save(to_string_err(serde_json::from_str(&string_raw))?, circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir, name)
 }
 
 /// Like LogicCircuit but serializable
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogicCircuitSave {
-	pub generic_device: LogicCircuitSaveGenericDevice,
+	pub logic_pins: HashMap<u64, LogicConnectionPin>,
+	pub graphic_pins: HashMap<u64, (IntV2, FourWayDir, f32, String, bool, Vec<u64>)>,
 	pub components: HashMap<u64, EnumAllLogicDevices>,
 	pub wires: HashMap<u64, (IntV2, FourWayDir, u32)>,
+	pub splitters: HashMap<u64, SplitterSave>,
+	pub labels: HashMap<u64, GraphicLabelSave>,
 	pub block_pin_positions: HashMap<u64, (IntV2, FourWayDir, bool)>,
 	pub type_name: String,
 	#[serde(default)]
 	pub fixed_sub_cycles_opt: Option<usize>
 }
 
-/// LogicDeviceGeneric shouldn't be serialized, so this struct has feilds to be compatible with old save files
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LogicCircuitSaveGenericDevice {
-	pub pins: HashMap<u64, LogicConnectionPin>,
-	#[serde(default)]
-	pub graphic_pins: HashMap<u64, (IntV2, FourWayDir, f32, String, bool, Vec<u64>)>,
-	pub ui_data: UIData,
-	pub name: String,
-	pub bit_width: Option<u32>,
-	pub show_name: bool
-}
-
-impl Into<LogicDeviceGeneric> for LogicCircuitSaveGenericDevice {
-	fn into(self) -> LogicDeviceGeneric {
-		// TODO
+mod restore_old_files {
+	use super::*;
+	/// Like LogicCircuit but serializable
+	#[derive(Debug, Serialize, Deserialize)]
+	struct LogicCircuitSaveOld {
+		pub generic_device: GenericDeviceOld,
+		pub components: HashMap<u64, EnumAllLogicDevices>,
+		pub wires: HashMap<u64, (IntV2, FourWayDir, u32)>,
+		pub block_pin_positions: HashMap<u64, (IntV2, FourWayDir, bool)>,
+		pub type_name: String,
+		#[serde(default)]
+		pub fixed_sub_cycles_opt: Option<usize>
+	}
+	/// LogicDeviceGeneric shouldn't be serialized, so this struct has fields to be compatible with old save files
+	#[derive(Debug, Serialize, Deserialize)]
+	struct GenericDeviceOld {
+		pub pins: HashMap<u64, LogicConnectionPinOld>,
+		#[serde(default)]
+		pub graphic_pins: HashMap<u64, (IntV2, FourWayDir, f32, String, bool, Vec<u64>)>,
+		pub ui_data: UIData,
+		pub name: String,
+		pub bit_width: Option<u32>,
+		pub show_name: bool
+	}
+	#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+	struct LogicConnectionPinOld {
+		pub internal_source: Option<LogicConnectionPinInternalSource>,
+		internal_state: LogicState,
+		pub external_source: Option<LogicConnectionPinExternalSource>,
+		pub external_state: LogicState,
+		/// Usually 1, may be something else if theres a curve on an OR input or something
+		pub length: f32,
+		pub ui_data: UIData,
+		pub bit_width: u32,
+		/// Only for user, defaults to ""
+		pub name: String,
+		#[serde(default)]
+		pub show_name: bool
+	}
+	impl LogicConnectionPinOld {
+		pub fn new(
+			internal_source: Option<LogicConnectionPinInternalSource>,
+			external_source: Option<LogicConnectionPinExternalSource>,
+			relative_end_grid: IntV2,
+			direction: FourWayDir,
+			length: f32,
+			show_name: bool
+		) -> Self {
+			Self {
+				internal_source,
+				internal_state: LogicState::Floating,
+				external_source,
+				external_state: LogicState::Floating,
+				length,
+				ui_data: UIData::new(relative_end_grid, direction, (V2::new(1.0, -1.0), V2::new(3.0, 1.0))),
+				bit_width: 1,
+				name: String::new(),
+				show_name
+			}
+		}
+		pub fn set_drive_internal(&mut self, state: LogicState) {
+			self.internal_state = state;
+		}
+		pub fn set_drive_external(&mut self, state: LogicState) {
+			self.external_state = state;
+		}
+	}
+	impl Into<LogicCircuitSave> for LogicCircuitSaveOld {
+		fn into(self) -> LogicCircuitSave {
+			let mut graphic_pins = HashMap::<u64, (IntV2, FourWayDir, f32, String, bool, Vec<u64>)>::new();
+			let mut logic_pins = HashMap::<u64, LogicConnectionPin>::new();
+			for (pin_id, pin) in self.generic_device.pins {
+				graphic_pins.insert(pin_id, (
+					pin.ui_data.position,
+					pin.ui_data.direction,
+					pin.length,
+					pin.name,
+					pin.show_name,
+					vec![pin_id]
+				));
+				logic_pins.insert(pin_id, LogicConnectionPin::new(pin.internal_source, pin.external_source));
+			}
+			LogicCircuitSave {
+				logic_pins,
+				graphic_pins,
+				components: self.components,
+				wires: self.wires,
+				block_pin_positions: self.block_pin_positions,
+				type_name: self.type_name,
+				fixed_sub_cycles_opt: self.fixed_sub_cycles_opt
+			}
+		}
+	}
+	pub fn attempt_restore_file(circuit_rel_path: &str, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String) -> Result<LogicCircuit, String> {
+		let path = get_circuit_file_path(circuit_rel_path);
+		let string_raw = load_file_with_better_error(&path)?;
+		LogicCircuit::from_save(to_string_err(serde_json::from_str::<LogicCircuitSaveOld>(&string_raw))?.into(), circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir, name)
 	}
 }
 
 /// Not great but I can't think of anything else
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EnumAllLogicDevices {
-	/// (Relative path of circuit, Whether to use block diagram, Position, Orientation)
-	SubCircuit(String, bool, IntV2, FourWayDir),
+	/// (Relative path of circuit, Whether to use block diagram, Position, Orientation, Name)
+	SubCircuit(String, bool, IntV2, FourWayDir, String),
 	GateAnd(LogicDeviceSave),
 	GateNand(LogicDeviceSave),
 	GateNot(LogicDeviceSave),
@@ -84,7 +169,7 @@ pub enum EnumAllLogicDevices {
 impl EnumAllLogicDevices {
 	pub fn to_dynamic(self_instance: Self) -> Result<Box<dyn LogicDevice>, String> {
 		match self_instance {
-			Self::SubCircuit(circuit_rel_path, displayed_as_block, pos, dir) => Ok(Box::new(load_circuit(&circuit_rel_path, displayed_as_block, false, pos, dir)?)),
+			Self::SubCircuit(circuit_rel_path, displayed_as_block, pos, dir, name) => Ok(Box::new(load_circuit(&circuit_rel_path, displayed_as_block, false, pos, dir, name)?)),
 			Self::GateAnd(gate) => Ok(Box::new(builtin_components::GateAnd::from_save(gate))),
 			Self::GateNand(gate) => Ok(Box::new(builtin_components::GateNand::from_save(gate))),
 			Self::GateNot(gate) => Ok(Box::new(builtin_components::GateNot::from_save(gate))),
@@ -102,7 +187,7 @@ impl EnumAllLogicDevices {
 	/// Example: "AND Gate" or "D Latch", for the component search UI
 	pub fn type_name(&self) -> String {
 		match self {
-			Self::SubCircuit(circuit_rel_path, _, _, _) => circuit_rel_path.clone(),
+			Self::SubCircuit(circuit_rel_path, _, _, _, _) => circuit_rel_path.clone(),
 			Self::GateAnd(_) => "AND Gate".to_owned(),
 			Self::GateNand(_) => "NAND Gate".to_owned(),
 			Self::GateNot(_) => "NOT Gate".to_owned(),

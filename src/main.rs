@@ -25,7 +25,7 @@ pub mod prelude {
 	pub type V2 = Vector2<f32>;
 	use eframe::egui::{Align2, Color32, CornerRadius};
 	pub use ui::{Styles, LogicCircuitToplevelView, App, ComponentDrawInfo, GraphicSelectableItem, SelectProperty, UIData, CopiedGraphicItem, CopiedItemSet};
-	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection, LogicDeviceSave};
+	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, GraphicPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection, LogicDeviceSave, GraphicLabel, Splitter, SplitterSave};
 	pub use resource_interface::{load_file_with_better_error, EnumAllLogicDevices};
 	pub fn u8_3_to_color32(in_: [u8; 3]) -> Color32 {
 		Color32::from_rgb(in_[0], in_[1], in_[2])
@@ -601,9 +601,9 @@ pub mod prelude {
 				Box::new(builtin_components::GateAnd::new()).into_box()
 			]),
 			vec![
-				(IntV2(-4, -1), FourWayDir::W, 1.0, "a".to_owned()),
-				(IntV2(-4, 1), FourWayDir::W, 1.0, "b".to_owned()),
-				(IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned()),
+				(IntV2(-4, -1), FourWayDir::W, 1.0, "a".to_owned(), vec![0]),
+				(IntV2(-4, 1), FourWayDir::W, 1.0, "b".to_owned(), vec![1]),
+				(IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), vec![2]),
 			],
 			vec_to_u64_keyed_hashmap(vec![
 				LogicNet::new(vec![
@@ -620,11 +620,11 @@ pub mod prelude {
 				]),
 			]),
 			"test-circuit".to_string(),
-			1,
+			None,
 			vec_to_u64_keyed_hashmap(vec![
-				Wire::new(IntV2(-4, -1), 1, FourWayDir::E, 1, 0, Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new()))),
-				Wire::new(IntV2(-4, 1), 1, FourWayDir::E, 1, 1, Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new()))),
-				Wire::new(IntV2(4, 0), 1, FourWayDir::W, 1, 2, Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new())))
+				Wire::new(IntV2(-4, -1), 1, FourWayDir::E, 1, vec![0], Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new()))),
+				Wire::new(IntV2(-4, 1), 1, FourWayDir::E, 1, vec![1], Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new()))),
+				Wire::new(IntV2(4, 0), 1, FourWayDir::W, 1, vec![2], Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new())))
 			]),
 			"test".to_string(),
 			true,

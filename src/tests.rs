@@ -66,16 +66,16 @@ fn logic_state_merge() {
 fn basic_sim_and_gate() {
 	let mut circuit = create_simple_circuit();
 	// Connections computed correctly
-	assert_eq!(circuit.get_pins_cell().borrow().get(&0).unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(0)));
-	assert_eq!(circuit.get_pins_cell().borrow().get(&1).unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(1)));
-	assert_eq!(circuit.get_pins_cell().borrow().get(&2).unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(2)));
+	assert_eq!(circuit.get_logic_pins_cell().borrow().get(&0).unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(0)));
+	assert_eq!(circuit.get_logic_pins_cell().borrow().get(&1).unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(1)));
+	assert_eq!(circuit.get_logic_pins_cell().borrow().get(&2).unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(2)));
 	{
 		let binding = circuit.components.borrow();
 		let binding2 = binding.get(&0).unwrap().borrow();
 		let and_gate = binding2.get_generic();
-		assert_eq!(and_gate.pins.borrow().get(&0).unwrap().borrow().external_source, Some(LogicConnectionPinExternalSource::Net(0)));
-		assert_eq!(and_gate.pins.borrow().get(&1).unwrap().borrow().external_source, Some(LogicConnectionPinExternalSource::Net(1)));
-		assert_eq!(and_gate.pins.borrow().get(&2).unwrap().borrow().external_source, Some(LogicConnectionPinExternalSource::Net(2)));
+		assert_eq!(and_gate.logic_pins.borrow().get(&0).unwrap().borrow().external_source, Some(LogicConnectionPinExternalSource::Net(0)));
+		assert_eq!(and_gate.logic_pins.borrow().get(&1).unwrap().borrow().external_source, Some(LogicConnectionPinExternalSource::Net(1)));
+		assert_eq!(and_gate.logic_pins.borrow().get(&2).unwrap().borrow().external_source, Some(LogicConnectionPinExternalSource::Net(2)));
 	}
 	// Set global inputs
 	circuit.set_pin_external_state(0, true.into()).unwrap();

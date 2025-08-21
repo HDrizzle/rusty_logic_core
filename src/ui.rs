@@ -1,4 +1,4 @@
-use crate::{builtin_components, prelude::*, resource_interface, simulator::{AncestryStack, Tool, SelectionState, GraphicSelectableItemRef}};
+use crate::{builtin_components, prelude::*, resource_interface, simulator::{AncestryStack, GraphicSelectableItemRef, SelectionState, Tool}};
 use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, DragValue, FontFamily, FontId, Frame, Galley, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2}, emath, epaint::{PathStroke, TextShape}};
 use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
@@ -22,6 +22,7 @@ pub struct Styles {
 	pub color_wire_contested: [u8; 3],
 	pub color_wire_low: [u8; 3],
 	pub color_wire_high: [u8; 3],
+	pub color_bus: [u8; 3],
 	pub color_background: [u8; 3],
 	pub color_foreground: [u8; 3],
 	pub color_grid: [u8; 3],
@@ -49,6 +50,26 @@ impl Styles {
 			LogicState::Contested => self.color_wire_contested
 		}
 	}
+	/// If any states contested then contested color, else bus color unless all are floating then floating color
+	pub fn color_from_logic_states(&self, states: &Vec<LogicState>) -> [u8; 3] {
+		let mut contested = false;
+		let mut driven = false;
+		for state in states {
+			contested |= state.is_contested();
+			driven |= state.is_valid()
+		}
+		if contested {
+			self.color_wire_contested
+		}
+		else {
+			if driven {
+				self.color_bus
+			}
+			else {
+				self.color_wire_floating
+			}
+		}
+	}
 }
 
 impl Default for Styles {
@@ -65,6 +86,7 @@ impl Default for Styles {
 			color_wire_contested: [255, 0, 0],
 			color_wire_low: [0, 0, 255],
 			color_wire_high: [0, 255, 0],
+			color_bus: [67, 240, 249],
 			color_background: [0, 0, 0],
 			color_foreground: [255, 255, 255],
 			color_grid: [64, 64, 64],
@@ -112,7 +134,8 @@ pub trait GraphicSelectableItem {
 	fn get_ui_data(&self) -> &UIData;
 	fn get_ui_data_mut(&mut self) -> &mut UIData;
 	/// Used for the net highlight feature
-	fn is_connected_to_net(&self, net_id: u64) -> bool;
+	#[allow(unused)]
+	fn is_connected_to_net(&self, net_id: u64) -> bool {false}
 	fn get_properties(&self) -> Vec<SelectProperty>;
 	fn set_property(&mut self, property: SelectProperty);
 	fn copy(&self) -> CopiedGraphicItem;
@@ -157,7 +180,10 @@ pub trait GraphicSelectableItem {
 pub enum CopiedGraphicItem {
 	Component(EnumAllLogicDevices),
 	Wire((IntV2, FourWayDir, u32)),
-	ExternalConnection(LogicConnectionPin)
+	/// (Position, Direction, Name, Show name, Bit width)
+	ExternalConnection(IntV2, FourWayDir, String, bool, u16),
+	Splitter(SplitterSave),
+	GraphicLabel(GraphicLabel)
 }
 
 /// This is what will be serialized as JSON and put onto the clipboard
@@ -182,10 +208,10 @@ impl CopiedItemSet {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SelectProperty {
-	BitWidth(u32),
+	BitWidth(u16),
 	PositionX(i32),
 	PositionY(i32),
-	GlobalConnectionState(Option<bool>),
+	GlobalConnectionState(Vec<Option<bool>>),
 	Direction(FourWayDir),
 	DisplayCircuitAsBlock(bool),
 	ClockEnabled(bool),
@@ -569,30 +595,19 @@ impl LogicCircuitToplevelView {
 				// Update component search list
 				self.all_logic_devices_search = builtin_components::list_all_basic_components();
 				for file_path in resource_interface::list_all_circuit_files().unwrap() {
-					self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(file_path, false, IntV2(0, 0), FourWayDir::default()));
+					self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(file_path, false, IntV2(0, 0), FourWayDir::default(), String::new()));
 				}
 				self.showing_component_popup = true;
 			}
 			if self.circuit.tool.borrow().tool_select_allowed() {
-				ui.menu_button("+ I/O Pin", |ui| {
-					let mut new_pin_opt = Option::<LogicConnectionPin>::None;
-					if ui.button("Input").clicked() {
-						let mut new_pin = LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(0, 0), FourWayDir::W, 1.0, true);
-						new_pin.external_state = LogicState::Driven(false);
-						new_pin_opt = Some(new_pin);
-					}
-					if ui.button("Output").clicked() {
-						new_pin_opt = Some(LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global), IntV2(0, 0), FourWayDir::E, 1.0, true));
-					}
-					if let Some(new_pin) = new_pin_opt {
-						let handles: Vec<GraphicSelectableItemRef> = self.circuit.paste(&CopiedItemSet::new(vec![CopiedGraphicItem::ExternalConnection(new_pin)], IntV2(0, 0)));
-						*self.circuit.tool.borrow_mut() = Tool::Select{
-							selected_graphics: HashSet::from_iter(vec![handles[0].clone()].into_iter()),
-							selected_graphics_state: SelectionState::FollowingMouse(V2::zeros())
-						};
-						self.circuit.update_pin_block_positions();
-					}
-				});
+				if ui.button("+ I/O Pin").clicked() {
+					let graphic_pin_id = self.circuit.insert_graphic_pin(IntV2(0, 0), FourWayDir::default(), String::new(), true, 1);
+					*self.circuit.tool.borrow_mut() = Tool::Select{
+						selected_graphics: HashSet::from_iter(vec![GraphicSelectableItemRef::Pin(graphic_pin_id)].into_iter()),
+						selected_graphics_state: SelectionState::FollowingMouse(V2::zeros())
+					};
+					self.circuit.update_pin_block_positions();
+				}
 			}
 			// Compute cycles text
 			match self.frame_compute_cycles == CIRCUIT_MAX_COMPUTE_CYCLES {
@@ -715,7 +730,7 @@ impl LogicCircuitToplevelView {
 				ui.horizontal(|ui| {
 					if ui.button("Flatten Circuit").clicked() {
 						match self.circuit.flatten(true) {
-							Ok(device_save) => if let EnumAllLogicDevices::SubCircuit(save_path, _, _, _) = device_save {
+							Ok(device_save) => if let EnumAllLogicDevices::SubCircuit(save_path, _, _, _, _) = device_save {
 								return_new_circuit_tab = Some(save_path);
 								self.showing_flatten_opoup = false;
 							}
@@ -771,9 +786,8 @@ impl LogicCircuitToplevelView {
 		//inner_response.response.ctx.input_mut(|input| input.events.clear());
 		Popup::from_response(&inner_response.response).open(true).align(RectAlign{parent: Align2::LEFT_TOP, child: Align2::LEFT_TOP}).id("block edit controls".into()).show(|ui| {
 			ScrollArea::vertical().scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
-				let pins = self.circuit.generic_device.pins.borrow();
-				for (pin_id, pin_cell) in pins.iter() {
-					let mut pin = pin_cell.borrow_mut();
+				let mut pins = self.circuit.generic_device.graphic_pins.borrow_mut();
+				for (pin_id, pin) in pins.iter_mut() {
 					let pin_config: &mut (IntV2, FourWayDir, bool) = self.circuit.block_pin_positions.get_mut(pin_id).unwrap();
 					ui.horizontal(|ui| {
 						ui.add(TextEdit::singleline(&mut pin.name).desired_width(50.0));
@@ -859,7 +873,7 @@ impl App {
 		}
 	}
 	fn load_circuit_tab(&mut self, file_path: &str) {
-		match resource_interface::load_circuit(file_path, false, true, IntV2(0, 0), FourWayDir::default()) {
+		match resource_interface::load_circuit(file_path, false, true, IntV2(0, 0), FourWayDir::default(), String::new()) {
 			Ok(circuit) => {
 				self.circuit_tabs.push(LogicCircuitToplevelView::new(circuit, true, &self.styles));
 				self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
