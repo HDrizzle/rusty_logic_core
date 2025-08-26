@@ -183,7 +183,7 @@ pub enum CopiedGraphicItem {
 	/// (Position, Direction, Name, Show name, Bit width)
 	ExternalConnection(IntV2, FourWayDir, String, bool, u16),
 	Splitter(SplitterSave),
-	GraphicLabel(GraphicLabel)
+	GraphicLabel(GraphicLabelSave)
 }
 
 /// This is what will be serialized as JSON and put onto the clipboard
@@ -260,23 +260,46 @@ impl SelectProperty {
 			Self::PositionY(y) => {
 				ui_drag_value_with_arrows(ui, y, None)
 			},
-			Self::GlobalConnectionState(driven) => {
+			Self::GlobalConnectionState(state_opts) => {
 				let mut return_update = false;
-				Popup::menu(&ui.button("I/O State")).align(RectAlign::RIGHT_START).show(|ui| {
-					if ui.button("Driven (CLK)").clicked() {
-						return_update = true;
-					}
-					if ui.button("Driven (0)").clicked() {
-						*driven = Some(false);
-						return_update = true;
-					}
-					if ui.button("Driven (1)").clicked() {
-						*driven = Some(true);
-						return_update = true;
-					}
-					if ui.button("Floating").clicked() {
-						*driven = None;
-						return_update = true;
+				let mut enabled = state_opts[0].is_some();
+				let mut all_drive = Option::<bool>::None;
+				ui.vertical(|ui| {
+					Popup::menu(&ui.button("I/O State")).align(RectAlign::RIGHT_START).show(|ui| {
+						if ui.button("Driven").clicked() {
+							enabled = true;
+							return_update = true;
+						}
+						if ui.button("All 0").clicked() {
+							all_drive = Some(false);
+							enabled = true;
+							return_update = true;
+						}
+						if ui.button("All 1").clicked() {
+							all_drive = Some(true);
+							enabled = true;
+							return_update = true;
+						}
+						if ui.button("Floating").clicked() {
+							all_drive = None;
+							enabled = false;
+							return_update = true;
+						}
+					});
+					for opt in state_opts {
+						if enabled {
+							if let Some(all_set_state) = all_drive {
+								*opt = Some(all_set_state);
+							}
+						}
+						else {
+							*opt = None;
+						}
+						if ui.add_enabled(enabled, Button::new(match opt.unwrap_or(false) {true => "1", false => "0"})).clicked() {
+							if let Some(state) = opt {
+								*state = !*state;
+							}
+						}
 					}
 				});
 				return_update

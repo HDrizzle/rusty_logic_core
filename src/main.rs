@@ -9,6 +9,7 @@ pub mod simulator;
 pub mod ui;
 pub mod resource_interface;
 pub mod builtin_components;
+pub mod circuit_net_computation;
 #[cfg(test)]
 pub mod tests;
 
@@ -25,8 +26,9 @@ pub mod prelude {
 	pub type V2 = Vector2<f32>;
 	use eframe::egui::{Align2, Color32, CornerRadius};
 	pub use ui::{Styles, LogicCircuitToplevelView, App, ComponentDrawInfo, GraphicSelectableItem, SelectProperty, UIData, CopiedGraphicItem, CopiedItemSet};
-	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, GraphicPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection, LogicDeviceSave, GraphicLabel, Splitter, SplitterSave};
+	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, GraphicPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection, LogicDeviceSave, GraphicLabel, GraphicLabelSave, Splitter, SplitterSave};
 	pub use resource_interface::{load_file_with_better_error, EnumAllLogicDevices};
+	pub use circuit_net_computation::BitWidthError;
 	pub fn u8_3_to_color32(in_: [u8; 3]) -> Color32 {
 		Color32::from_rgb(in_[0], in_[1], in_[2])
 	}
@@ -109,6 +111,13 @@ pub mod prelude {
 	pub fn lowest_unused_key<V>(map: &HashMap<u64, V>) -> u64 {
 		let mut i: u64 = 0;
 		while map.contains_key(&i) {
+			i += 1;
+		}
+		i
+	}
+	pub fn set_lowest_unused_key(set: &HashSet<u64>) -> u64 {
+		let mut i: u64 = 0;
+		while set.contains(&i) {
 			i += 1;
 		}
 		i
@@ -622,9 +631,9 @@ pub mod prelude {
 			"test-circuit".to_string(),
 			None,
 			vec_to_u64_keyed_hashmap(vec![
-				Wire::new(IntV2(-4, -1), 1, FourWayDir::E, 1, vec![0], Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new()))),
-				Wire::new(IntV2(-4, 1), 1, FourWayDir::E, 1, vec![1], Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new()))),
-				Wire::new(IntV2(4, 0), 1, FourWayDir::W, 1, vec![2], Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new())))
+				Wire::new(IntV2(-4, -1), 1, FourWayDir::E, vec![0], Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new()))),
+				Wire::new(IntV2(-4, 1), 1, FourWayDir::E, vec![1], Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new()))),
+				Wire::new(IntV2(4, 0), 1, FourWayDir::W, vec![2], Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new())))
 			]),
 			"test".to_string(),
 			true,

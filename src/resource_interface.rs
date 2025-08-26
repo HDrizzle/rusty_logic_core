@@ -122,6 +122,8 @@ mod restore_old_files {
 				graphic_pins,
 				components: self.components,
 				wires: self.wires,
+				splitters: HashMap::new(),
+				labels: HashMap::new(),
 				block_pin_positions: self.block_pin_positions,
 				type_name: self.type_name,
 				fixed_sub_cycles_opt: self.fixed_sub_cycles_opt
