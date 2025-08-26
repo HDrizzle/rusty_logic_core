@@ -24,7 +24,8 @@ pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogicCircuitSave {
 	pub logic_pins: HashMap<u64, LogicConnectionPin>,
-	pub graphic_pins: HashMap<u64, (IntV2, FourWayDir, f32, String, bool, Vec<u64>)>,
+	/// {Pin ID: (Pos, Dir, Name, Show name, Owned logical pins)}
+	pub graphic_pins: HashMap<u64, (IntV2, FourWayDir, String, bool, Vec<u64>)>,
 	pub components: HashMap<u64, EnumAllLogicDevices>,
 	pub wires: HashMap<u64, (IntV2, FourWayDir, u32)>,
 	pub splitters: HashMap<u64, SplitterSave>,
@@ -104,13 +105,12 @@ mod restore_old_files {
 	}
 	impl Into<LogicCircuitSave> for LogicCircuitSaveOld {
 		fn into(self) -> LogicCircuitSave {
-			let mut graphic_pins = HashMap::<u64, (IntV2, FourWayDir, f32, String, bool, Vec<u64>)>::new();
+			let mut graphic_pins = HashMap::<u64, (IntV2, FourWayDir, String, bool, Vec<u64>)>::new();
 			let mut logic_pins = HashMap::<u64, LogicConnectionPin>::new();
 			for (pin_id, pin) in self.generic_device.pins {
 				graphic_pins.insert(pin_id, (
 					pin.ui_data.position,
 					pin.ui_data.direction,
-					pin.length,
 					pin.name,
 					pin.show_name,
 					vec![pin_id]

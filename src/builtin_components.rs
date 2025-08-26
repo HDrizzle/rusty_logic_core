@@ -1,4 +1,4 @@
-use crate::{prelude::*, simulator::AncestryStack};
+use crate::{prelude::*, simulator::{AncestryStack, graphic_pin_config_from_single_pins}};
 use eframe::egui::Ui;
 use serde::{Deserialize, Serialize};
 use common_macros::hash_map;
@@ -628,7 +628,7 @@ impl EncoderOrDecoder {
 		Self {
 			generic: LogicDeviceGeneric::load(
 				save,
-				pin_config,
+				graphic_pin_config_from_single_pins(pin_config),
 				bb,
 			false
 			),
@@ -780,7 +780,7 @@ impl Memory {
 		Self {
 			generic: LogicDeviceGeneric::load(
 				save,
-				pin_config,
+				graphic_pin_config_from_single_pins(pin_config),
 				(bb_int.0.to_v2(), bb_int.1.to_v2()),
 			true
 			),

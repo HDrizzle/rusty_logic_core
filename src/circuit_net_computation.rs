@@ -48,6 +48,7 @@ impl LogicCircuit {
 	///   If a wire island is connected to any splitters or pins that have different bit widths, then create a bit width error
 	///   Each island will have a Vec<Option<u64>> for nets and a HashSet<NotAWire> for anything also connected
 	/// * Iterate all splitters and create/merge nets on each side (if the wire islands on both sides don't have bit width errors)
+	/// * Update wire nets/bitwidths from islands
 	/// * Set pin nets and add connections to nets
 	pub fn recompute_nets(&self) -> Vec<BitWidthError> {
 		// Init stuff
@@ -100,8 +101,14 @@ impl LogicCircuit {
 				}
 			}
 		}
-		// Iterate pins
-		// TODO
+		// Update wire nets/bitwidths from islands
+		for island in &islands {
+			for wire_id in &island.wires {
+				wires.get(wire_id).unwrap().borrow_mut().nets = island.nets.clone();
+			}
+		}
+		// Reset nets
+		*self.nets.borrow_mut() = HashMap::from_iter(nets.iter().map(|k| (*k, RefCell::new(LogicNet::new(Vec::new())))));
 		errors
 	}
 	/// From Gemini, modified by me during multi-bit-width upgrade

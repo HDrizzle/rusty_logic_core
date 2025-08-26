@@ -603,7 +603,7 @@ pub mod prelude {
 		}
 	}
 
-	use simulator::{CircuitWidePinReference, ComponentPinReference};
+	use simulator::{CircuitWideLogicPinReference, ComponentLogicPinReference};
 	pub fn create_simple_circuit() -> LogicCircuit {
 		LogicCircuit::new(
 			vec_to_u64_keyed_hashmap(vec![
@@ -616,16 +616,16 @@ pub mod prelude {
 			],
 			vec_to_u64_keyed_hashmap(vec![
 				LogicNet::new(vec![
-					CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0, 0)),
-					CircuitWidePinReference::ExternalConnection(0)
+					CircuitWideLogicPinReference::ComponentPin(ComponentLogicPinReference::new(0, 0)),
+					CircuitWideLogicPinReference::ExternalConnection(0)
 				]),
 				LogicNet::new(vec![
-					CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0, 1)),
-					CircuitWidePinReference::ExternalConnection(1)
+					CircuitWideLogicPinReference::ComponentPin(ComponentLogicPinReference::new(0, 1)),
+					CircuitWideLogicPinReference::ExternalConnection(1)
 				]),
 				LogicNet::new(vec![
-					CircuitWidePinReference::ComponentPin(ComponentPinReference::new(0, 2)),
-					CircuitWidePinReference::ExternalConnection(2)
+					CircuitWideLogicPinReference::ComponentPin(ComponentLogicPinReference::new(0, 2)),
+					CircuitWideLogicPinReference::ExternalConnection(2)
 				]),
 			]),
 			"test-circuit".to_string(),

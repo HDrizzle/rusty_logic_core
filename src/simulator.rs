@@ -1,6 +1,6 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet, VecDeque}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, rc::Rc};
+use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, rc::Rc};
 use serde::{Deserialize, Serialize};
 use crate::{prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
@@ -127,6 +127,11 @@ pub fn merge_logic_states(a: LogicState, b: LogicState) -> LogicState {
 			LogicState::Floating
 		}
 	}
+}
+
+/// For devices that don't use busses
+pub fn graphic_pin_config_from_single_pins(in_: HashMap<u64, (IntV2, FourWayDir, f32, String, bool)>) -> HashMap<u64, (IntV2, FourWayDir, f32, String, bool, Vec<u64>)> {
+	HashMap::from_iter(in_.into_iter().map(|t| (t.0, (t.1.0, t.1.1, t.1.2, t.1.3, t.1.4, vec![t.0]))))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -878,7 +883,7 @@ pub struct Wire {
 	ui_data: UIData,
 	length: u32,
 	pub nets: Vec<u64>,
-	state: LogicState,
+	states: Vec<LogicState>,
 	pub start_connections: Rc<RefCell<HashSet<WireConnection>>>,
 	pub end_connections: Rc<RefCell<HashSet<WireConnection>>>,
 	start_selected: bool,
@@ -899,7 +904,7 @@ impl Wire {
 			ui_data: UIData::new(pos, direction, Self::bb_from_len(length)),
 			length,
 			nets,
-			state: LogicState::Floating,
+			states: vec![LogicState::Floating],
 			start_connections,
 			end_connections,
 			start_selected: false,
@@ -1006,7 +1011,7 @@ impl GraphicSelectableItem for Wire {
 	fn draw<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		let start_pos = self.ui_data.position.to_v2();
 		let end_pos = self.end_pos().to_v2();
-		let stroke = draw.styles.color_from_logic_state(self.state);
+		let stroke = draw.styles.color_from_logic_states(&self.states);
 		draw.draw_polyline(
 			vec![
 				start_pos,
@@ -1138,10 +1143,12 @@ impl LogicDeviceGeneric {
 				#[cfg(not(feature = "restore_pin_states"))]
 				let logic_pin = LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None);
 				#[cfg(feature = "restore_pin_states")]
-				logic_pin.internal_state = match save.pin_states.get(&pin_id) {
-					Some(state) => *state,
-					None => LogicState::Floating
-				};
+				{
+					logic_pin.internal_state = match save.pin_states.get(&pin_id) {
+						Some(state) => *state,
+						None => LogicState::Floating
+					};
+				}
 				logic_pins_mut.insert(*logic_pin_id, RefCell::new(logic_pin));
 			}
 			let graphic_pin = GraphicPin::new(Rc::clone(&logic_pins), config.5, config.0, config.1, config.2, config.3, config.4);
@@ -1629,7 +1636,7 @@ impl LogicCircuit {
 				bit_width: None,
 				name
 			},
-			save.graphic_pins,
+			HashMap::from_iter(save.graphic_pins.into_iter().map(|t| (t.0, (t.1.0, t.1.1, 1.0, t.1.2, t.1.3, t.1.4)))),
 			(V2::zeros(), V2::zeros()),
 			displayed_as_block
 		);
@@ -2356,9 +2363,13 @@ impl LogicCircuit {
 		// Component pins
 		for (comp_id, comp_cell) in self.components.borrow().iter() {
 			let comp = comp_cell.borrow();
+			// Build pin positions before mut borrowing them
+			let mut pin_positions = HashMap::<u64, IntV2>::new();
+			for pin_id in comp.get_generic().graphic_pins.borrow().keys() {
+				pin_positions.insert(*pin_id, comp.get_ui_data().pos_to_parent_coords(comp.get_pin_position_override(*pin_id).unwrap().0));
+			}
 			for (pin_id, pin) in comp.get_generic().graphic_pins.borrow_mut().iter_mut() {
-				let pin_pos_wrt_component = comp.get_pin_position_override(*pin_id).unwrap().0;
-				let pin_pos: IntV2 = comp.get_ui_data().pos_to_parent_coords(pin_pos_wrt_component);
+				let pin_pos: IntV2 = *pin_positions.get(pin_id).unwrap();
 				pin.wire_connections = match self.is_point_on_wire(pin_pos, None) {
 					Some((wire_id, _, wire_intercept_triple, _)) => {
 						// Update wire connection
@@ -2394,19 +2405,17 @@ impl LogicCircuit {
 			let comp = comp_cell.borrow();
 			let comp_logical_pins = comp.get_generic().logic_pins.borrow();
 			for (pin_id, pin) in comp.get_generic().graphic_pins.borrow_mut().iter_mut() {
-				let pin_pos_wrt_component = comp.get_pin_position_override(*pin_id).unwrap().0;
-				let pin_pos: IntV2 = comp.get_ui_data().pos_to_parent_coords(pin_pos_wrt_component);
-				match pin.wire_connections {
+				match &pin.wire_connections {
 					Some(conns_cell) => {
 						let conns = conns_cell.borrow();
 						for conn in conns.iter() {
 							if let WireConnection::Wire(wire_id) = conn {
-								let new_net_ids: Vec<u64> = wires.get(wire_id).expect(&format!("self.is_point_on_wire() returned invalid wire ID {}", wire_id)).borrow().nets;
+								let new_net_ids: &Vec<u64> = &wires.get(wire_id).expect(&format!("self.is_point_on_wire() returned invalid wire ID {}", wire_id)).borrow().nets;
 								// Even if bit widths don't match, wires are created to have the highest of all encountered bit widths so we need to iterate over the pin's owned logic pins and NOT the wire
 								for (bit_i, comp_logic_pin_id) in pin.owned_pins.iter().enumerate() {
 									let net_id = new_net_ids[bit_i];
 									comp_logical_pins.get(comp_logic_pin_id).unwrap().borrow_mut().external_source = Some(LogicConnectionPinExternalSource::Net(net_id));
-									self.nets.borrow().get(&net_id).expect("Net ID invalid").borrow_mut().edit_component_connection(true, *comp_id, *pin_id);
+									nets.get(&net_id).expect("Net ID invalid").borrow_mut().edit_component_connection(true, *comp_id, *pin_id);
 								}
 							}
 						}
@@ -2420,22 +2429,27 @@ impl LogicCircuit {
 			}
 		}
 		let logical_pins = self.generic_device.logic_pins.borrow();
-		// External pins, TODO: Make this look like the above code
+		// External pins
 		for (pin_id, pin) in self.get_generic().graphic_pins.borrow_mut().iter_mut() {
-			let pin_pos: IntV2 = pin.ui_data.position;// Do not use `self.get_pin_position_override()`
-			match pin.wire_connections {
-				Some((wire_id, new_net_id, wire_intercept_triple, _)) => {
-					{// Make sure wire reference is dropped before calling `self.add_connection_to_wire`
-						//let wires = self.wires.borrow_mut();
-						//let new_net_id: u64 = wires.get(&wire_id).expect(&format!("self.is_point_on_wire() returned invalid wire ID {}", wire_id)).borrow().net;
-						pin.internal_source = Some(LogicConnectionPinInternalSource::Net(new_net_id));
-						self.nets.borrow().get(&new_net_id).expect(&format!("Wire {} has invalid net ID {}", wire_id, new_net_id)).borrow_mut().edit_external_connection(true, *pin_id);
+			match &pin.wire_connections {
+				Some(conns_cell) => {
+					let conns = conns_cell.borrow();
+					for conn in conns.iter() {
+						if let WireConnection::Wire(wire_id) = conn {
+							let new_net_ids: &Vec<u64> = &wires.get(wire_id).expect(&format!("self.is_point_on_wire() returned invalid wire ID {}", wire_id)).borrow().nets;
+							// Even if bit widths don't match, wires are created to have the highest of all encountered bit widths so we need to iterate over the pin's owned logic pins and NOT the wire
+							for (bit_i, comp_logic_pin_id) in pin.owned_pins.iter().enumerate() {
+								let net_id = new_net_ids[bit_i];
+								logical_pins.get(comp_logic_pin_id).unwrap().borrow_mut().internal_source = Some(LogicConnectionPinInternalSource::Net(net_id));
+								nets.get(&net_id).expect("Net ID invalid").borrow_mut().edit_external_connection(true, *pin_id);
+							}
+						}
 					}
-					// Update wire connection
-					self.add_connection_to_wire(WireConnection::Pin(CircuitWidePinReference::ExternalConnection(pin_id.clone())), wire_id, pin_pos, wire_intercept_triple);
 				},
 				None => {
-					pin.internal_source = None;
+					for comp_logic_pin_id in &pin.owned_pins {
+						logical_pins.get(comp_logic_pin_id).unwrap().borrow_mut().internal_source = None;
+					}
 				}
 			}
 		}
@@ -2580,7 +2594,7 @@ impl LogicCircuit {
 						WireConnection::Wire(new_wire_id),
 						connection.clone()
 					].into_iter())));
-					(Rc::clone(&wire.end_connections), end_conns, wire.ui_data.direction.clone(), new_wire_len, wire.nets)
+					(Rc::clone(&wire.end_connections), end_conns, wire.ui_data.direction.clone(), new_wire_len, wire.nets.clone())
 				};
 				// Update old end conns (`end_conns`) to remove old wire and add new wire
 				{
@@ -2589,7 +2603,7 @@ impl LogicCircuit {
 					end_conns_borrowed.insert(WireConnection::Wire(new_wire_id));
 				}
 				// Create new wire
-				self.wires.borrow_mut().insert(new_wire_id, RefCell::new(Wire::new(position, new_length, direction, bit_width, net, Rc::clone(&middle_conns), end_conns)));
+				self.wires.borrow_mut().insert(new_wire_id, RefCell::new(Wire::new(position, new_length, direction, nets, Rc::clone(&middle_conns), end_conns)));
 				(middle_conns, Some(new_wire_id))
 			},
 			(false, false, true) => {
@@ -2807,7 +2821,7 @@ impl LogicCircuit {
 		save.type_name = format!("{} (flattened)", save.type_name);
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&save_path), &raw_string))?;
-		Ok(EnumAllLogicDevices::SubCircuit(save_path, self.displayed_as_block, self.generic_device.ui_data.position, self.generic_device.ui_data.direction))
+		Ok(EnumAllLogicDevices::SubCircuit(save_path, self.displayed_as_block, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone()))
 	}
 	/// Recursively extracts all sub-circuits that don't have a fixed sub-cycle count
 	pub fn flatten_recursive(&self, apply_transform: bool) -> Result<(Vec<(IntV2, FourWayDir, u32)>, Vec<EnumAllLogicDevices>), String> {
@@ -2873,13 +2887,13 @@ impl LogicCircuit {
 			net_mut_ref.sources = sources;
 		}
 		// Update pin & wire states from nets
-		// Wires
-		for (wire_id, wire_cell) in self.wires.borrow_mut().iter_mut() {
+		// Wires, TODO
+		/*for (wire_id, wire_cell) in self.wires.borrow_mut().iter_mut() {
 			let net_id = wire_cell.borrow().net;
 			wire_cell.borrow_mut().state = self.nets.borrow().get(&net_id).expect(&format!("Wire {} has invalid net ID {}", wire_id, net_id)).borrow().state;
-		}
+		}*/
 		// External connection pins
-		for (pin_id, pin_cell) in self.generic_device.pins.borrow_mut().iter_mut() {
+		for (pin_id, pin_cell) in self.generic_device.logic_pins.borrow_mut().iter_mut() {
 			let int_source_opt = pin_cell.borrow().internal_source.clone();
 			if let Some(source) = int_source_opt {
 				match source {
@@ -2893,7 +2907,7 @@ impl LogicCircuit {
 		}
 		// Component pins, and propagate through components
 		for (comp_id, comp) in self.components.borrow().iter() {
-			for (pin_id, pin_cell) in comp.borrow_mut().get_generic_mut().pins.borrow_mut().iter_mut() {
+			for (pin_id, pin_cell) in comp.borrow_mut().get_generic_mut().logic_pins.borrow_mut().iter_mut() {
 				let ext_source_opt = pin_cell.borrow().external_source.clone();
 				if let Some(source) = ext_source_opt {
 					match source {
@@ -2937,6 +2951,17 @@ impl LogicCircuit {
 		for (ref_, component) in self.components.borrow().iter() {
 			components_save.insert(*ref_, component.borrow().save()?);
 		}
+		// Un-RefCell Logic pins
+		let mut logic_pins = HashMap::<u64, LogicConnectionPin>::new();
+		for (pin_id, pin_cell) in self.generic_device.logic_pins.borrow().iter() {
+			let pin = pin_cell.borrow();
+			logic_pins.insert(*pin_id, pin.clone());
+		}
+		// graphic pins
+		let mut graphic_pins = HashMap::<u64, (IntV2, FourWayDir, String, bool, Vec<u64>)>::new();
+		for (pin_id, pin) in self.generic_device.graphic_pins.borrow().iter() {
+			graphic_pins.insert(*pin_id, (pin.ui_data.position, pin.ui_data.direction, pin.name.clone(), pin.show_name, pin.owned_pins.clone()));
+		}
 		// Un-RefCell Wires
 		let mut wires_save = HashMap::<u64, (IntV2, FourWayDir, u32)>::new();
 		for (ref_, wire_cell) in self.wires.borrow().iter() {
@@ -2945,9 +2970,12 @@ impl LogicCircuit {
 		}
 		// First, actually save this circuit
 		Ok(LogicCircuitSave {
-			generic_device: self.generic_device.clone(),
+			logic_pins,
+			graphic_pins,
 			components: components_save,
 			wires: wires_save,
+			splitters: HashMap::from_iter(self.splitters.borrow().iter().map(|t| (*t.0, t.1.save()))),
+			labels: HashMap::from_iter(self.labels.borrow().iter().map(|t| (*t.0, t.1.save()))),
 			block_pin_positions: self.block_pin_positions.clone(),
 			type_name: self.type_name.clone(),
 			fixed_sub_cycles_opt: self.fixed_sub_cycles_opt
@@ -2972,12 +3000,11 @@ impl LogicCircuit {
 			draw.styles.color_foreground
 		);
 		// Pins at alternate locations
-		for (pin_id, pin_cell) in self.generic_device.pins.borrow().iter() {
+		for (pin_id, pin) in self.generic_device.graphic_pins.borrow().iter() {
 			let pin_alternate_config = self.block_pin_positions.get(pin_id).expect("Pin missing from block layout");
-			let pin = pin_cell.borrow();
 			let pin_stroke = match for_block_layout_edit {
 				true => draw.styles.color_foreground,
-				false => draw.styles.color_from_logic_state(pin.external_state)
+				false => draw.styles.color_from_logic_states(&pin.states())
 			};
 			draw.draw_polyline(
 				vec![
@@ -3026,7 +3053,7 @@ impl LogicDevice for LogicCircuit {
 	/// The actual save is done with `LogicCircuit::save_circuit()`
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		// Path to save file
-		Ok(EnumAllLogicDevices::SubCircuit(self.save_path.clone(), self.displayed_as_block, self.get_ui_data().position, self.get_ui_data().direction))
+		Ok(EnumAllLogicDevices::SubCircuit(self.save_path.clone(), self.displayed_as_block, self.get_ui_data().position, self.get_ui_data().direction, self.generic_device.name.clone()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		if self.displayed_as_block {
