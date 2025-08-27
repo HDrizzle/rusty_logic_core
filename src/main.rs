@@ -614,20 +614,6 @@ pub mod prelude {
 				(IntV2(-4, 1), FourWayDir::W, 1.0, "b".to_owned(), vec![1]),
 				(IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), vec![2]),
 			],
-			vec_to_u64_keyed_hashmap(vec![
-				LogicNet::new(vec![
-					CircuitWideLogicPinReference::ComponentPin(ComponentLogicPinReference::new(0, 0)),
-					CircuitWideLogicPinReference::ExternalConnection(0)
-				]),
-				LogicNet::new(vec![
-					CircuitWideLogicPinReference::ComponentPin(ComponentLogicPinReference::new(0, 1)),
-					CircuitWideLogicPinReference::ExternalConnection(1)
-				]),
-				LogicNet::new(vec![
-					CircuitWideLogicPinReference::ComponentPin(ComponentLogicPinReference::new(0, 2)),
-					CircuitWideLogicPinReference::ExternalConnection(2)
-				]),
-			]),
 			"test-circuit".to_string(),
 			None,
 			vec_to_u64_keyed_hashmap(vec![

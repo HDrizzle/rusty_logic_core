@@ -677,6 +677,13 @@ pub struct GraphicLabel {
 }
 
 impl GraphicLabel {
+	pub fn new() -> Self {
+		Self {
+			ui_data: UIData::new(IntV2(0, 0), FourWayDir::default(), (V2::zeros(), V2::zeros())),
+			text: "New Label".to_owned(),
+			vertical: false
+		}
+	}
 	pub fn save(&self) -> GraphicLabelSave {
 		GraphicLabelSave {
 			pos: self.ui_data.position,
@@ -823,6 +830,55 @@ impl Splitter {
 			}
 		}
 		panic!("Splitter::get_bit_index_from_split_and_wire_index() given too large split index")
+	}
+	pub fn pin_pos_local(pin_i: u16) -> IntV2 {
+		if pin_i == 0 {
+			IntV2(-2, -1)
+		}
+		else {
+			IntV2(2, pin_i as i32)
+		}
+	}
+	/// Point must be relative to this splitter
+	pub fn is_connection_point(&self, point: IntV2) -> Option<(Vec<Option<u64>>, Option<Rc<RefCell<HashSet<WireConnection>>>>)> {
+		if point == IntV2(-2, -1) {
+			return Some((
+				(0..self.bit_width).into_iter().map(|_| None).collect(),
+				match &self.base_connections_opt {
+					Some(conns_rc) => Some(Rc::clone(conns_rc)),
+					None => None
+				}
+			));
+		}
+		else {
+			for (split_i, split) in self.splits.iter().enumerate() {
+				let split_pos = IntV2(2, split_i as i32 + 1);
+				if split_pos == point {
+					return Some((
+						(0..self.bit_width).into_iter().map(|_| None).collect(),
+						match &split.1 {
+							Some((conns_rc, _)) => Some(Rc::clone(conns_rc)),
+							None => None
+						}
+					));
+				}
+			}
+		}
+		None
+	}
+	pub fn set_pin_wire_conns(&mut self, pin_i: u16, conns: &Option<Rc<RefCell<HashSet<WireConnection>>>>) {
+		let new_conns = match conns {
+			Some(borrowed_rc) => Some(Rc::clone(borrowed_rc)),
+			None => None
+		};
+		if pin_i == 0 {
+			self.base_connections_opt = new_conns;
+		}
+		else {
+			self.splits[pin_i as usize - 1].1 = match new_conns {
+				Some(conns) => Some(conns, )// TODO: Possibly splitters don't need nets
+			};
+		}
 	}
 }
 
@@ -1571,7 +1627,6 @@ impl LogicCircuit {
 	pub fn new(
 		components_not_celled: HashMap<u64, Box<dyn LogicDevice>>,
 		external_graphic_pin_config: Vec<(IntV2, FourWayDir, f32, String, Vec<u64>)>,
-		nets: HashMap<u64, LogicNet>,
 		type_name: String,
 		fixed_sub_cycles_opt: Option<usize>,
 		wires: HashMap<u64, Wire>,
@@ -1596,7 +1651,7 @@ impl LogicCircuit {
 			),*/
 			generic_device: LogicDeviceGeneric::load(LogicDeviceSave::default(), graphic_pin_config, (V2::zeros(), V2::zeros()), displayed_as_block),
 			components: RefCell::new(components),
-			nets: RefCell::new(hashmap_into_refcells(nets)),
+			nets: RefCell::new(HashMap::new()),
 			wires: RefCell::new(hashmap_into_refcells(wires)),
 			splitters: RefCell::new(HashMap::new()),
 			labels: RefCell::new(HashMap::new()),
@@ -1622,7 +1677,6 @@ impl LogicCircuit {
 		Self::new(
 			HashMap::new(),
 			Vec::new(),
-			HashMap::new(),
 			type_name,
 			None,
 			HashMap::new(),
@@ -1636,22 +1690,6 @@ impl LogicCircuit {
 		let mut components = HashMap::<u64, RefCell<Box<dyn LogicDevice>>>::new();
 		for (ref_, save_comp) in save.components.into_iter() {
 			components.insert(ref_, RefCell::new(EnumAllLogicDevices::to_dynamic(save_comp)?));
-		}
-		// Get rid of Global pin sources if not toplevel and nets if toplevel
-		for (_, pin) in &mut save.logic_pins {
-			if let Some(source) = &pin.external_source {
-				if toplevel {
-					if let LogicConnectionPinExternalSource::Net(_) = source {
-						pin.external_source = Some(LogicConnectionPinExternalSource::Global);
-					}
-				}
-				else {
-					if let LogicConnectionPinExternalSource::Global = source {
-						pin.external_source = None;
-					}
-				}
-				pin.internal_source = None;// Will be automatically assigned from wire geometry, remove because of invalid net references
-			}
 		}
 		// Reconstruct wires
 		let mut reconstructed_wires = HashMap::<u64, RefCell<Wire>>::new();
@@ -1674,6 +1712,23 @@ impl LogicCircuit {
 			(V2::zeros(), V2::zeros()),
 			displayed_as_block
 		);
+		// Get rid of Global pin sources if not toplevel and nets if toplevel
+		for (_, pin_cell) in generic_device.logic_pins.borrow().iter() {
+			let mut pin = pin_cell.borrow_mut();
+			if let Some(source) = &pin.external_source {
+				if toplevel {
+					if let LogicConnectionPinExternalSource::Net(_) = source {
+						pin.external_source = Some(LogicConnectionPinExternalSource::Global);
+					}
+				}
+				else {
+					if let LogicConnectionPinExternalSource::Global = source {
+						pin.external_source = None;
+					}
+				}
+				pin.internal_source = None;// Will be automatically assigned from wire geometry, remove because of invalid net references
+			}
+		}
 		let mut out = Self {
 			generic_device: generic_device,
 			components: RefCell::new(components),
@@ -2007,18 +2062,8 @@ impl LogicCircuit {
 					let wire_ids = self.add_wire_geometry(vec![(pos, dir)], pos + dir.to_unit_int().mult(len as i32));
 					GraphicSelectableItemRef::Wire(wire_ids[0])// There shoud be exactly one
 				},
-				CopiedGraphicItem::Splitter(save) => {
-					let mut splitters = self.splitters.borrow_mut();
-					let new_id: u64 = lowest_unused_key(&*splitters);
-					splitters.insert(new_id, Splitter::load(save));
-					GraphicSelectableItemRef::Splitter(new_id)
-				},
-				CopiedGraphicItem::GraphicLabel(save) => {
-					let mut labels = self.labels.borrow_mut();
-					let new_id: u64 = lowest_unused_key(&*labels);
-					labels.insert(new_id, GraphicLabel::load(save));
-					GraphicSelectableItemRef::GraphicLabel(new_id)
-				}
+				CopiedGraphicItem::Splitter(save) => self.insert_splitter(save),
+				CopiedGraphicItem::GraphicLabel(save) => self.insert_label(save)
 			});
 		}
 		// Set each item's pre-drag position to the difference from the BB center it it's position
@@ -2046,6 +2091,24 @@ impl LogicCircuit {
 		let new_comp_id = lowest_unused_key(&components);
 		components.insert(new_comp_id, RefCell::new(EnumAllLogicDevices::to_dynamic(comp_save.clone()).unwrap()));
 		GraphicSelectableItemRef::Component(new_comp_id)
+	}
+	pub fn insert_splitter(&self, splitter: SplitterSave) -> GraphicSelectableItemRef {
+		let mut splitters = self.splitters.borrow_mut();
+		let new_id = lowest_unused_key(&splitters);
+		splitters.insert(new_id, Splitter::load(splitter));
+		GraphicSelectableItemRef::Splitter(new_id)
+	}
+	pub fn insert_label(&self, label: GraphicLabelSave) -> GraphicSelectableItemRef {
+		let mut labels = self.labels.borrow_mut();
+		let new_id = lowest_unused_key(&labels);
+		labels.insert(new_id, GraphicLabel::load(label));
+		GraphicSelectableItemRef::GraphicLabel(new_id)
+	}
+	pub fn set_graphic_item_following_mouse(&self, item_ref: GraphicSelectableItemRef) {
+		*self.tool.borrow_mut() = Tool::Select{
+			selected_graphics: HashSet::from_iter(vec![item_ref].into_iter()),
+			selected_graphics_state: SelectionState::FollowingMouse(V2::zeros())
+		};
 	}
 	fn selected_bb(&self, selected_graphics: &HashSet<GraphicSelectableItemRef>) -> Option<(V2, V2)> {
 		let mut bb_opt = Option::<(V2, V2)>::None;
@@ -2160,6 +2223,12 @@ impl LogicCircuit {
 				}
 			}
 		}
+		for splitter in self.splitters.borrow().values() {
+			let point_splitter_local = splitter.ui_data.parent_pos_to_local_coords(point);
+			if let Some(return_t) = splitter.is_connection_point(point_splitter_local) {
+				return (true, return_t.0, return_t.1);
+			}
+		}
 		(false, vec![None], None)
 	}
 	/// Returns: Option<(Wire ID, Vec<Net IDs>, Wire intrcept triple, Optional end connection set)>
@@ -2225,9 +2294,11 @@ impl LogicCircuit {
 		// Combine overlapping but seperate end connection and T-connection HashSets
 		self.combine_overlapping_wire_connection_sets();
 		// Remove all connections from nets, the legit ones will be added back later
-		self.remove_net_connections();
+		//self.remove_net_connections();
 		// Everything so far just deals with wires, now update pin connections to the wires, possibly changing pin nets
 		self.update_graphical_pin_to_wire_connections();
+		// Graphical connections b/w wires and splitters
+		self.update_splitter_wire_connections();
 		// Combine consecutive segments in the same direction
 		self.merge_consecutive_wires();
 		// Compute nets, has to be done after all geometry and connection fixes
@@ -2427,6 +2498,22 @@ impl LogicCircuit {
 					None
 				}
 			};
+		}
+	}
+	fn update_splitter_wire_connections(&self) {
+		for (splitter_id, splitter) in self.splitters.borrow_mut().iter_mut() {
+			for pin_i in 0..(splitter.splits.len() as u16 + 1) {
+				let pin_pos = splitter.ui_data.pos_to_parent_coords(Splitter::pin_pos_local(pin_i));
+				splitter.set_pin_wire_conns(pin_i, match self.is_point_on_wire(pin_pos, None) {
+					Some((wire_id, _, wire_intercept_triple, _)) => {
+						// Update wire connection
+						Some(self.add_connection_to_wire(WireConnection::Splitter(*splitter_id, pin_i), wire_id, pin_pos, wire_intercept_triple).0)
+					},
+					None => {
+						None
+					}
+				});
+			}
 		}
 	}
 	/// Almost last step in recomputing circuit connections after the circuit is edited
@@ -2842,7 +2929,12 @@ impl LogicCircuit {
 		for (ref_, _) in self.generic_device.graphic_pins.borrow().iter() {
 			out.push(GraphicSelectableItemRef::Pin(ref_.clone()));
 		}
-		// TODO: Text boxes once I implement them
+		for id in self.splitters.borrow().keys() {
+			out.push(GraphicSelectableItemRef::Splitter(*id));
+		}
+		for id in self.labels.borrow().keys() {
+			out.push(GraphicSelectableItemRef::GraphicLabel(*id));
+		}
 		out
 	}
 	/// Creates a new flatened circuit and saves it, returning the path to the saved circuit

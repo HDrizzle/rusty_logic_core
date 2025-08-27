@@ -76,7 +76,6 @@ impl LogicCircuit {
 				let mut already_found = false;
 				for island in &islands {
 					already_found |= island.wires.contains(wire_id);
-					break;
 				}
 				if already_found {
 					continue;
@@ -110,6 +109,7 @@ impl LogicCircuit {
 				let base_net: u64 = wire.nets[base_bit_i as usize];
 				let conductor_bit_handle = ConductorBit::Wire(*base_wire_id, base_bit_i as u16);
 				if visited_bits.contains(&conductor_bit_handle) {
+					base_bit_i += 1;
 					continue;
 				}
 				// DFS stack

@@ -123,6 +123,9 @@ impl UIData {
 	pub fn pos_to_parent_coords(&self, position: IntV2) -> IntV2 {
 		self.direction.rotate_intv2(position) + self.position
 	}
+	pub fn parent_pos_to_local_coords(&self, position: IntV2) -> IntV2 {
+		self.direction.rotate_intv2_reverse(position - self.position)
+	}
 	pub fn pos_to_parent_coords_float(&self, position: V2) -> V2 {
 		self.direction.rotate_v2(position) + self.position.to_v2()
 	}
@@ -614,22 +617,25 @@ impl LogicCircuitToplevelView {
 				self.circuit.save_circuit().unwrap();
 				self.saved = true;
 			}
-			if ui.button("+ Component / Subcircuit").clicked() {
-				// Update component search list
-				self.all_logic_devices_search = builtin_components::list_all_basic_components();
-				for file_path in resource_interface::list_all_circuit_files().unwrap() {
-					self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(file_path, false, IntV2(0, 0), FourWayDir::default(), String::new()));
-				}
-				self.showing_component_popup = true;
-			}
 			if self.circuit.tool.borrow().tool_select_allowed() {
+				if ui.button("+ Component / Subcircuit").clicked() {
+					// Update component search list
+					self.all_logic_devices_search = builtin_components::list_all_basic_components();
+					for file_path in resource_interface::list_all_circuit_files().unwrap() {
+						self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(file_path, false, IntV2(0, 0), FourWayDir::default(), String::new()));
+					}
+					self.showing_component_popup = true;
+				}
 				if ui.button("+ I/O Pin").clicked() {
 					let graphic_pin_id = self.circuit.insert_graphic_pin(IntV2(0, 0), FourWayDir::default(), String::new(), true, 1);
-					*self.circuit.tool.borrow_mut() = Tool::Select{
-						selected_graphics: HashSet::from_iter(vec![GraphicSelectableItemRef::Pin(graphic_pin_id)].into_iter()),
-						selected_graphics_state: SelectionState::FollowingMouse(V2::zeros())
-					};
+					self.circuit.set_graphic_item_following_mouse(GraphicSelectableItemRef::Pin(graphic_pin_id));
 					self.circuit.update_pin_block_positions();
+				}
+				if ui.button("+ Splitter").clicked() {
+					self.circuit.set_graphic_item_following_mouse(self.circuit.insert_splitter(Splitter::new().save()));
+				}
+				if ui.button("+ Label").clicked() {
+					self.circuit.set_graphic_item_following_mouse(self.circuit.insert_label(GraphicLabel::new().save()));
 				}
 			}
 			// Compute cycles text
