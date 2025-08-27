@@ -1,5 +1,6 @@
 use crate::prelude::*;
 use crate::simulator::{AncestryStack, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource};
+use std::rc::Rc;
 
 #[test]
 fn logic_state_merge() {
@@ -65,7 +66,14 @@ fn logic_state_merge() {
 #[test]
 fn basic_sim_and_gate() {
 	let mut circuit = create_simple_circuit();
-	// Connections computed correctly
+	// Connections b/w wires & pins
+	assert!(Rc::ptr_eq(circuit.generic_device.graphic_pins.borrow().get(&0).unwrap().wire_connections.as_ref().unwrap(), &circuit.wires.borrow().get(&0).unwrap().borrow().start_connections));
+	assert!(Rc::ptr_eq(circuit.components.borrow().get(&0).unwrap().borrow().get_generic().graphic_pins.borrow().get(&0).unwrap().wire_connections.as_ref().unwrap(), &circuit.wires.borrow().get(&0).unwrap().borrow().end_connections));
+	assert!(Rc::ptr_eq(circuit.generic_device.graphic_pins.borrow().get(&1).unwrap().wire_connections.as_ref().unwrap(), &circuit.wires.borrow().get(&1).unwrap().borrow().start_connections));
+	assert!(Rc::ptr_eq(circuit.components.borrow().get(&0).unwrap().borrow().get_generic().graphic_pins.borrow().get(&1).unwrap().wire_connections.as_ref().unwrap(), &circuit.wires.borrow().get(&1).unwrap().borrow().end_connections));
+	assert!(Rc::ptr_eq(circuit.generic_device.graphic_pins.borrow().get(&2).unwrap().wire_connections.as_ref().unwrap(), &circuit.wires.borrow().get(&2).unwrap().borrow().start_connections));
+	assert!(Rc::ptr_eq(circuit.components.borrow().get(&0).unwrap().borrow().get_generic().graphic_pins.borrow().get(&2).unwrap().wire_connections.as_ref().unwrap(), &circuit.wires.borrow().get(&2).unwrap().borrow().end_connections));
+	// Nets computed correctly
 	assert_eq!(circuit.get_logic_pins_cell().borrow().get(&0).unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(0)));
 	assert_eq!(circuit.get_logic_pins_cell().borrow().get(&1).unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(1)));
 	assert_eq!(circuit.get_logic_pins_cell().borrow().get(&2).unwrap().borrow().internal_source, Some(LogicConnectionPinInternalSource::Net(2)));

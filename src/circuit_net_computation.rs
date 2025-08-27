@@ -21,6 +21,15 @@ enum Conductor {
 	Splitter(u64, u16)
 }
 
+/// Wire or Splitter specific bit
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ConductorBit {
+	/// Wire ID, wire bit index
+	Wire(u64, u16),
+	/// Splitter ID, Splitter bit index
+	Splitter(u64, u16)
+}
+
 impl From<WireConnection> for NotAWire {
 	fn from(value: WireConnection) -> Self {
 		match value {
@@ -47,8 +56,8 @@ impl LogicCircuit {
 	/// * Generate list of wire islands (only connected by wires, not across splitters) that have their own bit width
 	///   If a wire island is connected to any splitters or pins that have different bit widths, then create a bit width error
 	///   Each island will have a Vec<Option<u64>> for nets and a HashSet<NotAWire> for anything also connected
-	/// * Iterate all splitters and create/merge nets on each side (if the wire islands on both sides don't have bit width errors)
 	/// * Update wire nets/bitwidths from islands
+	/// * DFS to find all connected bits across wires and splitters
 	/// * Set pin nets and add connections to nets
 	pub fn recompute_nets(&self) -> Vec<BitWidthError> {
 		// Init stuff
@@ -86,25 +95,81 @@ impl LogicCircuit {
 			}
 			(islands, ext_conn_island_map)
 		};
-		// Net islands
-		// TODO: Fix: island nets could be double-updated and become disconnected from earlier splitter connections
-		for (splitter_id, splitter) in splitters.iter() {
-			let base_handle = NotAWire::Splitter(*splitter_id, 0);
-			// If there is an island connected to the base of the splitter, iterate over the splitter's fanout and set all those islands (if they exist) to the corresponding base island nets
-			if let Some(base_insland_i) = ext_conn_island_map.get(&base_handle) {
-				let base_nets: &Vec<u64> = &islands[*base_insland_i].nets;
-				for i_raw in 0..splitter.splits.len() {
-					let i = i_raw as u16 + 1;
-					if let Some(split_island_i) = ext_conn_island_map.get(&NotAWire::Splitter(*splitter_id, i)) {
-
-					}
-				}
-			}
-		}
 		// Update wire nets/bitwidths from islands
 		for island in &islands {
 			for wire_id in &island.wires {
 				wires.get(wire_id).unwrap().borrow_mut().nets = island.nets.clone();
+			}
+		}
+		// DFS over each net to connect it properly
+		let mut visited_bits = HashSet::<ConductorBit>::new();
+		for (base_wire_id, wire_cell) in wires.iter() {
+			let mut wire = wire_cell.borrow_mut();
+			let mut base_bit_i: u16 = 0;
+			while base_bit_i < wire.nets.len() as u16 {
+				let base_net: u64 = wire.nets[base_bit_i as usize];
+				let conductor_bit_handle = ConductorBit::Wire(*base_wire_id, base_bit_i as u16);
+				if visited_bits.contains(&conductor_bit_handle) {
+					continue;
+				}
+				// DFS stack
+				let mut bits_to_explore = Vec::<ConductorBit>::new();
+				bits_to_explore.push(conductor_bit_handle);
+				// DFS
+				while bits_to_explore.len() > 0 {
+					let current_bit: ConductorBit = bits_to_explore.pop().unwrap();
+					if visited_bits.contains(&current_bit) {
+						continue;
+					}
+					visited_bits.insert(current_bit);
+					match current_bit {
+						ConductorBit::Wire(wire_id, bit_index) => {
+							// Set wire net
+							if *base_wire_id == wire_id {// Check if same wire to prevent double-borrow
+								wire.nets[bit_index as usize] = base_net;
+							}
+							else {
+								wires.get(&wire_id).unwrap().borrow_mut().nets[bit_index as usize] = base_net;
+							};
+							// Add ends to search stack
+							for wire_end_conn in wire.start_connections.borrow().iter().chain(wire.end_connections.borrow().iter()) {
+								match wire_end_conn {
+									WireConnection::Wire(other_wire_id) => {
+										bits_to_explore.push(ConductorBit::Wire(*other_wire_id, bit_index));
+									},
+									WireConnection::Splitter(splitter_id, split_index) => {
+										let splitter_bit_index: u16 = splitters.get(splitter_id).unwrap().get_bit_index_from_split_and_wire_bit_index(*split_index, bit_index);
+										bits_to_explore.push(ConductorBit::Splitter(*splitter_id, splitter_bit_index));
+									},
+									WireConnection::Pin(_) => {}// Handled by seperate function
+								}
+							}
+						},
+						ConductorBit::Splitter(splitter_id, splitter_bit_index) => {
+							// Add to search stack
+							let splitter: &Splitter = splitters.get(&splitter_id).unwrap();
+							// Base connection
+							if let Some(base_conns) = &splitter.base_connections_opt {
+								for conn in base_conns.borrow().iter() {
+									if let WireConnection::Wire(other_wire_id) = conn {
+										bits_to_explore.push(ConductorBit::Wire(*other_wire_id, splitter_bit_index));
+									}
+								}
+							}
+							// Split connections
+							for (split_i, (_, split_conns_opt)) in splitter.splits.iter().enumerate() {
+								if let Some((split_conns_cell, _)) = split_conns_opt {
+									for conn in split_conns_cell.borrow().iter() {
+										if let WireConnection::Wire(other_wire_id) = conn {
+											bits_to_explore.push(ConductorBit::Wire(*other_wire_id, splitter.get_wire_bit_index_from_split_and_bit_index(split_i as u16 + 1, splitter_bit_index)));
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+				base_bit_i += 1;
 			}
 		}
 		// Reset nets

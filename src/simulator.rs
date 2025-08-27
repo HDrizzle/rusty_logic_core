@@ -753,7 +753,7 @@ pub struct Splitter {
 	bit_width: u16,
 	/// Each entry represents a graphic pin: Vec<(bit width, Option<(Grahic wire connection set, Vec of nets corresponding to bit width)>)>
 	pub splits: Vec<(u16, Option<(Rc<RefCell<HashSet<WireConnection>>>, Vec<u64>)>)>,
-	base_connections_opt: Option<Rc<RefCell<HashSet<WireConnection>>>>
+	pub base_connections_opt: Option<Rc<RefCell<HashSet<WireConnection>>>>
 }
 
 impl Splitter {
@@ -789,6 +789,40 @@ impl Splitter {
 		else {
 			self.splits[pin as usize - 1].0
 		}
+	}
+	// TODO
+	/// gets this splitters bit index (logical) from graphical split and logical bit index of a wire connected to that graphical split
+	pub fn get_bit_index_from_split_and_wire_bit_index(&self, split_index: u16, wire_bit_index: u16) -> u16 {
+		if split_index == 0 {
+			return wire_bit_index;
+		}
+		else {
+			let mut prev_bits_count: u16 = 0;
+			for (curr_split_index, split) in self.splits.iter().enumerate() {
+				if curr_split_index as u16 == split_index - 1 {
+					return wire_bit_index + prev_bits_count;
+				}
+				prev_bits_count += split.0;
+			}
+		}
+		panic!("Splitter::get_bit_index_from_split_and_wire_index() given too large split index")
+	}
+	// TODO
+	/// the bit index of a wire connected to a split connection
+	pub fn get_wire_bit_index_from_split_and_bit_index(&self, split_index: u16, splitter_bit_index: u16) -> u16 {
+		if split_index == 0 {
+			return splitter_bit_index;
+		}
+		else {
+			let mut prev_bits_count: u16 = 0;
+			for (curr_split_index, split) in self.splits.iter().enumerate() {
+				if curr_split_index as u16 == split_index - 1 {
+					return splitter_bit_index - prev_bits_count;
+				}
+				prev_bits_count += split.0;
+			}
+		}
+		panic!("Splitter::get_bit_index_from_split_and_wire_index() given too large split index")
 	}
 }
 
