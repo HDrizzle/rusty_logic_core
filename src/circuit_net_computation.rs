@@ -9,7 +9,7 @@ use crate::{prelude::*, simulator::CircuitWideGraphicPinReference};
 enum NotAWire {
 	/// Logical pin
 	Pin(CircuitWideGraphicPinReference),
-	/// Splitter ID, Splitter graphic connection ID
+	/// Splitter ID, Splitter GRAPHIC pin ID
 	Splitter(u64, u16)
 }
 
@@ -26,7 +26,7 @@ enum Conductor {
 enum ConductorBit {
 	/// Wire ID, wire bit index
 	Wire(u64, u16),
-	/// Splitter ID, Splitter bit index
+	/// Splitter ID, bit index
 	Splitter(u64, u16)
 }
 
@@ -137,9 +137,12 @@ impl LogicCircuit {
 									WireConnection::Wire(other_wire_id) => {
 										bits_to_explore.push(ConductorBit::Wire(*other_wire_id, bit_index));
 									},
-									WireConnection::Splitter(splitter_id, split_index) => {
-										let splitter_bit_index: u16 = splitters.get(splitter_id).unwrap().get_bit_index_from_split_and_wire_bit_index(*split_index, bit_index);
-										bits_to_explore.push(ConductorBit::Splitter(*splitter_id, splitter_bit_index));
+									WireConnection::Splitter(splitter_id, pin_i) => {
+										let splitter = splitters.get(splitter_id).unwrap();
+										if bit_index < splitter.graphic_pin_bit_width(*pin_i) {// Check that this wire's bit index is within the splitter's pin's range
+											let splitter_bit_index: u16 = splitter.get_bit_index_from_pin_i_and_wire_bit_index(*pin_i, bit_index);
+											bits_to_explore.push(ConductorBit::Splitter(*splitter_id, splitter_bit_index));
+										}
 									},
 									WireConnection::Pin(_) => {}// Handled by seperate function
 								}
@@ -157,11 +160,25 @@ impl LogicCircuit {
 								}
 							}
 							// Split connections
-							for (split_i, (_, split_conns_opt)) in splitter.splits.iter().enumerate() {
-								if let Some((split_conns_cell, _)) = split_conns_opt {
+							/*for (split_i, (_, split_conns_opt)) in splitter.splits.iter().enumerate() {
+								if let Some(split_conns_cell) = split_conns_opt {
 									for conn in split_conns_cell.borrow().iter() {
 										if let WireConnection::Wire(other_wire_id) = conn {
-											bits_to_explore.push(ConductorBit::Wire(*other_wire_id, splitter.get_wire_bit_index_from_split_and_bit_index(split_i as u16 + 1, splitter_bit_index)));
+											bits_to_explore.push(ConductorBit::Wire(*other_wire_id, splitter.get_wire_bit_index_from_pin_i_and_bit_index(split_i as u16 + 1, splitter_bit_index)));
+										}
+									}
+								}
+							}*/
+							// From Gemini
+							// Find the correct split pin for this bit index and propagate to its connections.
+							if let Some((pin_i, wire_bit_index)) = splitter.get_pin_and_wire_bit_from_splitter_bit(splitter_bit_index) {
+								// pin_i is 1-based, so the vector index is pin_i - 1
+								let (_, split_conns_opt) = &splitter.splits[pin_i as usize - 1];
+								if let Some(split_conns_cell) = split_conns_opt {
+									for conn in split_conns_cell.borrow().iter() {
+										if let WireConnection::Wire(other_wire_id) = conn {
+											// The wire connected to this pin receives the local wire_bit_index.
+											bits_to_explore.push(ConductorBit::Wire(*other_wire_id, wire_bit_index));
 										}
 									}
 								}
@@ -185,7 +202,7 @@ impl LogicCircuit {
 		let mut external_connection_bit_widths = HashMap::<NotAWire, u16>::new();
 		let mut bit_width_mismatch = false;
 		// Set this once first NotAWire is encountered, if any afterward don't match then return an error
-		// Initially 1 so that floating wire islands won't bit width=0
+		// Initially 1 so that floating wire islands won't have bit width=0
 		let mut highest_bit_width = 1;
 		let mut ext_og_bit_width = Option::<u16>::None;
 

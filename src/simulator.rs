@@ -260,6 +260,9 @@ impl LogicNet {
 									}
 								}
 							}
+							else {
+								panic!("External connection doesn't have source");
+							}
 						},
 						None => panic!("Net references external connection {:?} which is invalid", connection)
 					}
@@ -757,9 +760,9 @@ pub struct GraphicLabelSave {
 #[derive(Debug, Clone)]
 pub struct Splitter {
 	ui_data: UIData,
-	bit_width: u16,
+	pub bit_width: u16,
 	/// Each entry represents a graphic pin: Vec<(bit width, Option<(Grahic wire connection set, Vec of nets corresponding to bit width)>)>
-	pub splits: Vec<(u16, Option<(Rc<RefCell<HashSet<WireConnection>>>, Vec<u64>)>)>,
+	pub splits: Vec<(u16, Option<Rc<RefCell<HashSet<WireConnection>>>>)>,
 	pub base_connections_opt: Option<Rc<RefCell<HashSet<WireConnection>>>>
 }
 
@@ -799,14 +802,14 @@ impl Splitter {
 	}
 	// TODO
 	/// gets this splitters bit index (logical) from graphical split and logical bit index of a wire connected to that graphical split
-	pub fn get_bit_index_from_split_and_wire_bit_index(&self, split_index: u16, wire_bit_index: u16) -> u16 {
-		if split_index == 0 {
+	pub fn get_bit_index_from_pin_i_and_wire_bit_index(&self, pin_i: u16, wire_bit_index: u16) -> u16 {
+		if pin_i == 0 {
 			return wire_bit_index;
 		}
 		else {
 			let mut prev_bits_count: u16 = 0;
 			for (curr_split_index, split) in self.splits.iter().enumerate() {
-				if curr_split_index as u16 == split_index - 1 {
+				if curr_split_index as u16 == pin_i - 1 {
 					return wire_bit_index + prev_bits_count;
 				}
 				prev_bits_count += split.0;
@@ -816,14 +819,14 @@ impl Splitter {
 	}
 	// TODO
 	/// the bit index of a wire connected to a split connection
-	pub fn get_wire_bit_index_from_split_and_bit_index(&self, split_index: u16, splitter_bit_index: u16) -> u16 {
-		if split_index == 0 {
+	pub fn get_wire_bit_index_from_pin_i_and_bit_index(&self, pin_i: u16, splitter_bit_index: u16) -> u16 {
+		if pin_i == 0 {
 			return splitter_bit_index;
 		}
 		else {
 			let mut prev_bits_count: u16 = 0;
 			for (curr_split_index, split) in self.splits.iter().enumerate() {
-				if curr_split_index as u16 == split_index - 1 {
+				if curr_split_index as u16 == pin_i - 1 {
 					return splitter_bit_index - prev_bits_count;
 				}
 				prev_bits_count += split.0;
@@ -857,7 +860,7 @@ impl Splitter {
 					return Some((
 						(0..self.bit_width).into_iter().map(|_| None).collect(),
 						match &split.1 {
-							Some((conns_rc, _)) => Some(Rc::clone(conns_rc)),
+							Some(conns_rc) => Some(Rc::clone(conns_rc)),
 							None => None
 						}
 					));
@@ -875,10 +878,33 @@ impl Splitter {
 			self.base_connections_opt = new_conns;
 		}
 		else {
-			self.splits[pin_i as usize - 1].1 = match new_conns {
-				Some(conns) => Some(conns, )// TODO: Possibly splitters don't need nets
-			};
+			self.splits[pin_i as usize - 1].1 = new_conns;
 		}
+	}
+	/// From Gemini
+	/// Given a logical bit index for the whole splitter, find which split pin it
+	/// corresponds to and what the local bit index on a wire connected to that pin would be.
+	/// Returns `(pin_i, wire_bit_index)`. `pin_i` is the 1-based graphical pin ID.
+	pub fn get_pin_and_wire_bit_from_splitter_bit(&self, splitter_bit_index: u16) -> Option<(u16, u16)> {
+		if splitter_bit_index >= self.bit_width {
+			return None;
+		}
+
+		let mut prev_bits_count: u16 = 0;
+		for (split_i, split) in self.splits.iter().enumerate() {
+			let pin_i = split_i as u16 + 1;
+			let split_bit_width = split.0;
+			
+			// Check if the target bit falls within the range of the current split
+			if splitter_bit_index >= prev_bits_count && splitter_bit_index < prev_bits_count + split_bit_width {
+				// This is the correct split pin.
+				let wire_bit_index = splitter_bit_index - prev_bits_count;
+				return Some((pin_i, wire_bit_index));
+			}
+			prev_bits_count += split_bit_width;
+		}
+		
+		None // Should not be reached if splitter bit widths sum up correctly
 	}
 }
 
@@ -915,7 +941,7 @@ impl GraphicSelectableItem for Splitter {
 	fn get_ui_data_mut(&mut self) -> &mut UIData {
 		&mut self.ui_data
 	}
-	fn is_connected_to_net(&self, net_id: u64) -> bool {
+	/*fn is_connected_to_net(&self, net_id: u64) -> bool {
 		for split in &self.splits {
 			if let Some(split) = &split.1 {
 				for net in &split.1 {
@@ -926,7 +952,7 @@ impl GraphicSelectableItem for Splitter {
 			}
 		}
 		return false;
-	}
+	}*/
 	// TODO
 	fn get_properties(&self) -> Vec<SelectProperty> {
 		vec![
@@ -1175,7 +1201,7 @@ pub enum WireConnection {
 	Pin(CircuitWideGraphicPinReference),
 	/// Another straight wire segment
 	Wire(u64),
-	/// (Splitter ID, splitter pin #)
+	/// (Splitter ID, splitter graphic pin #)
 	Splitter(u64, u16)
 }
 
@@ -1310,7 +1336,7 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn get_circuit_mut(&mut self) -> &mut LogicCircuit {
 		panic!("LogicDevice::get_circuit_mut only works on the LogicCircuit class which overrides it");
 	}
-	fn set_pin_external_state(
+	fn set_logic_pin_external_state(
 		&mut self,
 		pin_id: u64,
 		state: LogicState
@@ -1332,9 +1358,9 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 			None => None
 		}
 	}*/
-	fn set_all_pin_states(&mut self, states: Vec<(u64, LogicState, LogicDriveSource)>) -> Result<(), String> {
+	fn set_all_logic_pin_states(&mut self, states: Vec<(u64, LogicState, LogicDriveSource)>) -> Result<(), String> {
 		for (pin_query, state, _source) in states {
-			self.set_pin_external_state(pin_query, state)?;
+			self.set_logic_pin_external_state(pin_query, state)?;
 		}
 		Ok(())
 	}
@@ -1665,6 +1691,7 @@ impl LogicCircuit {
 			fixed_sub_cycles_opt,
 			self_reload_err_opt: None
 		};
+		new.setup_external_connection_sources();
 		new.recompute_default_layout();
 		new.check_wire_geometry_and_connections();
 		Ok(new)
@@ -1712,23 +1739,6 @@ impl LogicCircuit {
 			(V2::zeros(), V2::zeros()),
 			displayed_as_block
 		);
-		// Get rid of Global pin sources if not toplevel and nets if toplevel
-		for (_, pin_cell) in generic_device.logic_pins.borrow().iter() {
-			let mut pin = pin_cell.borrow_mut();
-			if let Some(source) = &pin.external_source {
-				if toplevel {
-					if let LogicConnectionPinExternalSource::Net(_) = source {
-						pin.external_source = Some(LogicConnectionPinExternalSource::Global);
-					}
-				}
-				else {
-					if let LogicConnectionPinExternalSource::Global = source {
-						pin.external_source = None;
-					}
-				}
-				pin.internal_source = None;// Will be automatically assigned from wire geometry, remove because of invalid net references
-			}
-		}
 		let mut out = Self {
 			generic_device: generic_device,
 			components: RefCell::new(components),
@@ -1746,9 +1756,23 @@ impl LogicCircuit {
 			fixed_sub_cycles_opt: save.fixed_sub_cycles_opt,
 			self_reload_err_opt: None
 		};
+		out.setup_external_connection_sources();
 		out.check_wire_geometry_and_connections();
 		out.update_pin_block_positions();
 		Ok(out)
+	}
+	fn setup_external_connection_sources(&mut self) {
+		// Get rid of Global pin sources if not toplevel and nets if toplevel
+		for (_, pin_cell) in self.generic_device.logic_pins.borrow().iter() {
+			let mut pin = pin_cell.borrow_mut();
+			if self.is_toplevel {
+				pin.external_source = Some(LogicConnectionPinExternalSource::Global);
+			}
+			else {
+				pin.external_source = None;
+			}
+			pin.internal_source = None;// Will be automatically assigned from wire geometry, remove because of invalid net references
+		}
 	}
 	fn recompute_default_layout(&mut self) {
 		// Bounding box & layout, like in CircuitVerse
@@ -2504,7 +2528,7 @@ impl LogicCircuit {
 		for (splitter_id, splitter) in self.splitters.borrow_mut().iter_mut() {
 			for pin_i in 0..(splitter.splits.len() as u16 + 1) {
 				let pin_pos = splitter.ui_data.pos_to_parent_coords(Splitter::pin_pos_local(pin_i));
-				splitter.set_pin_wire_conns(pin_i, match self.is_point_on_wire(pin_pos, None) {
+				splitter.set_pin_wire_conns(pin_i, &match self.is_point_on_wire(pin_pos, None) {
 					Some((wire_id, _, wire_intercept_triple, _)) => {
 						// Update wire connection
 						Some(self.add_connection_to_wire(WireConnection::Splitter(*splitter_id, pin_i), wire_id, pin_pos, wire_intercept_triple).0)
@@ -2525,7 +2549,7 @@ impl LogicCircuit {
 		for (comp_id, comp_cell) in self.components.borrow().iter() {
 			let comp = comp_cell.borrow();
 			let comp_logical_pins = comp.get_generic().logic_pins.borrow();
-			for (pin_id, pin) in comp.get_generic().graphic_pins.borrow_mut().iter_mut() {
+			for (_, pin) in comp.get_generic().graphic_pins.borrow_mut().iter_mut() {
 				match &pin.wire_connections {
 					Some(conns_cell) => {
 						let conns = conns_cell.borrow();
@@ -2536,7 +2560,7 @@ impl LogicCircuit {
 								for (bit_i, comp_logic_pin_id) in pin.owned_pins.iter().enumerate() {
 									let net_id = new_net_ids[bit_i];
 									comp_logical_pins.get(comp_logic_pin_id).unwrap().borrow_mut().external_source = Some(LogicConnectionPinExternalSource::Net(net_id));
-									nets.get(&net_id).expect("Net ID invalid").borrow_mut().edit_component_connection(true, *comp_id, *pin_id);
+									nets.get(&net_id).expect("Net ID invalid").borrow_mut().edit_component_connection(true, *comp_id, *comp_logic_pin_id);
 								}
 							}
 						}
@@ -2551,7 +2575,7 @@ impl LogicCircuit {
 		}
 		let logical_pins = self.generic_device.logic_pins.borrow();
 		// External pins
-		for (pin_id, pin) in self.get_generic().graphic_pins.borrow_mut().iter_mut() {
+		for (_, pin) in self.get_generic().graphic_pins.borrow_mut().iter_mut() {
 			match &pin.wire_connections {
 				Some(conns_cell) => {
 					let conns = conns_cell.borrow();
@@ -2562,7 +2586,7 @@ impl LogicCircuit {
 							for (bit_i, comp_logic_pin_id) in pin.owned_pins.iter().enumerate() {
 								let net_id = new_net_ids[bit_i];
 								logical_pins.get(comp_logic_pin_id).unwrap().borrow_mut().internal_source = Some(LogicConnectionPinInternalSource::Net(net_id));
-								nets.get(&net_id).expect("Net ID invalid").borrow_mut().edit_external_connection(true, *pin_id);
+								nets.get(&net_id).expect("Net ID invalid").borrow_mut().edit_external_connection(true, *comp_logic_pin_id);
 							}
 						}
 					}

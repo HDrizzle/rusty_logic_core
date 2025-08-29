@@ -17,7 +17,13 @@ pub static STYLES_FILE: &str = "resources/styles.json";
 pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String) -> Result<LogicCircuit, String> {
 	let path = get_circuit_file_path(circuit_rel_path);
 	let string_raw = load_file_with_better_error(&path)?;
-	LogicCircuit::from_save(to_string_err(serde_json::from_str(&string_raw))?, circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir, name)
+	match LogicCircuit::from_save(to_string_err(serde_json::from_str(&string_raw))?, circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir, name.clone()) {
+		Ok(circuit) => Ok(circuit),
+		Err(err_new_format) => match restore_old_files::attempt_restore_file(circuit_rel_path, displayed_as_block, toplevel, pos, dir, name) {
+			Ok(circuit) => Ok(circuit),
+			Err(err_old_format) => Err(format!("New format error: {}, old format error: {}", err_new_format, err_old_format))
+		}
+	}
 }
 
 /// Like LogicCircuit but serializable
@@ -75,34 +81,6 @@ mod restore_old_files {
 		#[serde(default)]
 		pub show_name: bool
 	}
-	impl LogicConnectionPinOld {
-		pub fn new(
-			internal_source: Option<LogicConnectionPinInternalSource>,
-			external_source: Option<LogicConnectionPinExternalSource>,
-			relative_end_grid: IntV2,
-			direction: FourWayDir,
-			length: f32,
-			show_name: bool
-		) -> Self {
-			Self {
-				internal_source,
-				internal_state: LogicState::Floating,
-				external_source,
-				external_state: LogicState::Floating,
-				length,
-				ui_data: UIData::new(relative_end_grid, direction, (V2::new(1.0, -1.0), V2::new(3.0, 1.0))),
-				bit_width: 1,
-				name: String::new(),
-				show_name
-			}
-		}
-		pub fn set_drive_internal(&mut self, state: LogicState) {
-			self.internal_state = state;
-		}
-		pub fn set_drive_external(&mut self, state: LogicState) {
-			self.external_state = state;
-		}
-	}
 	impl Into<LogicCircuitSave> for LogicCircuitSaveOld {
 		fn into(self) -> LogicCircuitSave {
 			let mut graphic_pins = HashMap::<u64, (IntV2, FourWayDir, String, bool, Vec<u64>)>::new();
@@ -141,7 +119,7 @@ mod restore_old_files {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EnumAllLogicDevices {
 	/// (Relative path of circuit, Whether to use block diagram, Position, Orientation, Name)
-	SubCircuit(String, bool, IntV2, FourWayDir, String),
+	SubCircuit(String, bool, IntV2, FourWayDir, #[serde(default)]String),
 	GateAnd(LogicDeviceSave),
 	GateNand(LogicDeviceSave),
 	GateNot(LogicDeviceSave),
