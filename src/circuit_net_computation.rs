@@ -125,16 +125,31 @@ impl LogicCircuit {
 					match current_bit {
 						ConductorBit::Wire(wire_id, bit_index) => {
 							// Set wire net
-							if *base_wire_id == wire_id {// Check if same wire to prevent double-borrow
-								wire.nets[bit_index as usize] = base_net;
+							let wire_end_conns: Vec<WireConnection> = if *base_wire_id == wire_id {// Check if same wire to prevent double-borrow
+								//wire.nets[bit_index as usize] = base_net;
+								wire.start_connections.borrow().iter().chain(wire.end_connections.borrow().iter()).map(|conn| conn.clone()).collect()
 							}
 							else {
-								wires.get(&wire_id).unwrap().borrow_mut().nets[bit_index as usize] = base_net;
+								let mut other_wire = wires.get(&wire_id).unwrap().borrow_mut();
+								other_wire.nets[bit_index as usize] = base_net;
+								let out = other_wire.start_connections.borrow().iter().chain(other_wire.end_connections.borrow().iter()).map(|conn| conn.clone()).collect();
+								out
 							};
 							// Add ends to search stack
-							for wire_end_conn in wire.start_connections.borrow().iter().chain(wire.end_connections.borrow().iter()) {
+							for wire_end_conn in &wire_end_conns {
 								match wire_end_conn {
 									WireConnection::Wire(other_wire_id) => {
+										// TODO: Remove this check once no problems are found
+										let other_wire_bw: u16 = if other_wire_id == base_wire_id {
+											wire.bit_width()
+										}
+										else {
+											wires.get(other_wire_id).unwrap().borrow().bit_width()
+										};
+										if bit_index >= other_wire_bw {
+											// Wire ID=17 BW=1 connected to another wire ID=16 BW=1. Bit index=7
+											panic!("Wire ID={} BW={} connected to another wire ID={} BW={}. Bit index={}", base_wire_id, wire.bit_width(), other_wire_id, other_wire_bw, bit_index);
+										}
 										bits_to_explore.push(ConductorBit::Wire(*other_wire_id, bit_index));
 									},
 									WireConnection::Splitter(splitter_id, pin_i) => {
@@ -155,6 +170,16 @@ impl LogicCircuit {
 							if let Some(base_conns) = &splitter.base_connections_opt {
 								for conn in base_conns.borrow().iter() {
 									if let WireConnection::Wire(other_wire_id) = conn {
+										// TODO: Remove this check once no problems are found
+										let wire_bw: u16 = if other_wire_id == base_wire_id {
+											wire.bit_width()
+										}
+										else {
+											wires.get(other_wire_id).unwrap().borrow().bit_width()
+										};
+										if splitter_bit_index >= wire_bw {
+											panic!("Splitter (ID={}) matched with wire ID={} which has a bit width of {}. The spliiter's base has as a bit index of {}", splitter_id, other_wire_id, wire_bw, splitter_bit_index);
+										}
 										bits_to_explore.push(ConductorBit::Wire(*other_wire_id, splitter_bit_index));
 									}
 								}
@@ -177,6 +202,16 @@ impl LogicCircuit {
 								if let Some(split_conns_cell) = split_conns_opt {
 									for conn in split_conns_cell.borrow().iter() {
 										if let WireConnection::Wire(other_wire_id) = conn {
+											// TODO: Remove this check once no problems are found
+											let wire_bw: u16 = if other_wire_id == base_wire_id {
+												wire.bit_width()
+											}
+											else {
+												wires.get(other_wire_id).unwrap().borrow().bit_width()
+											};
+											if wire_bit_index >= wire_bw {
+												panic!("Splitter (ID={}) matched with wire ID={} which has a bit width of {}. The spliiter pin #{} has as a bit index of {}", splitter_id, other_wire_id, wire_bw, pin_i, wire_bit_index);
+											}
 											// The wire connected to this pin receives the local wire_bit_index.
 											bits_to_explore.push(ConductorBit::Wire(*other_wire_id, wire_bit_index));
 										}

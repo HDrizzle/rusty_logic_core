@@ -769,7 +769,7 @@ pub struct Splitter {
 impl Splitter {
 	pub fn new() -> Self {
 		Self {
-			ui_data: UIData::new(IntV2(0, 0), FourWayDir::default(), (V2::zeros(), V2::zeros())),
+			ui_data: UIData::new(IntV2(0, 0), FourWayDir::default(), Self::calculate_local_bb(8)),
 			bit_width: 8,
 			splits: vec![(1, None), (1, None), (1, None), (1, None), (1, None), (1, None), (1, None), (1, None)],
 			base_connections_opt: None
@@ -785,7 +785,7 @@ impl Splitter {
 	}
 	pub fn load(save: SplitterSave) -> Self {
 		Self {
-			ui_data: UIData::new(save.pos, save.dir, (V2::zeros(), V2::zeros())),
+			ui_data: UIData::new(save.pos, save.dir, Self::calculate_local_bb(save.split_sizes.len())),
 			bit_width: save.bit_width,
 			splits: save.split_sizes.iter().map(|bw| (*bw, None)).collect(),
 			base_connections_opt: None
@@ -903,8 +903,10 @@ impl Splitter {
 			}
 			prev_bits_count += split_bit_width;
 		}
-		
-		None // Should not be reached if splitter bit widths sum up correctly
+		None// Should not be reached if splitter bit widths sum up correctly
+	}
+	fn calculate_local_bb(split_len: usize) -> (V2, V2) {
+		(V2::new(-2.0, -1.0), V2::new(2.0, split_len as f32))
 	}
 }
 
@@ -916,7 +918,7 @@ impl GraphicSelectableItem for Splitter {
 				V2::new(-2.0, -1.0),
 				V2::new(-1.0, -1.0),
 				V2::new(0.0, 0.0),
-				V2::new(0.0, self.splits.len() as f32)
+				V2::new(0.0, self.splits.len() as f32 - 1.0)
 			],
 			draw.styles.color_foreground
 		);
@@ -931,7 +933,11 @@ impl GraphicSelectableItem for Splitter {
 				],
 				draw.styles.color_foreground
 			);
-			draw.text(format!("{}:{}", beginning_index, beginning_index + split.0 - 1), V2::new(2.0, i_f32 + 0.5), Align2::CENTER_CENTER, draw.styles.text_color, 0.8, !draw.direction.is_horizontal());
+			let text: String = match split.0 == 1 {
+				true => beginning_index.to_string(),
+				false => format!("{}:{}", beginning_index, beginning_index + split.0 - 1)
+			};
+			draw.text(text, V2::new(2.0, i_f32 + 0.5), Align2::CENTER_CENTER, draw.styles.text_color, 0.8, !draw.direction.is_horizontal());
 			beginning_index += split.0;
 		}
 	}
@@ -1169,25 +1175,9 @@ impl GraphicSelectableItem for Wire {
 		return false;
 	}
 	fn get_properties(&self) -> Vec<SelectProperty> {
-		vec![
-			SelectProperty::BitWidth(self.bit_width())
-		]
+		Vec::new()
 	}
-	fn set_property(&mut self, property: SelectProperty) {
-		if let SelectProperty::BitWidth(bit_width) = property {
-			let diff: isize = (bit_width as isize) - (self.nets.len() as isize);
-			if diff > 0 {
-				for _ in 0..diff {
-					self.nets.push(0);
-				}
-			}
-			if diff < 0 {
-				for _ in 0..(-diff) {
-					self.nets.pop();
-				}
-			}
-		}
-	}
+	fn set_property(&mut self, _property: SelectProperty) {}
 	fn copy(&self) -> CopiedGraphicItem {
 		CopiedGraphicItem::Wire((self.ui_data.position, self.ui_data.direction, self.length))
 	}

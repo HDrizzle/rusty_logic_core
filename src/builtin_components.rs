@@ -782,7 +782,7 @@ impl Memory {
 				save,
 				graphic_pin_config_from_single_pins(pin_config),
 				(bb_int.0.to_v2(), bb_int.1.to_v2()),
-			true
+				true
 			),
 			addr_size,
 			data: Self::format_data(data_opt, addr_size),
