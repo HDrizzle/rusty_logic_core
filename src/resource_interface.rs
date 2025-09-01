@@ -4,7 +4,7 @@ use std::{fs, collections::HashMap};
 use crate::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json;
-use crate::builtin_components;
+use crate::builtin_components::{self, BusLayoutSave};
 
 
 // STATICS
@@ -17,11 +17,18 @@ pub static STYLES_FILE: &str = "resources/styles.json";
 pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String) -> Result<LogicCircuit, String> {
 	let path = get_circuit_file_path(circuit_rel_path);
 	let string_raw = load_file_with_better_error(&path)?;
+	/*match restore_old_files::attempt_restore_file(circuit_rel_path, displayed_as_block, toplevel, pos, dir, name) {
+		Ok(circuit) => Ok(circuit),
+		Err(err_old_format) => Err(format!("Old format error: {}", err_old_format))
+	}*/
 	match LogicCircuit::from_save(to_string_err(serde_json::from_str(&string_raw))?, circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir, name.clone()) {
 		Ok(circuit) => Ok(circuit),
-		Err(err_new_format) => match restore_old_files::attempt_restore_file(circuit_rel_path, displayed_as_block, toplevel, pos, dir, name) {
-			Ok(circuit) => Ok(circuit),
-			Err(err_old_format) => Err(format!("New format error: {}, old format error: {}", err_new_format, err_old_format))
+		Err(err_new_format) => {
+			println!("Load error: {}, attempting to load old format", &err_new_format);
+			match restore_old_files::attempt_restore_file(circuit_rel_path, displayed_as_block, toplevel, pos, dir, name) {
+				Ok(circuit) => Ok(circuit),
+				Err(err_old_format) => Err(format!("New format error: {}, old format error: {}", err_new_format, err_old_format))
+			}
 		}
 	}
 }
@@ -39,7 +46,13 @@ pub struct LogicCircuitSave {
 	pub block_pin_positions: HashMap<u64, (IntV2, FourWayDir, bool)>,
 	pub type_name: String,
 	#[serde(default)]
-	pub fixed_sub_cycles_opt: Option<usize>
+	pub fixed_sub_cycles_opt: Option<usize>,
+	#[serde(default)]
+	pub clock_enabled: bool,
+	#[serde(default)]
+	pub clock_freq: f32,
+	#[serde(default)]
+	pub clock_state: bool
 }
 
 mod restore_old_files {
@@ -104,7 +117,10 @@ mod restore_old_files {
 				labels: HashMap::new(),
 				block_pin_positions: self.block_pin_positions,
 				type_name: self.type_name,
-				fixed_sub_cycles_opt: self.fixed_sub_cycles_opt
+				fixed_sub_cycles_opt: self.fixed_sub_cycles_opt,
+				clock_enabled: false,
+				clock_freq: 1.0,
+				clock_state: false
 			}
 		}
 	}
@@ -127,14 +143,7 @@ pub enum EnumAllLogicDevices {
 	GateNor(LogicDeviceSave),
 	GateXor(LogicDeviceSave),
 	GateXnor(LogicDeviceSave),
-	Clock {
-		enabled: bool,
-		state: bool,
-		freq: f32,
-		position_grid: IntV2,
-		direction: FourWayDir,
-		name: String
-	},
+	Clock(LogicDeviceSave),
 	FixedSource(LogicDeviceSave, bool),
 	EncoderOrDecoder(LogicDeviceSave, u8, bool),
 	Memory(
@@ -143,7 +152,8 @@ pub enum EnumAllLogicDevices {
 		/// If this is Some then it is nonvolotile memory, otherwise it is RAM
 		Option<Vec<u8>>
 	),
-	TriStateBuffer(LogicDeviceSave)
+	TriStateBuffer(LogicDeviceSave),
+	Adder(LogicDeviceSave, BusLayoutSave, u16)
 }
 
 impl EnumAllLogicDevices {
@@ -157,11 +167,12 @@ impl EnumAllLogicDevices {
 			Self::GateNor(gate) => Ok(Box::new(builtin_components::GateNor::from_save(gate))),
 			Self::GateXor(gate) => Ok(Box::new(builtin_components::GateXor::from_save(gate))),
 			Self::GateXnor(gate) => Ok(Box::new(builtin_components::GateXnor::from_save(gate))),
-			Self::Clock{enabled, state, freq, position_grid, direction, name} => Ok(Box::new(builtin_components::Clock::from_save(enabled, state, freq, position_grid, direction, name))),
+			Self::Clock(save) => Ok(Box::new(builtin_components::ClockSymbol::from_save(save))),
 			Self::FixedSource(save, state) => Ok(Box::new(builtin_components::FixedSource::from_save(save, state))),
 			Self::EncoderOrDecoder(save, addr_size, is_encoder) => Ok(Box::new(builtin_components::EncoderOrDecoder::from_save(save, addr_size, is_encoder))),
 			Self::Memory(save, addr_size, data_opt) => Ok(Box::new(builtin_components::Memory::from_save(save, addr_size, data_opt))),
-			Self::TriStateBuffer(save) => Ok(Box::new(builtin_components::TriStateBuffer::from_save(save)))
+			Self::TriStateBuffer(save) => Ok(Box::new(builtin_components::TriStateBuffer::from_save(save))),
+			Self::Adder(save, layout, bw) => Ok(Box::new(builtin_components::Adder::from_save(save, layout, bw)))
 		}
 	}
 	/// Example: "AND Gate" or "D Latch", for the component search UI
@@ -175,11 +186,12 @@ impl EnumAllLogicDevices {
 			Self::GateNor(_) => "NOR Gate".to_owned(),
 			Self::GateXor(_) => "XOR Gate".to_owned(),
 			Self::GateXnor(_) => "XNOR Gate".to_owned(),
-			Self::Clock{enabled: _, state: _, freq: _, position_grid: _, direction: _, name: _} => "Clock Source".to_owned(),
+			Self::Clock(_) => "Clock Source".to_owned(),
 			Self::FixedSource(_, state) => match state {true => "V+", false => "GND"}.to_owned(),
 			Self::EncoderOrDecoder(_, _, is_encoder) => match *is_encoder {true => "Encoder", false => "Decoder"}.to_owned(),
 			Self::Memory(_, _, _) => "Memory".to_owned(),
-			Self::TriStateBuffer(_) => "Tri-State Buffer".to_owned()
+			Self::TriStateBuffer(_) => "Tri-State Buffer".to_owned(),
+			Self::Adder(_, _, _) => "Adder".to_owned()
 		}
 	}
 }

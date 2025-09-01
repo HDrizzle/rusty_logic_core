@@ -1,6 +1,6 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, rc::Rc};
+use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, rc::Rc, time::{Instant, Duration}};
 use serde::{Deserialize, Serialize};
 use crate::{prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
@@ -260,9 +260,10 @@ impl LogicNet {
 									}
 								}
 							}
-							else {
+							// TODO: Only assert this if toplevel
+							/*else {
 								panic!("External connection doesn't have source");
-							}
+							}*/
 						},
 						None => panic!("Net references external connection {:?} which is invalid", connection)
 					}
@@ -480,17 +481,23 @@ impl GraphicPin {
 impl GraphicSelectableItem for GraphicPin {
 	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
-		let color = self.get_color(&draw.styles);
-		draw.draw_polyline(
-			vec![
-				V2::new(1.1, -0.9),
-				V2::new(1.1, 0.9),
-				V2::new(2.9, 0.9),
-				V2::new(2.9, -0.9),
-				V2::new(1.1, -0.9)
-			],
-			color
-		);
+		let external_and_combined_states: Vec<(LogicState, LogicState)> = self.iter_owned_pins(|pin| (pin.external_state.clone(), pin.state()));
+		let color = draw.styles.color_from_logic_states(&external_and_combined_states.iter().map(|t|t.1.clone()).collect());
+		for i in 0..self.owned_pins.len() {
+			draw.draw_polyline(
+				vec![
+					V2::new(1.1, -0.9),
+					V2::new(1.1, 0.9),
+					V2::new(2.9, 0.9),
+					V2::new(2.9, -0.9),
+					V2::new(1.1, -0.9)
+				].iter().map(|v| v + V2::new((i*2) as f32, 0.0)).collect(),
+				draw.styles.color_from_logic_state(external_and_combined_states[i].1)
+			);
+			if let Some(value) = external_and_combined_states[i].0.to_bool_opt() {
+				draw.text(match value {true => "1", false => "0"}.to_owned(), V2::new((i*2) as f32 + 2.0, 0.0), Align2::CENTER_CENTER, draw.styles.text_color, 1.5, false);
+			}
+		}
 		draw.draw_polyline(
 			vec![
 				V2::zeros(),
@@ -577,7 +584,7 @@ impl GraphicSelectableItem for GraphicPin {
 		CopiedGraphicItem::ExternalConnection(self.ui_data.position, self.ui_data.direction, self.name.clone(), self.show_name, self.owned_pins.len() as u16)
 	}
 	// TODO
-	/*fn accept_click(&mut self) -> bool {
+	/*fn accept_click(&mut self, local_pos: V2) -> bool {
 		match self.external_source.clone().expect("Pin being used as a graphic item must have an external source") {
 			LogicConnectionPinExternalSource::Global => {
 				if self.external_state.is_valid() {
@@ -719,7 +726,8 @@ impl GraphicSelectableItem for GraphicLabel {
 		vec![
 			SelectProperty::PositionX(self.ui_data.position.0),
 			SelectProperty::PositionY(self.ui_data.position.1),
-			SelectProperty::Direction(self.ui_data.direction)
+			SelectProperty::Direction(self.ui_data.direction),
+			SelectProperty::Name(self.text.clone())
 		]
 	}
 	fn set_property(&mut self, property: SelectProperty) {
@@ -733,6 +741,9 @@ impl GraphicSelectableItem for GraphicLabel {
 			SelectProperty::Direction(direction) => {
 				self.ui_data.direction = direction;
 			},
+			SelectProperty::Name(new_text) => {
+				self.text = new_text;
+			}
 			_ => {}
 		}
 	}
@@ -965,7 +976,8 @@ impl GraphicSelectableItem for Splitter {
 			SelectProperty::BitWidth(self.bit_width),
 			SelectProperty::PositionX(self.ui_data.position.0),
 			SelectProperty::PositionY(self.ui_data.position.1),
-			SelectProperty::Direction(self.ui_data.direction)
+			SelectProperty::Direction(self.ui_data.direction),
+			SelectProperty::SplitterSplits(self.splits.iter().map(|t| t.0).collect())
 		]
 	}
 	fn set_property(&mut self, property: SelectProperty) {
@@ -983,6 +995,27 @@ impl GraphicSelectableItem for Splitter {
 			SelectProperty::Direction(direction) => {
 				self.ui_data.direction = direction;
 			},
+			SelectProperty::SplitterSplits(new_splits) => {
+				let diff = new_splits.len() as isize - (self.splits.len() as isize);
+				if diff > 0 {
+					for _ in 0..diff {
+						self.splits.push((1, None));
+					}
+				}
+				if diff < 0 {
+					for _ in 0..(-diff) {
+						self.splits.pop();
+					}
+				}
+				// Set sizes
+				let mut bw: u16 = 0;
+				for (i, s) in new_splits.iter().enumerate() {
+					self.splits[i].0 = *s;
+					bw += *s;
+				}
+				self.bit_width = bw;
+				self.ui_data.local_bb = Self::calculate_local_bb(new_splits.len());
+			}
 			_ => {}
 		}
 	}
@@ -1005,7 +1038,7 @@ pub struct Wire {
 	ui_data: UIData,
 	length: u32,
 	pub nets: Vec<u64>,
-	states: Vec<LogicState>,
+	color: [u8; 3],
 	pub start_connections: Rc<RefCell<HashSet<WireConnection>>>,
 	pub end_connections: Rc<RefCell<HashSet<WireConnection>>>,
 	start_selected: bool,
@@ -1026,7 +1059,7 @@ impl Wire {
 			ui_data: UIData::new(pos, direction, Self::bb_from_len(length)),
 			length,
 			nets,
-			states: vec![LogicState::Floating],
+			color: [0, 0, 0],
 			start_connections,
 			end_connections,
 			start_selected: false,
@@ -1133,19 +1166,18 @@ impl GraphicSelectableItem for Wire {
 	fn draw<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		let start_pos = self.ui_data.position.to_v2();
 		let end_pos = self.end_pos().to_v2();
-		let stroke = draw.styles.color_from_logic_states(&self.states);
 		draw.draw_polyline(
 			vec![
 				start_pos,
 				end_pos
 			],
-			stroke
+			self.color
 		);
 		if self.start_connections.borrow().len() >= 3 {
-			draw.draw_circle_filled(start_pos, draw.styles.connection_dot_grid_size, stroke);
+			draw.draw_circle_filled(start_pos, draw.styles.connection_dot_grid_size, self.color);
 		}
 		if self.end_connections.borrow().len() >= 3 {
-			draw.draw_circle_filled(end_pos, draw.styles.connection_dot_grid_size, stroke);
+			draw.draw_circle_filled(end_pos, draw.styles.connection_dot_grid_size, self.color);
 		}
 	}
 	fn get_ui_data(&self) -> &UIData {
@@ -1234,6 +1266,7 @@ impl LogicDeviceGeneric {
 		graphic_pin_config: HashMap<u64, (IntV2, FourWayDir, f32, String, bool, Vec<u64>)>,
 		bounding_box: (V2, V2),
 		show_name: bool,
+		are_states_external: bool
 	) -> Self {
 		let logic_pins = Rc::new(RefCell::new(HashMap::<u64, RefCell<LogicConnectionPin>>::new()));
 		let mut logic_pins_mut = logic_pins.borrow_mut();
@@ -1243,17 +1276,23 @@ impl LogicDeviceGeneric {
 			// Create necessary logic pin(s)
 			assert!(config.5.len() > 0, "Graphic pin must have at least one logical pin attached to it");
 			for logic_pin_id in &config.5 {
-				// External source will be set by circuit based on geometry
-				#[cfg(feature = "restore_pin_states")]
-				let mut logic_pin = LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None);
-				#[cfg(not(feature = "restore_pin_states"))]
-				let logic_pin = LogicConnectionPin::new(Some(LogicConnectionPinInternalSource::ComponentInternal), None);
-				#[cfg(feature = "restore_pin_states")]
-				{
-					logic_pin.internal_state = match save.pin_states.get(&pin_id) {
+				let mut logic_pin = LogicConnectionPin::new(None, None);
+				if are_states_external {
+					logic_pin.external_state = match save.pin_states.get(&logic_pin_id) {
 						Some(state) => *state,
 						None => LogicState::Floating
 					};
+				}
+				else {
+					// External source will be set by circuit based on geometry
+					#[cfg(feature = "restore_pin_states")]
+					{
+						logic_pin.internal_state = match save.pin_states.get(&logic_pin_id) {
+							Some(state) => *state,
+							None => LogicState::Floating
+						};
+					}
+					logic_pin.internal_source = Some(LogicConnectionPinInternalSource::ComponentInternal);
 				}
 				logic_pins_mut.insert(*logic_pin_id, RefCell::new(logic_pin));
 			}
@@ -1274,6 +1313,7 @@ impl LogicDeviceGeneric {
 		let pins = self.logic_pins.borrow();
 		for (pin_id, pin_cell) in pins.iter() {
 			pin_states.insert(*pin_id, pin_cell.borrow().internal_state);
+			
 		}
 		LogicDeviceSave {
 			pin_states,
@@ -1289,7 +1329,7 @@ impl LogicDeviceGeneric {
 pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn get_generic(&self) -> &LogicDeviceGeneric;
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric;
-	fn compute_step(&mut self, ancestors: &AncestryStack, self_component_id: u64);
+	fn compute_step(&mut self, ancestors: &AncestryStack, self_component_id: u64, clock_state: bool, first_propagation_step: bool);
 	fn save(&self) -> Result<EnumAllLogicDevices, String>;
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>);
 	/// In CircuitVerse there can be, for example, one AND gate that acts like 8 gates, with 8-bit busses going in and out of it
@@ -1315,9 +1355,9 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 			None => None
 		}
 	}
-	fn compute(&mut self, ancestors: &AncestryStack, self_component_id: u64) {
+	fn compute(&mut self, ancestors: &AncestryStack, self_component_id: u64, clock_state: bool, first_propagation_step: bool) {
 		//for _ in 0..self.get_generic().sub_compute_cycles {
-			self.compute_step(ancestors, self_component_id);
+			self.compute_step(ancestors, self_component_id, clock_state, first_propagation_step);
 		//}
 	}
 	fn get_circuit(&self) -> &LogicCircuit {
@@ -1572,6 +1612,49 @@ pub enum SelectionState {
 }
 
 #[derive(Debug, Clone)]
+pub struct Clock {
+	pub enabled: bool,
+	/// If set to 0 then clock will change state as fast a spossible
+	pub freq: f32,
+	pub last_change: Instant,
+	pub state: bool
+}
+
+impl Clock {
+	pub fn load(enabled: bool, freq: f32, state: bool) -> Self {
+		Self {
+			enabled,
+			freq,
+			last_change: Instant::now(),
+			state
+		}
+	}
+	pub fn update(&mut self) {
+		if self.enabled {
+			if self.freq == 0.0 {
+				self.state = !self.state;
+				self.last_change = Instant::now();
+			}
+			else if self.last_change.elapsed() > Duration::from_secs_f32(0.5 / self.freq) {// The frequency is based on a whole period, it must change twice per period, so 0.5/f not 1/f
+				self.state = !self.state;
+				self.last_change = Instant::now();
+			}
+		}
+	}
+}
+
+impl Default for Clock {
+	fn default() -> Self {
+		Self {
+			enabled: true,
+			freq: 1.0,
+			last_change: Instant::now(),
+			state: false
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
 pub enum Tool {
 	Select {
 		selected_graphics: HashSet<GraphicSelectableItemRef>,
@@ -1636,7 +1719,8 @@ pub struct LogicCircuit {
 	pub type_name: String,
 	/// For something like a flip flop that might oscillate without ever being stable, use this to fix the sub compute cycles of that circuit so it will ALWAYS be run that many times per cycle of the parent circuit and it's changed state will be ignored
 	pub fixed_sub_cycles_opt: Option<usize>,
-	self_reload_err_opt: Option<String>
+	self_reload_err_opt: Option<String>,
+	pub clock: RefCell<Clock>
 }
 
 impl LogicCircuit {
@@ -1665,7 +1749,7 @@ impl LogicCircuit {
 				sub_compute_cycles,
 				displayed_as_block
 			),*/
-			generic_device: LogicDeviceGeneric::load(LogicDeviceSave::default(), graphic_pin_config, (V2::zeros(), V2::zeros()), displayed_as_block),
+			generic_device: LogicDeviceGeneric::load(LogicDeviceSave::default(), graphic_pin_config, (V2::zeros(), V2::zeros()), displayed_as_block, true),
 			components: RefCell::new(components),
 			nets: RefCell::new(HashMap::new()),
 			wires: RefCell::new(hashmap_into_refcells(wires)),
@@ -1679,7 +1763,8 @@ impl LogicCircuit {
 			circuit_internals_bb: (V2::zeros(), V2::zeros()),
 			type_name,
 			fixed_sub_cycles_opt,
-			self_reload_err_opt: None
+			self_reload_err_opt: None,
+			clock: RefCell::new(Clock::default())
 		};
 		new.setup_external_connection_sources();
 		new.recompute_default_layout();
@@ -1702,7 +1787,7 @@ impl LogicCircuit {
 			toplevel
 		).unwrap()
 	}
-	pub fn from_save(mut save: LogicCircuitSave, save_path: String, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String) -> Result<Self, String> {
+	pub fn from_save(save: LogicCircuitSave, save_path: String, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String) -> Result<Self, String> {
 		// Init compnents
 		let mut components = HashMap::<u64, RefCell<Box<dyn LogicDevice>>>::new();
 		for (ref_, save_comp) in save.components.into_iter() {
@@ -1727,7 +1812,8 @@ impl LogicCircuit {
 			},
 			HashMap::from_iter(save.graphic_pins.into_iter().map(|t| (t.0, (t.1.0, t.1.1, 1.0, t.1.2, t.1.3, t.1.4)))),
 			(V2::zeros(), V2::zeros()),
-			displayed_as_block
+			displayed_as_block,
+			true
 		);
 		let mut out = Self {
 			generic_device: generic_device,
@@ -1744,7 +1830,8 @@ impl LogicCircuit {
 			circuit_internals_bb: (V2::zeros(), V2::zeros()),
 			type_name: save.type_name,
 			fixed_sub_cycles_opt: save.fixed_sub_cycles_opt,
-			self_reload_err_opt: None
+			self_reload_err_opt: None,
+			clock: RefCell::new(Clock::load(save.clock_enabled, save.clock_freq, save.clock_state))
 		};
 		out.setup_external_connection_sources();
 		out.check_wire_geometry_and_connections();
@@ -1959,6 +2046,7 @@ impl LogicCircuit {
 						Err(_) => {}
 					}
 					recompute_pin_block_positions = true;
+					return_recompute_connections = true;
 				}
 				// Delete
 				if input_state.consume_key(Modifiers::NONE, Key::Backspace) {
@@ -2410,6 +2498,7 @@ impl LogicCircuit {
 		//let wires = self.wires.borrow();
 		let mut unvisited_wires: Vec<u64> = self.wires.borrow().keys().map(|k| *k).collect();
 		while unvisited_wires.len() != 0 {
+			// Vec<(Wire with end being connected, Sliced wire, Position)>
 			let t_conns_to_fix: Vec<(u64, u64, IntV2)> = {
 				let wire_id = unvisited_wires.pop().unwrap();
 				let wires = self.wires.borrow();
@@ -2432,6 +2521,7 @@ impl LogicCircuit {
 			for t_conn in t_conns_to_fix {
 				let wire_conn = WireConnection::Wire(t_conn.0);
 				let (_, new_wire_opt) = self.add_connection_to_wire(wire_conn, t_conn.1, t_conn.2, (false, true, false));
+				// Do not need to add the new connection set because the end-to-end check will do that
 				unvisited_wires.push(new_wire_opt.expect("Running `self.add_connection_to_wire()` to fix a T connection should always create a new wire"));
 			}
 		}
@@ -2780,7 +2870,7 @@ impl LogicCircuit {
 					if multi_select_key {
 						selected_opt = Some(ref_.clone());
 					}
-					else if !graphic_item.accept_click() {
+					else if !graphic_item.accept_click(graphic_item.get_ui_data().parent_pos_to_local_coords_float(grid_pos)) {
 						selected_opt = Some(ref_.clone());
 					}
 				}
@@ -3010,8 +3100,13 @@ impl LogicCircuit {
 		Ok((wire_geometry, components))
 	}
 	/// Returns: Whether anything changed
-	pub fn compute_immutable(&self, ancestors_above: &AncestryStack, self_component_id: u64) -> bool {
+	pub fn compute_immutable(&self, ancestors_above: &AncestryStack, self_component_id: u64, first_propagation_step: bool) -> bool {
 		let mut changed = false;
+		// Update clock
+		if first_propagation_step {
+			self.clock.borrow_mut().update();
+		}
+		let clock_state: bool = self.clock.borrow().state;
 		let ancestors = ancestors_above.push((&self, self_component_id));
 		// Update net states
 		let mut new_net_states = HashMap::<u64, (LogicState, Vec<GlobalSourceReference>)>::new();
@@ -3071,15 +3166,15 @@ impl LogicCircuit {
 				let circuit: &LogicCircuit = comp.get_circuit();
 				if let Some(compute_cycles) = circuit.fixed_sub_cycles_opt {
 					for _ in 0..compute_cycles {
-						circuit.compute_immutable(&ancestors, *comp_id);
+						circuit.compute_immutable(&ancestors, *comp_id, first_propagation_step);
 					}
 				}
 				else {
-					changed |= circuit.compute_immutable(&ancestors, *comp_id);
+					changed |= circuit.compute_immutable(&ancestors, *comp_id, first_propagation_step);
 				}
 			}
 			else {
-				comp_cell.borrow_mut().compute(&ancestors, *comp_id);
+				comp_cell.borrow_mut().compute(&ancestors, *comp_id, clock_state, first_propagation_step);
 			}
 		}
 		// Done
@@ -3108,6 +3203,7 @@ impl LogicCircuit {
 			let wire = wire_cell.borrow();
 			wires_save.insert(*ref_, (wire.ui_data.position, wire.ui_data.direction, wire.length));
 		}
+		let clock = self.clock.borrow();
 		// First, actually save this circuit
 		Ok(LogicCircuitSave {
 			logic_pins,
@@ -3118,7 +3214,10 @@ impl LogicCircuit {
 			labels: HashMap::from_iter(self.labels.borrow().iter().map(|t| (*t.0, t.1.save()))),
 			block_pin_positions: self.block_pin_positions.clone(),
 			type_name: self.type_name.clone(),
-			fixed_sub_cycles_opt: self.fixed_sub_cycles_opt
+			fixed_sub_cycles_opt: self.fixed_sub_cycles_opt,
+			clock_enabled: clock.enabled,
+			clock_freq: clock.freq,
+			clock_state: clock.state
 		})
 	}
 	pub fn save_circuit(&self) -> Result<(), String> {
@@ -3186,8 +3285,8 @@ impl LogicDevice for LogicCircuit {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic_device
 	}
-	fn compute_step(&mut self, ancestors_above: &AncestryStack, self_component_id: u64) {
-		self.compute_immutable(ancestors_above, self_component_id);
+	fn compute_step(&mut self, ancestors_above: &AncestryStack, self_component_id: u64, _: bool, first_propagation_step: bool) {
+		self.compute_immutable(ancestors_above, self_component_id, first_propagation_step);
 	}
 	/// Returns handle to file for inclusion in other circuits
 	/// The actual save is done with `LogicCircuit::save_circuit()`
@@ -3201,6 +3300,14 @@ impl LogicDevice for LogicCircuit {
 		}
 		else {
 			// Draws the circuit with wires and everything how you would expect
+			// Get wire colors
+			let nets = self.nets.borrow();
+			for wire_cell in self.wires.borrow().values() {
+				let mut wire = wire_cell.borrow_mut();
+				let states: Vec<LogicState> = wire.nets.iter().map(|net_id| nets.get(net_id).unwrap().borrow().state).collect();
+				wire.color = draw.styles.color_from_logic_states(&states);
+			}
+			// Use graphic item trait
 			for ref_ in self.get_all_graphics_references() {
 				if let GraphicSelectableItemRef::Pin(_) = ref_ {
 					if !self.is_toplevel {

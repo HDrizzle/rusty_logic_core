@@ -52,6 +52,9 @@ impl Styles {
 	}
 	/// If any states contested then contested color, else bus color unless all are floating then floating color
 	pub fn color_from_logic_states(&self, states: &Vec<LogicState>) -> [u8; 3] {
+		if states.len() == 1 {
+			return self.color_from_logic_state(states[0]);
+		}
 		let mut contested = false;
 		let mut driven = false;
 		for state in states {
@@ -129,6 +132,9 @@ impl UIData {
 	pub fn pos_to_parent_coords_float(&self, position: V2) -> V2 {
 		self.direction.rotate_v2(position) + self.position.to_v2()
 	}
+	pub fn parent_pos_to_local_coords_float(&self, position: V2) -> V2 {
+		self.direction.rotate_v2_reverse(position - self.position.to_v2())
+	}
 }
 
 pub trait GraphicSelectableItem {
@@ -144,7 +150,8 @@ pub trait GraphicSelectableItem {
 	fn copy(&self) -> CopiedGraphicItem;
 	/// Meant for external connections so that clicks can do something special instead of just selecting them
 	/// Returns: Whether the click was "used", if so then it won't be selected normally but can still be command-clicked and included in a dragged rectangle
-	fn accept_click(&mut self) -> bool {
+	#[allow(unused)]
+	fn accept_click(&mut self, local_pos: V2) -> bool {
 		false
 	}
 	fn get_selected(&self) -> bool {
@@ -227,7 +234,9 @@ pub enum SelectProperty {
 	MemoryProperties(builtin_components::MemoryPropertiesUI),
 	EncoderOrDecoder(bool),
 	/// Whether to reload, optional error message
-	ReloadCircuit(bool, Option<String>)
+	ReloadCircuit(bool, Option<String>),
+	SplitterSplits(Vec<u16>),
+	BusLayout(String, bool, bool)
 }
 
 impl SelectProperty {
@@ -247,7 +256,9 @@ impl SelectProperty {
 			Self::AddressWidth(_, _) => "Address Width".to_owned(),
 			Self::MemoryProperties(_) => "Memory Properties".to_owned(),
 			Self::EncoderOrDecoder(_) => "Encoder/Decoder".to_owned(),
-			Self::ReloadCircuit(_, _) => "Reload circuit".to_owned()
+			Self::ReloadCircuit(_, _) => "Reload circuit".to_owned(),
+			Self::SplitterSplits(_) => "Splits".to_owned(),
+			Self::BusLayout(name, _, _) => format!("{} bus config", name)
 		}
 	}
 	/// Add this property to a list on the UI
@@ -264,48 +275,37 @@ impl SelectProperty {
 				ui_drag_value_with_arrows(ui, y, None)
 			},
 			Self::GlobalConnectionState(state_opts) => {
-				let mut return_update = false;
-				let mut enabled = state_opts[0].is_some();
-				let mut all_drive = Option::<bool>::None;
+				let mut return_update_all = false;
+				let mut return_update_single = false;
+				let mut all_drive: Option<bool> = state_opts[0];
 				ui.vertical(|ui| {
 					Popup::menu(&ui.button("I/O State")).align(RectAlign::RIGHT_START).show(|ui| {
-						if ui.button("Driven").clicked() {
-							enabled = true;
-							return_update = true;
-						}
 						if ui.button("All 0").clicked() {
 							all_drive = Some(false);
-							enabled = true;
-							return_update = true;
+							return_update_all = true;
 						}
 						if ui.button("All 1").clicked() {
 							all_drive = Some(true);
-							enabled = true;
-							return_update = true;
+							return_update_all = true;
 						}
 						if ui.button("Floating").clicked() {
 							all_drive = None;
-							enabled = false;
-							return_update = true;
+							return_update_all = true;
 						}
 					});
 					for opt in state_opts {
-						if enabled {
-							if let Some(all_set_state) = all_drive {
-								*opt = Some(all_set_state);
-							}
+						if return_update_all {
+							*opt = all_drive;
 						}
-						else {
-							*opt = None;
-						}
-						if ui.add_enabled(enabled, Button::new(match opt.unwrap_or(false) {true => "1", false => "0"})).clicked() {
+						if ui.add_enabled(opt.is_some(), Button::new(match opt.unwrap_or(false) {true => "1", false => "0"})).clicked() {
 							if let Some(state) = opt {
 								*state = !*state;
+								return_update_single = true;
 							}
 						}
 					}
 				});
-				return_update
+				return_update_all || return_update_single
 			},
 			Self::Direction(dir) => {
 				if ui.button("↶").clicked() {
@@ -381,6 +381,43 @@ impl SelectProperty {
 					ui.colored_label(u8_3_to_color32([255, 0, 0]), err);
 				}
 				*reload
+			}
+			Self::SplitterSplits(splits) => {
+				let mut changed = false;
+				ui.vertical(|ui| {
+					let mut total_bw = 0;
+					for s in &mut *splits {
+						ui.horizontal(|ui| {
+							changed |= ui_drag_value_with_arrows(ui, s, Some((1, 256)));
+						});
+						total_bw += *s;
+					}
+					ui.horizontal(|ui| {
+						if ui.button("-").clicked() {
+							splits.pop();
+							changed = true;
+						}
+						if ui.button("+").clicked() {
+							splits.push(1);
+							changed = true;
+						}
+					});
+					ui.label(format!("Total BW: {}", total_bw));
+					if total_bw > 256 {
+						ui.colored_label(u8_3_to_color32([255, 0, 0]), "Bit width cannot exceed 256");
+					}
+				});
+				changed
+			},
+			Self::BusLayout(_, single_pin, forward) => {
+				let mut changed = ui.checkbox(single_pin, "Single graphic pin").changed();
+				if !*single_pin {
+					if ui.button("Reverse").clicked() {
+						*forward = !*forward;
+						changed = true;
+					}
+				}
+				changed
 			}
 		}
 	}
@@ -664,6 +701,21 @@ impl LogicCircuitToplevelView {
 						}
 					}
 				});
+				// Clock
+				ui.label("Clock");
+				let mut clock = self.circuit.clock.borrow_mut();
+				ui.horizontal(|ui| {
+					ui.checkbox(&mut clock.enabled, "Enable");
+					ui.label("Freq:");
+					ui.add(DragValue::new(&mut clock.freq).range(RangeInclusive::new(0.01, 1000000.0)).clamp_existing_to_range(false));
+					ui.label("State:");
+					if ui.button(match &mut clock.state {
+						true => "1",
+						false => "0"
+					}).clicked() {
+						clock.state = !clock.state;
+					}
+				});
 				if ui.button("Edit block layout...").clicked() {
 					self.showing_block_edit_popup = true;
 				}
@@ -787,7 +839,7 @@ impl LogicCircuitToplevelView {
 		let mut count: usize = 0;
 		// TODO: keep track of state
 		while count < propagation_limit {
-			if !self.circuit.compute_immutable(&AncestryStack::new(), 0) {
+			if !self.circuit.compute_immutable(&AncestryStack::new(), 0, count == 0) {
 				self.frame_compute_cycles = count;
 				return false;
 			}

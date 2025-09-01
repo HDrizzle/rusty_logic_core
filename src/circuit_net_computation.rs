@@ -139,6 +139,9 @@ impl LogicCircuit {
 							for wire_end_conn in &wire_end_conns {
 								match wire_end_conn {
 									WireConnection::Wire(other_wire_id) => {
+										if !wires.contains_key(other_wire_id) {
+											continue;
+										}
 										// TODO: Remove this check once no problems are found
 										let other_wire_bw: u16 = if other_wire_id == base_wire_id {
 											wire.bit_width()
@@ -245,6 +248,8 @@ impl LogicCircuit {
 		island_wires.insert(start_wire_id);
 
 		while let Some(current_wire_id) = q.pop_front() {
+			// thread 'main' panicked at src/circuit_net_computation.rs:248:65:
+			// called `Option::unwrap()` on a `None` value
 			let current_wire_cell = wires.get(&current_wire_id).unwrap();
 			let current_wire = current_wire_cell.borrow();
 
@@ -259,7 +264,7 @@ impl LogicCircuit {
 
 			for connection in connections {
 				if let WireConnection::Wire(connected_wire_id) = connection {
-					if !island_wires.contains(&connected_wire_id) {
+					if wires.contains_key(&connected_wire_id) && !island_wires.contains(&connected_wire_id) {
 						island_wires.insert(connected_wire_id);
 						q.push_back(connected_wire_id);
 					}

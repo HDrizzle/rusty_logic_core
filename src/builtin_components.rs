@@ -1,8 +1,8 @@
-use crate::{prelude::*, simulator::{AncestryStack, graphic_pin_config_from_single_pins}};
+use crate::{prelude::*, simulator::{graphic_pin_config_from_single_pins, AncestryStack}};
 use eframe::egui::Ui;
-use serde::{Deserialize, Serialize};
 use common_macros::hash_map;
-use std::{collections::HashMap, time::{Duration, Instant}, cell::RefCell, rc::Rc};
+use std::{collections::HashMap, cell::RefCell, rc::Rc};
+use serde::{Deserialize, Serialize};
 
 /// For the component search popup
 pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
@@ -14,71 +14,230 @@ pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
 		GateNor::new().save().unwrap(),
 		GateXor::new().save().unwrap(),
 		GateXnor::new().save().unwrap(),
-		Clock::new().save().unwrap(),
+		ClockSymbol::new().save().unwrap(),
 		FixedSource::new().save().unwrap(),
 		EncoderOrDecoder::new().save().unwrap(),
 		Memory::new().save().unwrap(),
-		TriStateBuffer::new().save().unwrap()
+		TriStateBuffer::new().save().unwrap(),
+		Adder::new().save().unwrap()
 	]
 }
 
 /// For dealing with the geometry of a lot of pins
-/// Vec<(
-/// 	Block side/pin direction,
-/// 	Margin,
-/// 	Number of pins,
-/// 	Name (before numbering if more than 1 pin),
-/// 	Whether to group them all into a multi-bit-width pin,
-/// 	Whether to list pins in order of whatever axis they are along, false means backwards
-/// )>
-/*#[derive(Debug)]
+#[derive(Debug)]
 struct BlockLayoutHelper {
+	/// Vec<(
+	/// 	Block side/pin direction,
+	/// 	Margin (for other groups on same side, not edge),
+	/// 	Number of pins,
+	/// 	Name (before numbering if more than 1 pin),
+	/// 	Whether to group them all into a multi-bit-width pin,
+	/// 	Whether to list pins in order of whatever axis they are along, false means backwards,
+	/// 	Starting position
+	/// )>
 	pin_groups: Vec<(
 		FourWayDir,
 		u32,
-		u32,
+		u16,
 		String,
 		bool,
-		bool
+		bool,
+		i32
 	)>,
-	group_beginning_indices: HashMap<(String, u32), u64>
+	/// Logical pin ID for given group name and index
+	group_logical_pins: HashMap<(String, u16), u64>,
+	/// Box to be drawn, pins will be 1 unit away from edges
+	bb: (IntV2, IntV2),
+	/// Map group name to index of `self.pin_groups`
+	names_to_pin_groups: HashMap<String, usize>
 }
+
 impl BlockLayoutHelper {
-	pub fn new(
-		pin_groups: Vec<(
+	/// Vec<(
+	/// 	Block side/pin direction,
+	/// 	Margin (for other groups on same side, not edge),
+	/// 	Number of pins,
+	/// 	Name (before numbering if more than 1 pin)
+	/// )>
+	pub fn load(
+		layout_save: BusLayoutSave,
+		pin_groups_static: Vec<(
 			FourWayDir,
 			u32,
-			u32,
-			String,
-			bool,
-			bool
-		)>
+			u16,
+			String
+		)>,
+		min_size_v: IntV2
 	) -> Self {
-		// Sort pin groups by direction
-		let mut groups_per_side = HashMap::<FourWayDir, Vec<(u32, u32, String, bool, bool)>>::new();
-		for group in pin_groups {
-			let group_wo_dir = (group.1, group.2, group.3, group.4, group.5);
+		// Build pin groups from static config and save state
+		let pin_groups: Vec<(FourWayDir, u32, u16, String, bool, bool)> = pin_groups_static.into_iter().enumerate().map(|(i, t)| {
+			let (group, forward) = if i < layout_save.0.len() {
+				layout_save.0[i]
+			}
+			else {
+				(true, true)
+			};
+			(t.0, t.1, t.2, t.3, group, forward)
+		}).collect();
+		// Split pin groups by side/direction
+		let mut current_logic_pin_id: u64 = 0;
+		let mut group_logical_pins = HashMap::<(String, u16), u64>::new();
+		let mut groups_per_side = HashMap::<FourWayDir, Vec<(u32, u16, String, bool, bool)>>::new();
+		let mut names_to_pin_groups: HashMap<String, usize> = HashMap::new();
+		for (i, group) in pin_groups.into_iter().enumerate() {
+			let group_name = group.3.clone();
+			if names_to_pin_groups.contains_key(&group_name) {
+				panic!("Layout pin group name \"{}\" used at least twice", &group_name);
+			}
+			names_to_pin_groups.insert(group_name, i);
+			let group_wo_dir = (group.1, group.2, group.3.clone(), group.4, group.5);
 			if let Some(v) = groups_per_side.get_mut(&group.0) {
 				v.push(group_wo_dir);
 			}
 			else {
 				groups_per_side.insert(group.0, vec![group_wo_dir]);
 			}
+			for group_i in 0..group.2 {
+				group_logical_pins.insert((group.3.clone(), group_i), current_logic_pin_id);
+				current_logic_pin_id += 1;
+			}
 		}
-		let mut out = HashMap::<u64, (IntV2, FourWayDir, f32, String, bool)>::new();
-		let mut pins_width: i32 = 0;
-		let mut pins_height: i32 = 0;
-		for dir in [FourWayDir::W, FourWayDir::E, FourWayDir::S, FourWayDir::N] {
-
+		// Get pin group starting positions
+		let mut groups_with_start_positions = Vec::<(FourWayDir, u32, u16, String, bool, bool, i32)>::new();
+		let mut side_sizes = HashMap::<FourWayDir, i32>::new();
+		for (side, side_groups) in groups_per_side {
+			let mut size: i32 = 0;
+			let mut current_margin: i32 = 1;
+			for group in &side_groups {
+				// Set margin if bigger then previous
+				if group.0  as i32 > current_margin {
+					current_margin = group.0 as i32;
+				}
+				// Add margin
+				size += current_margin;
+				// Record group's starting position
+				groups_with_start_positions.push((side, group.0, group.1, group.2.clone(), group.3, group.4, size));
+				// Add group width (n-1), only if expanded
+				if !group.3 {
+					size += group.1 as i32 - 1;
+				}
+				// Set margin
+				current_margin = group.0 as i32;
+			}
+			size += 1;// Edge margin
+			side_sizes.insert(side, size);
+		}
+		// Find width & height, adjust all start positions
+		let mut start_corner = Vec::<i32>::new();// Size 2
+		let mut rectified_size = Vec::<i32>::new();// Size 2
+		for (i, (dir0, dir1)) in vec![(FourWayDir::S, FourWayDir::N), (FourWayDir::W, FourWayDir::E)].into_iter().enumerate() {
+			let size0 = side_sizes.get(&dir0).unwrap_or(&1);
+			let size1 = side_sizes.get(&dir1).unwrap_or(&1);
+			let min_size = if i == 0 {
+				min_size_v.0
+			}
+			else {
+				min_size_v.1
+			};
+			let max_side_size: i32 = if size0 > size1 {
+				*size0
+			}
+			else {
+				*size1
+			};
+			let size: i32 = if max_side_size > min_size {
+				max_side_size
+			}
+			else {
+				min_size
+			};
+			let side_start: i32 = -size/2;
+			for side_group in &mut groups_with_start_positions {
+				if side_group.0 == dir0 || side_group.0 == dir1 {
+					side_group.6 += side_start;
+					if side_group.5 {// Reverse
+						side_group.6 += (side_group.2 as i32 - 1);
+					}
+				}
+			}
+			start_corner.push(side_start);
+			rectified_size.push(size);
 		}
 		Self {
-			pin_groups
+			pin_groups: groups_with_start_positions,
+			group_logical_pins,
+			bb: (IntV2(start_corner[0], start_corner[1]), IntV2(start_corner[0]+rectified_size[0], start_corner[1]+rectified_size[1])),
+			names_to_pin_groups
 		}
 	}
-	pub fn pin_config(&self) -> HashMap<u64, (IntV2, FourWayDir, f32, String, bool)> {
-		// TODO
+	pub fn pin_config(&self) -> HashMap<u64, (IntV2, FourWayDir, f32, String, bool, Vec<u64>)> {
+		let mut out = HashMap::<u64, (IntV2, FourWayDir, f32, String, bool, Vec<u64>)>::new();
+		let mut graphic_pin_id: u64 = 0;
+		for group in &self.pin_groups {
+			let first_pin_pos = group.0.rotate_intv2(IntV2(self.get_bb_half_width(group.0) + 1, group.6));
+			if group.4 {// Group to single graphic pin
+				out.insert(graphic_pin_id, (
+					first_pin_pos,
+					group.0,
+					1.0,
+					group.3.clone(),
+					true,
+					(graphic_pin_id..(graphic_pin_id + (group.2 as u64))).collect()
+				));
+				graphic_pin_id += group.2 as u64 + 1;
+			}
+			else {
+				for group_i in 0..group.2 {
+					out.insert(graphic_pin_id, (
+						first_pin_pos + group.0.rotate_intv2(IntV2(0, group_i as i32)),
+						group.0,
+						1.0,
+						format!("{}{}", &group.3,group_i),
+						true,
+						vec![graphic_pin_id]
+					));
+					graphic_pin_id += 1;
+				}
+			}
+		}
+		out
 	}
-}*/
+	fn get_bb_half_width(&self, dir: FourWayDir) -> i32 {
+		match dir {
+			FourWayDir::E => self.bb.1.0,
+			FourWayDir::N => self.bb.1.1,
+			FourWayDir::W => -self.bb.0.0,
+			FourWayDir::S => -self.bb.0.1
+		}
+	}
+	fn get_properties(&self) -> Vec<SelectProperty> {
+		let mut out = Vec::new();
+		for group in &self.pin_groups {
+			if group.2 > 1 {
+				out.push(SelectProperty::BusLayout(group.3.clone(), group.4, group.5));
+			}
+		}
+		out
+	}
+	fn set_property(&mut self, property: SelectProperty) {
+		if let SelectProperty::BusLayout(group_name, single_pin, forward) = property {
+			if let Some(group_i) = self.names_to_pin_groups.get(&group_name) {
+				self.pin_groups[*group_i].4 = single_pin;
+				self.pin_groups[*group_i].5 = forward;
+			}
+		}
+	}
+	pub fn save(&self) -> BusLayoutSave {
+		BusLayoutSave(self.pin_groups.iter().map(|t| (t.4, t.5)).collect())
+	}
+	pub fn get_bb_float(&self) -> (V2, V2) {
+		(self.bb.0.to_v2(), self.bb.1.to_v2())
+	}
+}
+
+/// Vec<(Whether to use a single graphic pin, Whether to list pins in order along whatever axis their side is on)>
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BusLayoutSave(Vec<(bool, bool)>);
 
 #[derive(Debug, Clone)]
 pub struct GateAnd(LogicDeviceGeneric);
@@ -96,6 +255,7 @@ impl GateAnd {
 				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![2]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			false,
 			false
 		))
 	}
@@ -108,7 +268,7 @@ impl LogicDevice for GateAnd {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
 		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() && self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -141,6 +301,7 @@ impl GateNand {
 				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![2]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			false,
 			false
 		))
 	}
@@ -153,7 +314,7 @@ impl LogicDevice for GateNand {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
 		let and: bool = self.get_pin_state_panic(0).to_bool() && self.get_pin_state_panic(1).to_bool();
 		self.set_pin_internal_state_panic(2, (!and).into());
 	}
@@ -187,6 +348,7 @@ impl GateNot {
 				1 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![1]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			false,
 			false
 		))
 	}
@@ -199,7 +361,7 @@ impl LogicDevice for GateNot {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
 		self.set_pin_internal_state_panic(1, (!self.get_pin_state_panic(0).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -232,6 +394,7 @@ impl GateOr {
 				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![2]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			false,
 			false
 		))
 	}
@@ -244,7 +407,7 @@ impl LogicDevice for GateOr {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
 		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() || self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -281,6 +444,7 @@ impl GateNor {
 				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![2]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			false,
 			false
 		))
 	}
@@ -293,7 +457,7 @@ impl LogicDevice for GateNor {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
 		self.set_pin_internal_state_panic(2, (!(self.get_pin_state_panic(0).to_bool() || self.get_pin_state_panic(1).to_bool())).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -331,6 +495,7 @@ impl GateXor {
 				2 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![2]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			false,
 			false
 		))
 	}
@@ -343,7 +508,7 @@ impl LogicDevice for GateXor {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
 		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() != self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -381,6 +546,7 @@ impl GateXnor {
 				2 => (IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![2]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			false,
 			false
 		))
 	}
@@ -393,7 +559,7 @@ impl LogicDevice for GateXnor {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
 		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() == self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -417,61 +583,39 @@ impl LogicDevice for GateXnor {
 }
 
 #[derive(Debug, Clone)]
-pub struct Clock {
-	pub generic: LogicDeviceGeneric,
-	pub enabled: bool,
-	pub freq: f32,
-	pub last_change: Instant
-}
+pub struct ClockSymbol(LogicDeviceGeneric);
 
-impl Clock {
+impl ClockSymbol {
 	pub fn new() -> Self {
-		Self::from_save(false, false, 1.0, IntV2(0, 0), FourWayDir::default(), String::new())
+		Self::from_save(LogicDeviceSave::default())
 	}
-	pub fn from_save(
-		enabled: bool,
-		state: bool,
-		freq: f32,
-		position_grid: IntV2,
-		direction: FourWayDir,
-		name: String
-	) -> Self {
-		let mut out = Self {
-			generic: LogicDeviceGeneric::load(
-				LogicDeviceSave::default(),
-				hash_map!(
-					0 => (IntV2(0, 0), FourWayDir::W, 1.0, "CLK".to_owned(), false, vec![0])
-				),
-				(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
-				false
+	pub fn from_save(save: LogicDeviceSave) -> Self {
+		Self(LogicDeviceGeneric::load(
+			save,
+			hash_map!(
+				0 => (IntV2(0, 0), FourWayDir::W, 1.0, "CLK".to_owned(), false, vec![0])
 			),
-			enabled,
-			freq,
-			last_change: Instant::now()
-		};
-		out.set_pin_internal_state_panic(0, state.into());
-		out.generic.ui_data.position = position_grid;
-		out.generic.ui_data.direction = direction;
-		out.generic.name = name;
-		out
+			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			false,
+			false
+		))
 	}
 }
 
-impl LogicDevice for Clock {
+impl LogicDevice for ClockSymbol {
 	fn get_generic(&self) -> &LogicDeviceGeneric {
-		&self.generic
+		&self.0
 	}
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
-		&mut self.generic
+		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
-		if self.enabled && self.last_change.elapsed() > Duration::from_secs_f32(0.5 / self.freq) {// The frequency is based on a whole period, it must change twice per period, so 0.5/f not 1/f
-			self.set_pin_internal_state_panic(0, (!self.get_pin_state_panic(0).to_bool()).into());
-			self.last_change = Instant::now();
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, clock_state: bool, first_propagation: bool) {
+		if first_propagation {
+			self.set_pin_internal_state_panic(0, clock_state.into());
 		}
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
-		Ok(EnumAllLogicDevices::Clock{enabled: self.enabled, state: self.get_pin_state_panic(0).to_bool(), freq: self.freq, position_grid: self.generic.ui_data.position, direction: self.generic.ui_data.direction, name: self.generic.name.clone()})
+		Ok(EnumAllLogicDevices::Clock(self.0.save()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(
@@ -493,24 +637,9 @@ impl LogicDevice for Clock {
 				V2::new(0.0, -clk_scale),
 				V2::new(clk_scale, -clk_scale),
 				V2::new(clk_scale, 0.0)
-			].iter().map(|p| self.generic.ui_data.direction.rotate_v2_reverse(*p) + V2::new(2.0, 0.0)).collect(),
+			].iter().map(|p| self.0.ui_data.direction.rotate_v2_reverse(*p) + V2::new(2.0, 0.0)).collect(),
 			draw.styles.color_foreground
 		);
-	}
-	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
-		vec![
-			SelectProperty::ClockEnabled(self.enabled),
-			SelectProperty::ClockFreq(self.freq),
-			SelectProperty::ClockState(self.get_pin_state_panic(0).to_bool())
-		]
-	}
-	fn device_set_special_select_property(&mut self, property: SelectProperty) {
-		match property {
-			SelectProperty::ClockEnabled(enable) => {self.enabled = enable;},
-			SelectProperty::ClockFreq(freq) => {self.freq = freq;},
-			SelectProperty::ClockState(state) => self.set_pin_internal_state_panic(0, state.into()),
-			_ => {}
-		}
 	}
 }
 
@@ -535,6 +664,7 @@ impl FixedSource {
 				save,
 				hash_map!(0 => (IntV2(0, 0), direction, 1.0, name, false, vec![0])),
 				bb,
+				false,
 				false
 			),
 			state
@@ -549,7 +679,7 @@ impl LogicDevice for FixedSource {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
 		self.set_pin_internal_state_panic(0, self.state.into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -630,7 +760,8 @@ impl EncoderOrDecoder {
 				save,
 				graphic_pin_config_from_single_pins(pin_config),
 				bb,
-			false
+				false,
+				false
 			),
 			addr_size,
 			is_encoder
@@ -658,7 +789,7 @@ impl LogicDevice for EncoderOrDecoder {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
 		if self.is_encoder {
 			let input = self.get_pin_state_panic(self.get_fanout_pin_id(self.get_address())).to_bool();
 			self.set_pin_internal_state_panic(0, input.into());
@@ -782,7 +913,8 @@ impl Memory {
 				save,
 				graphic_pin_config_from_single_pins(pin_config),
 				(bb_int.0.to_v2(), bb_int.1.to_v2()),
-				true
+				true,
+				false
 			),
 			addr_size,
 			data: Self::format_data(data_opt, addr_size),
@@ -809,7 +941,7 @@ impl LogicDevice for Memory {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
 		let ce: bool = self.get_pin_state_panic(0).to_bool();
 		let we: bool = self.get_pin_state_panic(1).to_bool();
 		let re: bool = self.get_pin_state_panic(2).to_bool();
@@ -955,6 +1087,7 @@ impl TriStateBuffer {
 				2 => (IntV2(0, -2), FourWayDir::S, 1.0, "En".to_owned(), false, vec![2]),
 			),
 			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			false,
 			false
 		))
 	}
@@ -967,7 +1100,7 @@ impl LogicDevice for TriStateBuffer {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
 		if self.get_pin_state_panic(2).to_bool() {
 			self.set_pin_internal_state_panic(1, self.get_pin_state_panic(0).to_bool().into());
 		}
@@ -988,29 +1121,71 @@ impl LogicDevice for TriStateBuffer {
 	}
 }
 
-/*/// Parameterized Adder
+/// Parameterized Adder
 #[derive(Debug)]
 pub struct Adder {
 	generic: LogicDeviceGeneric,
 	/// 0 to 256
-	bits: u16
+	bits: u16,
+	layout: BlockLayoutHelper
 }
 
 impl Adder {
 	pub fn new() -> Self {
-		Self::from_save(LogicDeviceSave::default())
+		Self::from_save(LogicDeviceSave::default(), BusLayoutSave::default(), 8)
 	}
-	pub fn from_save(save: LogicDeviceSave) -> Self {
-		Self(LogicDeviceGeneric::load(
-			save,
-			hash_map!(
-				0 => (IntV2(-3, 0), FourWayDir::W, 1.0, "a".to_owned(), false),
-				1 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false),
-				2 => (IntV2(0, -2), FourWayDir::S, 1.0, "En".to_owned(), false),
+	pub fn from_save(save: LogicDeviceSave, layout_save: BusLayoutSave, bits: u16) -> Self {
+		let layout = BlockLayoutHelper::load(
+			layout_save,
+			vec![
+				(FourWayDir::W, 1, bits, "A".to_owned()),
+				(FourWayDir::W, 1, bits, "B".to_owned()),
+				(FourWayDir::E, 1, bits, "C".to_owned()),
+				(FourWayDir::N, 1, 1, "Cin".to_owned()),
+				(FourWayDir::S, 1, 1, "Cout".to_owned()),
+			],
+			IntV2(3, 3)
+		);
+		Self{
+			generic: LogicDeviceGeneric::load(
+				save,
+				layout.pin_config(),
+				layout.get_bb_float(),
+				false,
+				false
 			),
-			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
-			1,
-			false
-		))
+			bits,
+			layout
+		}
 	}
-}*/
+}
+
+impl LogicDevice for Adder {
+	fn get_generic(&self) -> &LogicDeviceGeneric {
+		&self.generic
+	}
+	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
+		&mut self.generic
+	}
+	fn compute_step(&mut self, ancestors: &AncestryStack, self_component_id: u64, clock_state: bool, first_propagation_step: bool) {
+		// TODO
+	}
+	fn save(&self) -> Result<EnumAllLogicDevices, String> {
+		Ok(EnumAllLogicDevices::Adder(self.generic.save(), self.layout.save(), self.bits))
+	}
+	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+		// TODO
+	}
+	fn get_bit_width(&self) -> Option<u16> {
+		Some(self.bits)
+	}
+	fn set_bit_width(&mut self, bit_width: u16) {
+		*self = Self::from_save(self.generic.save(), self.layout.save(), bit_width);
+	}
+	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
+		self.layout.get_properties()
+	}
+	fn device_set_special_select_property(&mut self, property: SelectProperty) {
+		self.layout.set_property(property);
+	}
+}
