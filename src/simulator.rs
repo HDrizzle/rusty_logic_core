@@ -2046,7 +2046,6 @@ impl LogicCircuit {
 						Err(_) => {}
 					}
 					recompute_pin_block_positions = true;
-					return_recompute_connections = true;
 				}
 				// Delete
 				if input_state.consume_key(Modifiers::NONE, Key::Backspace) {
@@ -3304,7 +3303,10 @@ impl LogicDevice for LogicCircuit {
 			let nets = self.nets.borrow();
 			for wire_cell in self.wires.borrow().values() {
 				let mut wire = wire_cell.borrow_mut();
-				let states: Vec<LogicState> = wire.nets.iter().map(|net_id| nets.get(net_id).unwrap().borrow().state).collect();
+				let states: Vec<LogicState> = wire.nets.iter().map(|net_id| match nets.get(net_id) {
+					Some(net) => net.borrow().state,
+					None => LogicState::Floating
+				}).collect();
 				wire.color = draw.styles.color_from_logic_states(&states);
 			}
 			// Use graphic item trait

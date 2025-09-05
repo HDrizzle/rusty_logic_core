@@ -19,18 +19,19 @@ pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: 
 	let string_raw = load_file_with_better_error(&path)?;
 	/*match restore_old_files::attempt_restore_file(circuit_rel_path, displayed_as_block, toplevel, pos, dir, name) {
 		Ok(circuit) => Ok(circuit),
-		Err(err_old_format) => Err(format!("Old format error: {}", err_old_format))
+		Err(err_old_format) => Err(format!("Old format error for circuit \"{}\": {}", circuit_rel_path, err_old_format))
 	}*/
-	match LogicCircuit::from_save(to_string_err(serde_json::from_str(&string_raw))?, circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir, name.clone()) {
+	let save: LogicCircuitSave = match to_string_err(serde_json::from_str::<LogicCircuitSave>(&string_raw)) {
 		Ok(circuit) => Ok(circuit),
 		Err(err_new_format) => {
-			println!("Load error: {}, attempting to load old format", &err_new_format);
-			match restore_old_files::attempt_restore_file(circuit_rel_path, displayed_as_block, toplevel, pos, dir, name) {
+			//println!("Load error: {}, attempting to load old format", &err_new_format);
+			match restore_old_files::attempt_restore_file(circuit_rel_path) {
 				Ok(circuit) => Ok(circuit),
-				Err(err_old_format) => Err(format!("New format error: {}, old format error: {}", err_new_format, err_old_format))
+				Err(err_old_format) => Err(format!("New format error: {}. Old format error for circuit \"{}\": {}", err_new_format, circuit_rel_path, err_old_format))
 			}
 		}
-	}
+	}?;
+	LogicCircuit::from_save(save, circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir, name.clone())
 }
 
 /// Like LogicCircuit but serializable
@@ -124,10 +125,10 @@ mod restore_old_files {
 			}
 		}
 	}
-	pub fn attempt_restore_file(circuit_rel_path: &str, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String) -> Result<LogicCircuit, String> {
+	pub fn attempt_restore_file(circuit_rel_path: &str) -> Result<LogicCircuitSave, String> {
 		let path = get_circuit_file_path(circuit_rel_path);
 		let string_raw = load_file_with_better_error(&path)?;
-		LogicCircuit::from_save(to_string_err(serde_json::from_str::<LogicCircuitSaveOld>(&string_raw))?.into(), circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir, name)
+		Ok(to_string_err(serde_json::from_str::<LogicCircuitSaveOld>(&string_raw))?.into())
 	}
 }
 
