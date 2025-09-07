@@ -1,5 +1,5 @@
 use crate::{builtin_components, prelude::*, resource_interface, simulator::{AncestryStack, GraphicSelectableItemRef, SelectionState, Tool}};
-use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, DragValue, FontFamily, FontId, Frame, Galley, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2}, emath, epaint::{PathStroke, TextShape}};
+use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, Color32, DragValue, FontFamily, FontId, Frame, Galley, InputState, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2}, emath, epaint::{PathStroke, TextShape}};
 use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
 use serde_json;
@@ -138,7 +138,7 @@ impl UIData {
 }
 
 pub trait GraphicSelectableItem {
-	/// The implementation if this is responsible for adding it's own position to the offset
+	/// The implementation of this is responsible for adding it's own position to the offset
 	fn draw<'a>(&self, draw: &ComponentDrawInfo<'a>);
 	fn get_ui_data(&self) -> &UIData;
 	fn get_ui_data_mut(&mut self) -> &mut UIData;
@@ -193,7 +193,8 @@ pub enum CopiedGraphicItem {
 	/// (Position, Direction, Name, Show name, Bit width)
 	ExternalConnection(IntV2, FourWayDir, String, bool, u16),
 	Splitter(SplitterSave),
-	GraphicLabel(GraphicLabelSave)
+	GraphicLabel(GraphicLabelSave),
+	Probe(ProbeSave)
 }
 
 /// This is what will be serialized as JSON and put onto the clipboard
@@ -434,7 +435,8 @@ pub struct ComponentDrawInfo<'a> {
 	pub direction: FourWayDir,
 	pub styles: &'a Styles,
 	pub rect_center: V2,
-	rect_size_px: V2
+	pub rect_size_px: V2,
+	pub mouse_pos: Option<Pos2>
 }
 
 impl<'a> ComponentDrawInfo<'a> {
@@ -446,7 +448,8 @@ impl<'a> ComponentDrawInfo<'a> {
 		direction: FourWayDir,
 		styles: &'a Styles,
 		rect_center: V2,
-		rect_size_px: V2
+		rect_size_px: V2,
+		mouse_pos: Option<Pos2>
 	) -> Self {
 		Self {
 			screen_center_wrt_grid,
@@ -456,7 +459,8 @@ impl<'a> ComponentDrawInfo<'a> {
 			direction,
 			styles,
 			rect_center,
-			rect_size_px
+			rect_size_px,
+			mouse_pos
 		}
 	}
 	pub fn draw_polyline(&self, points: Vec<V2>, stroke: [u8; 3]) {
@@ -512,6 +516,16 @@ impl<'a> ComponentDrawInfo<'a> {
 			self.painter.text(pos_px, align, text, font_id, color32);
 		}
 	}
+	/// gets text size in grid without actually drawing it
+	pub fn text_size(&self, text: String, size_grid: f32) -> V2 {
+		let font_id = FontId::new(self.grid_size * size_grid, FontFamily::Monospace);
+		let galley = self.painter.fonts::<Arc<Galley>>(|fonts| {
+			let mut job: LayoutJob = LayoutJob::default();
+			job.append(&text, 0.0, TextFormat::simple(font_id, Color32::default()));
+			fonts.layout_job(job)
+		});
+		emath_vec2_to_v2(galley.size()) / self.grid_size
+	}
 	pub fn grid_to_px(&self, grid: V2) -> egui::Pos2 {
 		// TODO
 		let nalgebra_v2 = ((self.direction.rotate_v2(grid) + self.offset_grid.to_v2() - self.screen_center_wrt_grid) * self.grid_size) + self.rect_center;
@@ -522,12 +536,15 @@ impl<'a> ComponentDrawInfo<'a> {
 		}
 	}
 	pub fn mouse_pos2_to_grid(&self, mouse_pos_y_backwards: Pos2) -> V2 {
+		Self::mouse_pos2_to_grid_unattached(mouse_pos_y_backwards, self.direction, self.rect_center, self.offset_grid, self.screen_center_wrt_grid, self.rect_size_px, self.grid_size)
+	}
+	pub fn mouse_pos2_to_grid_unattached(mouse_pos_y_backwards: Pos2, direction: FourWayDir, rect_center: V2, offset_grid: IntV2, screen_center_wrt_grid: V2, rect_size_px: V2, grid_size: f32) -> V2 {
 		#[cfg(feature = "reverse_y")]
-		let mouse_pos = V2::new(mouse_pos_y_backwards.x, self.rect_size_px.y - mouse_pos_y_backwards.y);
+		let mouse_pos = V2::new(mouse_pos_y_backwards.x, rect_size_px.y - mouse_pos_y_backwards.y);
 		#[cfg(not(feature = "reverse_y"))]
 		let mouse_pos = emath_pos2_to_v2(mouse_pos_y_backwards);
 		// TODO
-		self.direction.rotate_v2_reverse(((mouse_pos - self.rect_center) / self.grid_size) - self.offset_grid.to_v2()) + self.screen_center_wrt_grid
+		direction.rotate_v2_reverse(((mouse_pos - rect_center) / grid_size) - offset_grid.to_v2()) + screen_center_wrt_grid
 	}
 	/// `offset_unrotated` is wrt parent coordinates, dir_ is the direction of the local coordinates of whatever this new drawer is being created for
 	pub fn add_grid_pos_and_direction(&'a self, offset_unrotated: IntV2, dir_: FourWayDir) -> Self {
@@ -540,7 +557,8 @@ impl<'a> ComponentDrawInfo<'a> {
 			direction: self.direction.rotate_intv2(dir_.to_unit_int()).is_along_axis().unwrap(),
 			styles: self.styles,
 			rect_center: self.rect_center,
-			rect_size_px: self.rect_size_px
+			rect_size_px: self.rect_size_px,
+			mouse_pos: self.mouse_pos
 		}
 	}
 }
@@ -589,10 +607,14 @@ impl LogicCircuitToplevelView {
 	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles, screen_top_left: Pos2) -> (Option<Pos2>, Option<String>) {
 		let mut return_new_mouse_pos = Option::<Pos2>::None;
 		let mut return_new_circuit_tab = Option::<String>::None;
-		let inner_response = Frame::canvas(ui.style()).show::<Vec2>(ui, |ui| {
-			let canvas_size = ui.available_size_before_wrap();
+		let canvas_size = ui.available_size_before_wrap();
+		let anything_in_focus: bool = ui.memory(|memory| memory.focused().is_some());
+		let inner_response = Frame::canvas(ui.style()).show::<(Vec2, V2)>(ui, |ui| {
 			let propagate = true;// TODO: Change to false when rest of logic is implemented
+			// First, detect user unput
+			let input_state = ui.ctx().input(|i| i.clone());
 			let (response, painter) = ui.allocate_painter(canvas_size, Sense::all());
+			let rect_center: V2 = emath_pos2_to_v2(response.rect.center());
 			let draw_info = ComponentDrawInfo::new(
 				self.screen_center_wrt_grid,
 				self.grid_size,
@@ -600,11 +622,10 @@ impl LogicCircuitToplevelView {
 				IntV2(0, 0),
 				FourWayDir::default(),
 				styles,
-				emath_pos2_to_v2(response.rect.center()),
-				emath_vec2_to_v2(canvas_size)
+				rect_center,
+				emath_vec2_to_v2(canvas_size),
+				response.hover_pos()
 			);
-			// First, detect user unput
-			let input_state = ui.ctx().input(|i| i.clone());
 			// Scrolling
 			let scroll = input_state.raw_scroll_delta.y;
 			if scroll != 0.0 {
@@ -630,14 +651,25 @@ impl LogicCircuitToplevelView {
 					styles.max_grid_size
 				};
 			}
-			let recompute_connections: bool = self.circuit.toplevel_ui_interact(response, ui.ctx(), &draw_info, input_state);
+			//let recompute_connections: bool = self.circuit.toplevel_ui_interact(response, ui.ctx(), &draw_info, input_state);
+			if !anything_in_focus {
+				self.recompute_conns_next_frame |= self.circuit.toplevel_ui_interact(
+					response,
+					ui.ctx(),
+					input_state,
+					self.grid_size,
+					|pos_px: Pos2| -> V2 {
+						ComponentDrawInfo::mouse_pos2_to_grid_unattached(pos_px, FourWayDir::default(), rect_center, IntV2(0, 0), self.screen_center_wrt_grid, emath_vec2_to_v2(canvas_size), self.grid_size)
+					}
+				);
+			}
 			// Reconnect wires and thingies if anything was changed
-			if recompute_connections || self.recompute_conns_next_frame {
+			if self.recompute_conns_next_frame {
 				self.saved = false;
 				self.circuit.check_wire_geometry_and_connections();
 			}
 			// Update
-			if recompute_connections || propagate {
+			if self.recompute_conns_next_frame || propagate {
 				self.logic_loop_error = self.propagate_until_stable(CIRCUIT_MAX_COMPUTE_CYCLES);
 				self.recompute_conns_next_frame = false;
 			}
@@ -646,7 +678,7 @@ impl LogicCircuitToplevelView {
 			self.circuit.draw(&draw_info);
 			// Right side toolbar
 			self.circuit.tool.borrow().tool_select_ui(&draw_info);
-			canvas_size
+			(canvas_size, rect_center)
 		});
 		// Top: general controls
 		Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::LEFT_TOP, child: Align2::LEFT_TOP}).id("top-left controls".into()).show(|ui| {
@@ -673,6 +705,9 @@ impl LogicCircuitToplevelView {
 				}
 				if ui.button("+ Label").clicked() {
 					self.circuit.set_graphic_item_following_mouse(self.circuit.insert_label(GraphicLabel::new().save()));
+				}
+				if ui.button("+ Probe").clicked() {
+					self.circuit.set_graphic_item_following_mouse(self.circuit.insert_probe(Probe::default().save()));
 				}
 			}
 			// Compute cycles text
@@ -800,7 +835,7 @@ impl LogicCircuitToplevelView {
 		}
 		else if self.showing_block_edit_popup {
 			Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
-				self.edit_block_layout(ui, styles, inner_response.inner);
+				self.edit_block_layout(ui, styles, inner_response.inner.0);
 			});
 		}
 		else if self.showing_flatten_opoup {
@@ -860,7 +895,8 @@ impl LogicCircuitToplevelView {
 				FourWayDir::default(),
 				styles,
 				emath_pos2_to_v2(response.rect.center()),
-				emath_vec2_to_v2(maine_frame_size)
+				emath_vec2_to_v2(maine_frame_size),
+				None
 			);
 			self.circuit.draw_as_block(&draw_info, true);
 		});

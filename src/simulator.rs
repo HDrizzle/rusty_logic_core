@@ -1,10 +1,10 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, rc::Rc, time::{Instant, Duration}};
+use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::{self, Default}, fmt::Debug, fs, ops::{Deref, DerefMut}, rc::Rc, time::{Duration, Instant}};
 use serde::{Deserialize, Serialize};
 use crate::{prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
-use eframe::egui::{self, response::Response, Align2, Key, KeyboardShortcut, Modifiers, PointerButton};
+use eframe::egui::{self, response::Response, Align2, Key, KeyboardShortcut, Modifiers, PointerButton, Pos2};
 use arboard;
 use common_macros::hash_map;
 
@@ -1227,6 +1227,92 @@ pub enum WireConnection {
 	Splitter(u64, u16)
 }
 
+/// Read-only probe, used for the timing diagram
+#[derive(Debug, Default, Clone)]
+pub struct Probe {
+	ui_data: UIData,
+	name: String,
+	nets_opt: Option<Vec<u64>>,
+	states: Vec<LogicState>,
+	text_len: f32
+}
+
+impl Probe {
+	pub fn load(save: ProbeSave) -> Self {
+		Self {
+			ui_data: UIData::new(save.0, save.1, Self::get_bb(save.3)),
+			name: save.2,
+			nets_opt: None,
+			states: vec![LogicState::Floating],
+			text_len: save.3
+		}
+	}
+	pub fn save(&self) -> ProbeSave {
+		(self.ui_data.position, self.ui_data.direction, self.name.clone(), self.text_len)
+	}
+	fn get_bb(text_len: f32) -> (V2, V2) {
+		(V2::new(1.0, -1.0), V2::new(2.0 + text_len, 1.0))
+	}
+}
+
+impl GraphicSelectableItem for Probe {
+	fn get_ui_data(&self) -> &UIData {
+		&self.ui_data
+	}
+	fn get_ui_data_mut(&mut self) -> &mut UIData {
+		&mut self.ui_data
+	}
+	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
+		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
+		let text_length: f32 = draw.text_size(self.name.clone(), 1.5).x;
+		draw.draw_polyline(
+			vec![
+				V2::new(0.0, 0.0),
+				V2::new(1.0, 0.0),
+				V2::new(2.0, -1.0),
+				V2::new(2.0 + text_length, -1.0),
+				V2::new(3.0 + text_length, 0.0),
+				V2::new(2.0 + text_length, 1.0),
+				V2::new(2.0, 1.0),
+				V2::new(1.0, 0.0),
+			],
+			draw.styles.color_foreground
+		);
+		draw.text(self.name.clone(), V2::new(2.0 + text_length/2.0, 0.0), Align2::CENTER_CENTER, draw.styles.text_color, 1.5, !self.ui_data.direction.is_horizontal());
+	}
+	fn get_properties(&self) -> Vec<SelectProperty> {
+		vec![
+			SelectProperty::PositionX(self.ui_data.position.0),
+			SelectProperty::PositionY(self.ui_data.position.1),
+			SelectProperty::Direction(self.ui_data.direction),
+			SelectProperty::Name(self.name.clone())
+		]
+	}
+	fn set_property(&mut self, property: SelectProperty) {
+		match property {
+			SelectProperty::PositionX(x) => {
+				self.ui_data.position.0 = x;
+			},
+			SelectProperty::PositionY(y) => {
+				self.ui_data.position.1 = y;
+			},
+			SelectProperty::Direction(direction) => {
+				self.ui_data.direction = direction;
+			},
+			SelectProperty::Name(new_name) => {
+				self.name = new_name;
+			}
+			_ => {}
+		}
+	}
+	fn copy(&self) -> CopiedGraphicItem {
+		CopiedGraphicItem::Probe(self.save())
+	}
+}
+
+/// (Position, Direction, Name, Name length wrt grid)
+pub type ProbeSave = (IntV2, FourWayDir, String, f32);
+
 /// Only essential things like position/orientation, logic state
 /// Not used for saving circuits
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -1587,28 +1673,8 @@ pub enum GraphicSelectableItemRef {
 	/// Graphic pin, NOT logic pin
 	Pin(u64),
 	Splitter(u64),
-	GraphicLabel(u64)
-}
-
-#[derive(Debug, Default, Clone)]
-pub enum SelectionState {
-	/// Just there
-	#[default]
-	Fixed,
-	/// Being dragged by mouse, keeps track of where it started (wrt grid). If there aren't any selected items, then use this to drag a rectangle to select stuff
-	/// (
-	/// 	Start,
-	/// 	Delta,
-	/// 	Vector of wires being dragged: (
-	/// 		Wire ID,
-	/// 		Whether start is selected,
-	/// 		Initial position of either start or end based on field 1
-	/// 	)
-	/// )
-	Dragging(V2, V2),
-	/// After Paste operation, the pasted stuff will remain selected and following the mouse until a left click
-	/// (Current or most recent mouse pos)
-	FollowingMouse(V2)
+	GraphicLabel(u64),
+	Probe(usize)
 }
 
 #[derive(Debug, Clone)]
@@ -1652,6 +1718,43 @@ impl Default for Clock {
 			state: false
 		}
 	}
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TimingDiagram {
+	/// List of samples, each sample contains list of propagation steps, each propagation step conains list of sources, each source may be 1 or more individual bits
+	pub samples: Vec<Vec<Vec<Vec<LogicState>>>>,
+	pub running: TimingTiagramRunningState
+}
+
+/// Manual control or whenever the clock is running
+#[derive(Debug, Clone, Default)]
+pub enum TimingTiagramRunningState {
+	Play,
+	Pause,
+	#[default]
+	Clk
+}
+
+#[derive(Debug, Default, Clone)]
+pub enum SelectionState {
+	/// Just there
+	#[default]
+	Fixed,
+	/// Being dragged by mouse, keeps track of where it started (wrt grid). If there aren't any selected items, then use this to drag a rectangle to select stuff
+	/// (
+	/// 	Start,
+	/// 	Delta,
+	/// 	Vector of wires being dragged: (
+	/// 		Wire ID,
+	/// 		Whether start is selected,
+	/// 		Initial position of either start or end based on field 1
+	/// 	)
+	/// )
+	Dragging(V2, V2),
+	/// After Paste operation, the pasted stuff will remain selected and following the mouse until a left click
+	/// (Current or most recent mouse pos)
+	FollowingMouse(V2)
 }
 
 #[derive(Debug, Clone)]
@@ -1720,7 +1823,10 @@ pub struct LogicCircuit {
 	/// For something like a flip flop that might oscillate without ever being stable, use this to fix the sub compute cycles of that circuit so it will ALWAYS be run that many times per cycle of the parent circuit and it's changed state will be ignored
 	pub fixed_sub_cycles_opt: Option<usize>,
 	self_reload_err_opt: Option<String>,
-	pub clock: RefCell<Clock>
+	pub clock: RefCell<Clock>,
+	/// Timing diagram probes
+	pub probes: RefCell<Vec<Probe>>,
+	pub timing: RefCell<TimingDiagram>
 }
 
 impl LogicCircuit {
@@ -1764,7 +1870,9 @@ impl LogicCircuit {
 			type_name,
 			fixed_sub_cycles_opt,
 			self_reload_err_opt: None,
-			clock: RefCell::new(Clock::default())
+			clock: RefCell::new(Clock::default()),
+			probes: RefCell::new(Vec::new()),
+			timing: RefCell::new(TimingDiagram::default())
 		};
 		new.setup_external_connection_sources();
 		new.recompute_default_layout();
@@ -1831,7 +1939,9 @@ impl LogicCircuit {
 			type_name: save.type_name,
 			fixed_sub_cycles_opt: save.fixed_sub_cycles_opt,
 			self_reload_err_opt: None,
-			clock: RefCell::new(Clock::load(save.clock_enabled, save.clock_freq, save.clock_state))
+			clock: RefCell::new(Clock::load(save.clock_enabled, save.clock_freq, save.clock_state)),
+			probes: RefCell::new(save.probes.into_iter().map(|save| Probe::load(save)).collect()),
+			timing: RefCell::new(TimingDiagram::default())
 		};
 		out.setup_external_connection_sources();
 		out.check_wire_geometry_and_connections();
@@ -1886,13 +1996,13 @@ impl LogicCircuit {
 			self.block_pin_positions.remove(&pin_id_to_del);
 		}
 	}
-	/// Returns: (Whether to recompute the circuit, Whether to upen the component select popup)
-	pub fn toplevel_ui_interact<'a>(&mut self, response: Response, context: &egui::Context, draw: &ComponentDrawInfo<'a>, mut input_state: egui::InputState) -> bool {
+	/// Returns: Whether to recompute the circuit connections
+	pub fn toplevel_ui_interact<'a, F: Fn(Pos2) -> V2>(&mut self, response: Response, context: &egui::Context, /*draw: &ComponentDrawInfo<'a>,*/ mut input_state: egui::InputState, grid_size: f32, mouse_pos2_to_grid: F) -> bool {
 		let mut return_recompute_connections = false;
 		let mut new_tool_opt = Option::<Tool>::None;
 		let mut recompute_pin_block_positions = false;
 		let mouse_pos_grid_opt: Option<V2> = match response.hover_pos() {
-			Some(pos_px) => Some(draw.mouse_pos2_to_grid(pos_px)),
+			Some(pos_px) => Some(mouse_pos2_to_grid(pos_px)),
 			None => None
 		};
 		match self.tool.borrow_mut().deref_mut() {
@@ -1901,7 +2011,7 @@ impl LogicCircuit {
 					SelectionState::Fixed => {
 						if response.drag_started_by(PointerButton::Primary) {
 							let begining_mouse_pos_grid: V2 = mouse_pos_grid_opt.expect("Hover pos should work when dragging");
-							*selected_graphics_state =  SelectionState::Dragging(begining_mouse_pos_grid, emath_vec2_to_v2(response.drag_delta()) / draw.grid_size);
+							*selected_graphics_state =  SelectionState::Dragging(begining_mouse_pos_grid, emath_vec2_to_v2(response.drag_delta()) / grid_size);
 							for item_ref in selected_graphics.iter() {
 								self.run_function_on_graphic_item_mut(item_ref.clone(), |graphic_item| {
 									graphic_item.start_dragging(begining_mouse_pos_grid);
@@ -1912,7 +2022,7 @@ impl LogicCircuit {
 							// Find if command/ctrl is being held down
 							let multi_select_key: bool = input_state.key_down(Key::A);// TODO: Command / Control
 							// Find what was clicked (if anything)
-							match self.was_anything_clicked(draw.mouse_pos2_to_grid(response.interact_pointer_pos().expect("Interact pointer pos should work when clicked")), multi_select_key) {
+							match self.was_anything_clicked(mouse_pos2_to_grid(response.interact_pointer_pos().expect("Interact pointer pos should work when clicked")), multi_select_key) {
 								Some(new_selected_item) => match multi_select_key {
 									true => match selected_graphics.contains(&new_selected_item) {
 										true => {
@@ -1945,7 +2055,7 @@ impl LogicCircuit {
 						}
 					},
 					SelectionState::Dragging(start_grid, delta_grid) => {
-						let delta_grid_backwards_y = emath_vec2_to_v2(response.drag_delta()) / draw.grid_size;
+						let delta_grid_backwards_y = emath_vec2_to_v2(response.drag_delta()) / grid_size;
 						*delta_grid += if cfg!(feature = "reverse_y") {
 							v2_reverse_y(delta_grid_backwards_y)
 						} else {
@@ -1954,7 +2064,6 @@ impl LogicCircuit {
 						match selected_graphics.len() {
 							0 => {// Drag a rectangle
 								let select_bb: (V2, V2) = merge_points_to_bb(vec![*start_grid, *start_grid + *delta_grid]);
-								draw.draw_rect(*start_grid, *start_grid + *delta_grid, draw.styles.select_rect_color, draw.styles.select_rect_edge_color);
 								if response.drag_stopped_by(PointerButton::Primary) {
 									// Find all items that have BBs intersected by the rectangle and select them
 									selected_graphics.clear();
@@ -1999,19 +2108,6 @@ impl LogicCircuit {
 							new_tool_opt = Some(Tool::default());
 						}
 					}
-				}
-				// Draw selected items BB
-				if selected_graphics.len() >= 1 {
-					let mut points = Vec::<V2>::new();
-					for item_ref in selected_graphics.iter() {
-						self.run_function_on_graphic_item(item_ref.clone(), |graphic_item| {
-							let new_bb = graphic_item.bounding_box(V2::zeros());
-							points.push(new_bb.0);
-							points.push(new_bb.1);
-						});
-					}
-					let bb = merge_points_to_bb(points);
-					draw.draw_rect(bb.0, bb.1, [0, 0, 0, 0], draw.styles.select_rect_edge_color);
 				}
 				// Copy and Paste will use a plain-text JSON array of instances of the `CopiedGraphicItem` enum
 				// Copy
@@ -2079,54 +2175,27 @@ impl LogicCircuit {
 				// TODO
 			},
 			Tool::PlaceWire{perp_pairs} => {
-				match response.hover_pos() {
-					Some(mouse_pos_px) => {
-						let mouse_pos_grid_rounded: IntV2 = round_v2_to_intv2(draw.mouse_pos2_to_grid(mouse_pos_px));
-						let n_pairs = perp_pairs.len();
-						// Wire has been started
-						if n_pairs >= 1 {
-							let latest_pair: &mut (IntV2, FourWayDir) = &mut perp_pairs[n_pairs - 1];
-							// Check if perp pair is perfectly horiz or vert
-							let v: IntV2 = mouse_pos_grid_rounded - latest_pair.0;
-							if let Some(new_dir) = v.is_along_axis() {
-								latest_pair.1 = new_dir;
-							}
-							if response.clicked_by(PointerButton::Primary) {
-								// First, check if this is a wire termination point
-								let (is_term_point, _, _) = self.is_connection_point(mouse_pos_grid_rounded);
-								if is_term_point {
-									// End wire
-									self.add_wire_geometry(perp_pairs.clone(), mouse_pos_grid_rounded);
-									return_recompute_connections = true;
-									new_tool_opt = Some(Tool::default());
-								}
-								else {
-									perp_pairs.push((
-										mouse_pos_grid_rounded,
-										FourWayDir::E
-									));
-								}
-							}
-							// Display in-progress wire
-							for (i, pair) in perp_pairs.iter().enumerate() {
-								let end_pos = if i == perp_pairs.len() - 1 {
-									mouse_pos_grid_rounded
-								}
-								else {
-									perp_pairs[i+1].0
-								};
-								let segments = Wire::perpindicular_pair_to_segments(pair, end_pos);
-								for segment in segments {
-									draw.draw_polyline(vec![
-										segment.0.to_v2(),
-										segment.0.to_v2() + (segment.1.to_unit() * (segment.2 as f32))
-									], draw.styles.color_wire_in_progress);
-								}
-							}
+				if let Some(mouse_pos_grid) = mouse_pos_grid_opt {
+					let mouse_pos_grid_rounded: IntV2 = round_v2_to_intv2(mouse_pos_grid);
+					let n_pairs = perp_pairs.len();
+					// Wire has been started
+					if n_pairs >= 1 {
+						let latest_pair: &mut (IntV2, FourWayDir) = &mut perp_pairs[n_pairs - 1];
+						// Check if perp pair is perfectly horiz or vert
+						let v: IntV2 = mouse_pos_grid_rounded - latest_pair.0;
+						if let Some(new_dir) = v.is_along_axis() {
+							latest_pair.1 = new_dir;
 						}
-						// Wire not started
-						else {
-							if response.clicked_by(PointerButton::Primary) {
+						if response.clicked_by(PointerButton::Primary) {
+							// First, check if this is a wire termination point
+							let (is_term_point, _, _) = self.is_connection_point(mouse_pos_grid_rounded);
+							if is_term_point {
+								// End wire
+								self.add_wire_geometry(perp_pairs.clone(), mouse_pos_grid_rounded);
+								return_recompute_connections = true;
+								new_tool_opt = Some(Tool::default());
+							}
+							else {
 								perp_pairs.push((
 									mouse_pos_grid_rounded,
 									FourWayDir::E
@@ -2134,8 +2203,14 @@ impl LogicCircuit {
 							}
 						}
 					}
-					None => {
-						// TODO: Maybe delete this and turn match into if let?
+					// Wire not started
+					else {
+						if response.clicked_by(PointerButton::Primary) {
+							perp_pairs.push((
+								mouse_pos_grid_rounded,
+								FourWayDir::E
+							));
+						}
 					}
 				}
 				if input_state.consume_key(Modifiers::NONE, Key::Escape) {
@@ -2164,7 +2239,8 @@ impl LogicCircuit {
 					GraphicSelectableItemRef::Wire(wire_ids[0])// There shoud be exactly one
 				},
 				CopiedGraphicItem::Splitter(save) => self.insert_splitter(save),
-				CopiedGraphicItem::GraphicLabel(save) => self.insert_label(save)
+				CopiedGraphicItem::GraphicLabel(save) => self.insert_label(save),
+				CopiedGraphicItem::Probe(save) => self.insert_probe(save)
 			});
 		}
 		// Set each item's pre-drag position to the difference from the BB center it it's position
@@ -2204,6 +2280,11 @@ impl LogicCircuit {
 		let new_id = lowest_unused_key(&labels);
 		labels.insert(new_id, GraphicLabel::load(label));
 		GraphicSelectableItemRef::GraphicLabel(new_id)
+	}
+	pub fn insert_probe(&self, probe: ProbeSave) -> GraphicSelectableItemRef {
+		let mut probes = self.probes.borrow_mut();
+		probes.push(Probe::load(probe));
+		GraphicSelectableItemRef::Probe(probes.len() - 1)
 	}
 	pub fn set_graphic_item_following_mouse(&self, item_ref: GraphicSelectableItemRef) {
 		*self.tool.borrow_mut() = Tool::Select{
@@ -2884,7 +2965,17 @@ impl LogicCircuit {
 			GraphicSelectableItemRef::Wire(wire_id) => self.wires.borrow_mut().remove(wire_id).is_some(),
 			GraphicSelectableItemRef::Pin(pin_id) => self.generic_device.graphic_pins.borrow_mut().remove(pin_id).is_some(),
 			GraphicSelectableItemRef::Splitter(splitter_id) => self.splitters.borrow_mut().remove(splitter_id).is_some(),
-			GraphicSelectableItemRef::GraphicLabel(label_id) => self.labels.borrow_mut().remove(label_id).is_some()
+			GraphicSelectableItemRef::GraphicLabel(label_id) => self.labels.borrow_mut().remove(label_id).is_some(),
+			GraphicSelectableItemRef::Probe(probe_index) => {
+				let mut probes = self.probes.borrow_mut();
+				if probes.len() > *probe_index {
+					probes.remove(*probe_index);
+					true
+				}
+				else {
+					false
+				}
+			}
 		}
 	}
 	/*pub fn run_function_on_graphic_item<T>(&self, ref_: GraphicSelectableItemRef, mut func: impl FnMut(Box<&dyn GraphicSelectableItem>) -> T) -> Option<T> {
@@ -2943,6 +3034,15 @@ impl LogicCircuit {
 				let labels = self.labels.borrow();
 				let label = labels.get(&label_id)?;
 				Some(func(Box::new(label)))
+			},
+			GraphicSelectableItemRef::Probe(probe_index) => {
+				let probes = self.probes.borrow();
+				if probes.len() > probe_index {
+					Some(func(Box::new(&probes[probe_index])))
+				}
+				else {
+					None
+				}
 			}
 		}
 	}
@@ -2979,6 +3079,15 @@ impl LogicCircuit {
 				let mut labels = self.labels.borrow_mut();
 				let label = labels.get_mut(&label_id)?;
 				Some(func(Box::new(label)))
+			},
+			GraphicSelectableItemRef::Probe(probe_index) => {
+				let mut probes = self.probes.borrow_mut();
+				if probes.len() > probe_index {
+					Some(func(Box::new(&mut probes[probe_index])))
+				}
+				else {
+					None
+				}
 			}
 		}
 	}
@@ -3010,6 +3119,15 @@ impl LogicCircuit {
 				let labels = self.labels.borrow();
 				let label = labels.get(&label_id)?;
 				Some(label.copy())
+			},
+			GraphicSelectableItemRef::Probe(probe_index) => {
+				let mut probes = self.probes.borrow_mut();
+				if probes.len() > probe_index {
+					Some(probes[probe_index].copy())
+				}
+				else {
+					None
+				}
 			}
 		}
 	}
@@ -3037,6 +3155,9 @@ impl LogicCircuit {
 		}
 		for id in self.labels.borrow().keys() {
 			out.push(GraphicSelectableItemRef::GraphicLabel(*id));
+		}
+		for i in 0..self.probes.borrow().len() {
+			out.push(GraphicSelectableItemRef::Probe(i));
 		}
 		out
 	}
@@ -3216,7 +3337,8 @@ impl LogicCircuit {
 			fixed_sub_cycles_opt: self.fixed_sub_cycles_opt,
 			clock_enabled: clock.enabled,
 			clock_freq: clock.freq,
-			clock_state: clock.state
+			clock_state: clock.state,
+			probes: self.probes.borrow().iter().map(|probe| probe.save()).collect()
 		})
 	}
 	pub fn save_circuit(&self) -> Result<(), String> {
@@ -3294,6 +3416,67 @@ impl LogicDevice for LogicCircuit {
 		Ok(EnumAllLogicDevices::SubCircuit(self.save_path.clone(), self.displayed_as_block, self.get_ui_data().position, self.get_ui_data().direction, self.generic_device.name.clone()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+		if self.is_toplevel {
+			let mouse_pos_grid_opt: Option<V2> = match draw.mouse_pos {
+				Some(pos_px) => Some(draw.mouse_pos2_to_grid(pos_px)),
+				None => None
+			};
+			match self.tool.borrow().deref() {
+				Tool::Select{selected_graphics, selected_graphics_state} => {
+					match selected_graphics_state {
+						SelectionState::Fixed => {},
+						SelectionState::Dragging(start_grid, delta_grid) => {
+							if selected_graphics.is_empty() {
+								let select_bb: (V2, V2) = merge_points_to_bb(vec![*start_grid, *start_grid + *delta_grid]);
+								draw.draw_rect(*start_grid, *start_grid + *delta_grid, draw.styles.select_rect_color, draw.styles.select_rect_edge_color);
+							}
+						},
+						SelectionState::FollowingMouse(mouse_pos) => {}
+					}
+					// Draw selected items BB
+					if selected_graphics.len() >= 1 {
+						let mut points = Vec::<V2>::new();
+						for item_ref in selected_graphics.iter() {
+							self.run_function_on_graphic_item(item_ref.clone(), |graphic_item| {
+								let new_bb = graphic_item.bounding_box(V2::zeros());
+								points.push(new_bb.0);
+								points.push(new_bb.1);
+							});
+						}
+						let bb = merge_points_to_bb(points);
+						draw.draw_rect(bb.0, bb.1, [0, 0, 0, 0], draw.styles.select_rect_edge_color);
+					}
+				},
+				Tool::HighlightNet(_net_id) => {
+					// TODO
+				},
+				Tool::PlaceWire{perp_pairs} => {
+					if let Some(mouse_pos_grid) = mouse_pos_grid_opt {
+						let mouse_pos_grid_rounded: IntV2 = round_v2_to_intv2(mouse_pos_grid);
+						let n_pairs = perp_pairs.len();
+						// Wire has been started
+						if n_pairs >= 1 {
+							// Display in-progress wire
+							for (i, pair) in perp_pairs.iter().enumerate() {
+								let end_pos = if i == perp_pairs.len() - 1 {
+									mouse_pos_grid_rounded
+								}
+								else {
+									perp_pairs[i+1].0
+								};
+								let segments = Wire::perpindicular_pair_to_segments(pair, end_pos);
+								for segment in segments {
+									draw.draw_polyline(vec![
+										segment.0.to_v2(),
+										segment.0.to_v2() + (segment.1.to_unit() * (segment.2 as f32))
+									], draw.styles.color_wire_in_progress);
+								}
+							}
+						}
+					}
+				}
+			}
+		}
 		if self.displayed_as_block {
 			self.draw_as_block(draw, false);
 		}

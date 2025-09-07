@@ -53,7 +53,9 @@ pub struct LogicCircuitSave {
 	#[serde(default)]
 	pub clock_freq: f32,
 	#[serde(default)]
-	pub clock_state: bool
+	pub clock_state: bool,
+	#[serde(default)]
+	pub probes: Vec<ProbeSave>
 }
 
 mod restore_old_files {
@@ -121,7 +123,8 @@ mod restore_old_files {
 				fixed_sub_cycles_opt: self.fixed_sub_cycles_opt,
 				clock_enabled: false,
 				clock_freq: 1.0,
-				clock_state: false
+				clock_state: false,
+				probes: Vec::new()
 			}
 		}
 	}

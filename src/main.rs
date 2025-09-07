@@ -26,7 +26,7 @@ pub mod prelude {
 	pub type V2 = Vector2<f32>;
 	use eframe::egui::{Align2, Color32, CornerRadius};
 	pub use ui::{Styles, LogicCircuitToplevelView, App, ComponentDrawInfo, GraphicSelectableItem, SelectProperty, UIData, CopiedGraphicItem, CopiedItemSet};
-	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, GraphicPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection, LogicDeviceSave, GraphicLabel, GraphicLabelSave, Splitter, SplitterSave};
+	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, GraphicPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection, LogicDeviceSave, GraphicLabel, GraphicLabelSave, Splitter, SplitterSave, Probe, ProbeSave};
 	pub use resource_interface::{load_file_with_better_error, EnumAllLogicDevices};
 	pub use circuit_net_computation::BitWidthError;
 	pub fn u8_3_to_color32(in_: [u8; 3]) -> Color32 {
