@@ -1,5 +1,5 @@
 use crate::{builtin_components, prelude::*, resource_interface, simulator::{AncestryStack, GraphicSelectableItemRef, SelectionState, Tool}};
-use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, Color32, DragValue, FontFamily, FontId, Frame, Galley, InputState, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2}, emath, epaint::{PathStroke, TextShape}};
+use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, Color32, DragValue, FontFamily, FontId, Frame, Galley, InputState, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2, Window}, emath, epaint::{PathStroke, TextShape}};
 use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
 use serde_json;
@@ -607,7 +607,7 @@ impl LogicCircuitToplevelView {
 	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles, screen_top_left: Pos2) -> (Option<Pos2>, Option<String>) {
 		let mut return_new_mouse_pos = Option::<Pos2>::None;
 		let mut return_new_circuit_tab = Option::<String>::None;
-		let canvas_size = ui.available_size_before_wrap();
+		let canvas_size: Vec2 = ui.available_size_before_wrap();
 		let anything_in_focus: bool = ui.memory(|memory| memory.focused().is_some());
 		let inner_response = Frame::canvas(ui.style()).show::<(Vec2, V2)>(ui, |ui| {
 			let propagate = true;// TODO: Change to false when rest of logic is implemented
@@ -866,6 +866,12 @@ impl LogicCircuitToplevelView {
 					ui.colored_label(u8_3_to_color32([255, 0, 0]), flatten_error);
 				}
 			});
+		}
+		else {
+			/*Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
+				ScrollArea::both().show(ui, self.)
+			});*/
+			Window::new("Timing Diagram").anchor(Align2::RIGHT_TOP, Vec2::new(0.0, inner_response.response.rect.top())).collapsible(true).show(ui.ctx(), |ui| self.circuit.show_timing_diagram_ui(ui, styles));
 		}
 		(return_new_mouse_pos, return_new_circuit_tab)
 	}

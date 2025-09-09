@@ -4,9 +4,10 @@ use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default
 use serde::{Deserialize, Serialize};
 use crate::{prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
-use eframe::egui::{self, response::Response, Align2, Key, KeyboardShortcut, Modifiers, PointerButton, Pos2};
+use eframe::egui::{self, response::Response, Align2, Key, KeyboardShortcut, Modifiers, PointerButton, Pos2, ScrollArea, Vec2};
 use arboard;
 use common_macros::hash_map;
+use eframe::egui::{Ui, Sense, Stroke};
 
 fn logic_device_to_graphic_item(x: &dyn LogicDevice) -> &dyn GraphicSelectableItem {
 	x
@@ -1232,8 +1233,9 @@ pub enum WireConnection {
 pub struct Probe {
 	ui_data: UIData,
 	name: String,
-	nets_opt: Option<Vec<u64>>,
+	nets_opt: Vec<Option<u64>>,
 	states: Vec<LogicState>,
+	/// Wrt grid
 	text_len: f32
 }
 
@@ -1242,7 +1244,7 @@ impl Probe {
 		Self {
 			ui_data: UIData::new(save.0, save.1, Self::get_bb(save.3)),
 			name: save.2,
-			nets_opt: None,
+			nets_opt: vec![None],
 			states: vec![LogicState::Floating],
 			text_len: save.3
 		}
@@ -1674,7 +1676,7 @@ pub enum GraphicSelectableItemRef {
 	Pin(u64),
 	Splitter(u64),
 	GraphicLabel(u64),
-	Probe(usize)
+	Probe(u64)
 }
 
 #[derive(Debug, Clone)]
@@ -1722,8 +1724,9 @@ impl Default for Clock {
 
 #[derive(Debug, Clone, Default)]
 pub struct TimingDiagram {
-	/// List of samples, each sample contains list of propagation steps, each propagation step conains list of sources, each source may be 1 or more individual bits
-	pub samples: Vec<Vec<Vec<Vec<LogicState>>>>,
+	/// List of signal groups and corresponding probe IDs (CLK probe ID is ignored and set to 0), each signal group contains list of signals (one signal per bit width of probe), each signal contains list of samples
+	pub signal_groups: Vec<(u64, Vec<Vec<LogicState>>)>,
+	pub n_samples: usize,
 	pub running: TimingTiagramRunningState
 }
 
@@ -1825,7 +1828,7 @@ pub struct LogicCircuit {
 	self_reload_err_opt: Option<String>,
 	pub clock: RefCell<Clock>,
 	/// Timing diagram probes
-	pub probes: RefCell<Vec<Probe>>,
+	pub probes: RefCell<HashMap<u64, Probe>>,
 	pub timing: RefCell<TimingDiagram>
 }
 
@@ -1871,7 +1874,7 @@ impl LogicCircuit {
 			fixed_sub_cycles_opt,
 			self_reload_err_opt: None,
 			clock: RefCell::new(Clock::default()),
-			probes: RefCell::new(Vec::new()),
+			probes: RefCell::new(HashMap::new()),
 			timing: RefCell::new(TimingDiagram::default())
 		};
 		new.setup_external_connection_sources();
@@ -1940,7 +1943,7 @@ impl LogicCircuit {
 			fixed_sub_cycles_opt: save.fixed_sub_cycles_opt,
 			self_reload_err_opt: None,
 			clock: RefCell::new(Clock::load(save.clock_enabled, save.clock_freq, save.clock_state)),
-			probes: RefCell::new(save.probes.into_iter().map(|save| Probe::load(save)).collect()),
+			probes: RefCell::new(HashMap::from_iter(save.probes.into_iter().map(|(id, save)| (id, Probe::load(save))))),
 			timing: RefCell::new(TimingDiagram::default())
 		};
 		out.setup_external_connection_sources();
@@ -2226,6 +2229,63 @@ impl LogicCircuit {
 		}
 		return_recompute_connections
 	}
+	pub fn show_timing_diagram_ui(&self, ui: &mut Ui, styles: &Styles) {
+		ScrollArea::vertical().show(ui, |ui| {
+			ui.horizontal(|ui| {
+				// Labels
+				let mut label_y_positions = Vec::<f32>::new();
+				ui.vertical(|ui| {
+					label_y_positions.push(ui.label("CLK").rect.top());
+					for (_, probe) in self.probes.borrow().iter() {
+						label_y_positions.push(ui.label(&probe.name).rect.top());
+					}
+				});
+				// Signals
+				let timing = self.timing.borrow();
+				let amplitude: f32 = 10.0;
+				let wavelength: f32 = 40.0;
+				let logic_state_to_graph_y_and_color = |state: LogicState| -> (f32, [u8; 3]) {
+					match state {
+						LogicState::Floating => (0.0, styles.color_wire_floating),
+						LogicState::Contested => (0.0, styles.color_wire_contested),
+						LogicState::Driven(bit) => match bit {
+							true => (amplitude, styles.color_foreground),
+							false => (-amplitude, styles.color_foreground)
+						}
+					}
+				};
+				if timing.n_samples > 0 {
+					ScrollArea::horizontal().show(ui, |ui| {
+						for (i, signal_group) in timing.signal_groups.iter().enumerate() {
+							let (response, painter) = ui.allocate_painter(Vec2::new(0.0, 20.0), Sense::empty());
+							let rect = response.rect;
+							// Iterate signal samples
+							let mut prev_sample: Vec<LogicState> = signal_group.iter().map(|signal| signal[0]).collect();
+							for sample_i in 0..timing.n_samples {
+								let current_sample: Vec<LogicState> = signal_group.iter().map(|signal| signal[sample_i]).collect();
+								let sample_i_f32: f32 = sample_i as f32;
+								if current_sample.len() == 1 {
+									let (current_y, color) = logic_state_to_graph_y_and_color(current_sample[0]);
+									let stroke = Stroke::new(1.0, u8_3_to_color32(color));
+									if prev_sample[0] != current_sample[0] {// Vertical connection line of states are different
+										let (prev_y, _) = logic_state_to_graph_y_and_color(prev_sample[0]);
+										painter.line_segment([Pos2::new(sample_i_f32*wavelength, prev_y), Pos2::new(sample_i_f32*wavelength, current_y)], stroke);
+									}
+									painter.line_segment([Pos2::new(sample_i_f32*wavelength, current_y), Pos2::new((sample_i_f32+1.0)*wavelength, current_y)], stroke);
+								}
+								else {
+									
+								}
+								prev_sample = current_sample;
+							}
+						}
+					});
+				}
+			});
+		});
+		//ui.label("Timing diagram TODO aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+		// Signal description labels
+	}
 	pub fn paste(&self, item_set: CopiedItemSet) -> Vec<GraphicSelectableItemRef> {
 		let mut out = Vec::<GraphicSelectableItemRef>::new();
 		for pasted_item in item_set.items {
@@ -2283,8 +2343,9 @@ impl LogicCircuit {
 	}
 	pub fn insert_probe(&self, probe: ProbeSave) -> GraphicSelectableItemRef {
 		let mut probes = self.probes.borrow_mut();
-		probes.push(Probe::load(probe));
-		GraphicSelectableItemRef::Probe(probes.len() - 1)
+		let new_id = lowest_unused_key(&probes);
+		probes.insert(new_id, Probe::load(probe));
+		GraphicSelectableItemRef::Probe(new_id)
 	}
 	pub fn set_graphic_item_following_mouse(&self, item_ref: GraphicSelectableItemRef) {
 		*self.tool.borrow_mut() = Tool::Select{
@@ -2485,6 +2546,8 @@ impl LogicCircuit {
 		self.merge_consecutive_wires();
 		// Compute nets, has to be done after all geometry and connection fixes
 		self.recompute_nets();// TODO Use result
+		// Logic probes
+		self.update_probe_net_connections();
 		// Last net computation setep
 		self.update_logical_pin_to_wire_connections();
 		// Recompute BB for circuit internals
@@ -2698,6 +2761,12 @@ impl LogicCircuit {
 					}
 				});
 			}
+		}
+	}
+	fn update_probe_net_connections(&self) {
+		let mut probes = self.probes.borrow_mut();
+		for probe in probes.values_mut() {
+			probe.nets_opt = self.is_connection_point(probe.ui_data.position).1;
 		}
 	}
 	/// Almost last step in recomputing circuit connections after the circuit is edited
@@ -2966,16 +3035,7 @@ impl LogicCircuit {
 			GraphicSelectableItemRef::Pin(pin_id) => self.generic_device.graphic_pins.borrow_mut().remove(pin_id).is_some(),
 			GraphicSelectableItemRef::Splitter(splitter_id) => self.splitters.borrow_mut().remove(splitter_id).is_some(),
 			GraphicSelectableItemRef::GraphicLabel(label_id) => self.labels.borrow_mut().remove(label_id).is_some(),
-			GraphicSelectableItemRef::Probe(probe_index) => {
-				let mut probes = self.probes.borrow_mut();
-				if probes.len() > *probe_index {
-					probes.remove(*probe_index);
-					true
-				}
-				else {
-					false
-				}
-			}
+			GraphicSelectableItemRef::Probe(probe_index) => self.labels.borrow_mut().remove(probe_index).is_some()
 		}
 	}
 	/*pub fn run_function_on_graphic_item<T>(&self, ref_: GraphicSelectableItemRef, mut func: impl FnMut(Box<&dyn GraphicSelectableItem>) -> T) -> Option<T> {
@@ -3035,14 +3095,10 @@ impl LogicCircuit {
 				let label = labels.get(&label_id)?;
 				Some(func(Box::new(label)))
 			},
-			GraphicSelectableItemRef::Probe(probe_index) => {
+			GraphicSelectableItemRef::Probe(probe_id) => {
 				let probes = self.probes.borrow();
-				if probes.len() > probe_index {
-					Some(func(Box::new(&probes[probe_index])))
-				}
-				else {
-					None
-				}
+				let probe = probes.get(&probe_id)?;
+				Some(func(Box::new(probe)))
 			}
 		}
 	}
@@ -3080,14 +3136,10 @@ impl LogicCircuit {
 				let label = labels.get_mut(&label_id)?;
 				Some(func(Box::new(label)))
 			},
-			GraphicSelectableItemRef::Probe(probe_index) => {
+			GraphicSelectableItemRef::Probe(probe_id) => {
 				let mut probes = self.probes.borrow_mut();
-				if probes.len() > probe_index {
-					Some(func(Box::new(&mut probes[probe_index])))
-				}
-				else {
-					None
-				}
+				let probe = probes.get_mut(&probe_id)?;
+				Some(func(Box::new(probe)))
 			}
 		}
 	}
@@ -3120,14 +3172,10 @@ impl LogicCircuit {
 				let label = labels.get(&label_id)?;
 				Some(label.copy())
 			},
-			GraphicSelectableItemRef::Probe(probe_index) => {
-				let mut probes = self.probes.borrow_mut();
-				if probes.len() > probe_index {
-					Some(probes[probe_index].copy())
-				}
-				else {
-					None
-				}
+			GraphicSelectableItemRef::Probe(probe_id) => {
+				let probes = self.probes.borrow();
+				let probe = probes.get(&probe_id)?;
+				Some(probe.copy())
 			}
 		}
 	}
@@ -3156,8 +3204,8 @@ impl LogicCircuit {
 		for id in self.labels.borrow().keys() {
 			out.push(GraphicSelectableItemRef::GraphicLabel(*id));
 		}
-		for i in 0..self.probes.borrow().len() {
-			out.push(GraphicSelectableItemRef::Probe(i));
+		for id in self.probes.borrow().keys() {
+			out.push(GraphicSelectableItemRef::Probe(*id));
 		}
 		out
 	}
@@ -3297,6 +3345,13 @@ impl LogicCircuit {
 				comp_cell.borrow_mut().compute(&ancestors, *comp_id, clock_state, first_propagation_step);
 			}
 		}
+		// If not changed, update timing diagram
+		let mut timing = self.timing.borrow_mut();
+		let probes = self.probes.borrow();
+		timing.signal_groups[0].1[0].push(clock_state.into());
+		for (probe_id, group) in &timing.signal_groups {
+			// TODO
+		}
 		// Done
 		changed
 	}
@@ -3338,7 +3393,7 @@ impl LogicCircuit {
 			clock_enabled: clock.enabled,
 			clock_freq: clock.freq,
 			clock_state: clock.state,
-			probes: self.probes.borrow().iter().map(|probe| probe.save()).collect()
+			probes: HashMap::from_iter(self.probes.borrow().iter().map(|(id, probe)| (*id, probe.save())))
 		})
 	}
 	pub fn save_circuit(&self) -> Result<(), String> {
