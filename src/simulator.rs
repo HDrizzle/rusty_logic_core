@@ -1,13 +1,13 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::{self, Default}, fmt::Debug, fs, ops::{Deref, DerefMut}, rc::Rc, time::{Duration, Instant}};
+use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::{self, Default}, fmt::Debug, fs, ops::{Deref, DerefMut, RangeInclusive}, rc::Rc, time::{Duration, Instant}};
 use serde::{Deserialize, Serialize};
 use crate::{prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
-use eframe::egui::{self, response::Response, Align2, Key, KeyboardShortcut, Modifiers, PointerButton, Pos2, ScrollArea, Vec2};
+use eframe::egui::{self, response::Response, Align2, DragValue, Key, KeyboardShortcut, Modifiers, PointerButton, Pos2, ScrollArea, Vec2};
 use arboard;
 use common_macros::hash_map;
-use eframe::egui::{Ui, Sense, Stroke};
+use eframe::egui::{Ui, Sense, Stroke, Frame};
 
 fn logic_device_to_graphic_item(x: &dyn LogicDevice) -> &dyn GraphicSelectableItem {
 	x
@@ -1722,12 +1722,24 @@ impl Default for Clock {
 	}
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TimingDiagram {
 	/// List of signal groups and corresponding probe IDs (CLK probe ID is ignored and set to 0), each signal group contains list of signals (one signal per bit width of probe), each signal contains list of samples
 	pub signal_groups: Vec<(u64, Vec<Vec<LogicState>>)>,
 	pub n_samples: usize,
-	pub running: TimingTiagramRunningState
+	pub running: TimingTiagramRunningState,
+	pub time_resolution_px: usize
+}
+
+impl Default for TimingDiagram {
+	fn default() -> Self {
+		Self {
+			signal_groups: vec![],
+			n_samples: 0,
+			running: TimingTiagramRunningState::Clk,
+			time_resolution_px: 40,
+		}
+	}
 }
 
 /// Manual control or whenever the clock is running
@@ -2230,6 +2242,17 @@ impl LogicCircuit {
 		return_recompute_connections
 	}
 	pub fn show_timing_diagram_ui(&self, ui: &mut Ui, styles: &Styles) {
+		ui.horizontal(|ui| {
+			let mut timing = self.timing.borrow_mut();
+			if ui.button("Clear").clicked() {
+				timing.n_samples = 0;
+				for (_, ref mut signal_group) in &mut timing.signal_groups {
+					*signal_group = (0..signal_group.len()).map(|_| vec![]).collect();
+				}
+			}
+			ui.label("Resolution:");
+			ui.add(DragValue::new(&mut timing.time_resolution_px).clamp_existing_to_range(true).range(RangeInclusive::new(5, 100)));
+		});
 		ScrollArea::vertical().show(ui, |ui| {
 			ui.horizontal(|ui| {
 				// Labels
@@ -2243,42 +2266,50 @@ impl LogicCircuit {
 				// Signals
 				let timing = self.timing.borrow();
 				let amplitude: f32 = 10.0;
-				let wavelength: f32 = 40.0;
-				let logic_state_to_graph_y_and_color = |state: LogicState| -> (f32, [u8; 3]) {
-					match state {
-						LogicState::Floating => (0.0, styles.color_wire_floating),
-						LogicState::Contested => (0.0, styles.color_wire_contested),
-						LogicState::Driven(bit) => match bit {
-							true => (amplitude, styles.color_foreground),
-							false => (-amplitude, styles.color_foreground)
-						}
-					}
-				};
+				let vert_spacing: f32 = 25.0;
+				let wavelength = timing.time_resolution_px as f32;
 				if timing.n_samples > 0 {
 					ScrollArea::horizontal().show(ui, |ui| {
-						for (i, signal_group) in timing.signal_groups.iter().enumerate() {
-							let (response, painter) = ui.allocate_painter(Vec2::new(0.0, 20.0), Sense::empty());
-							let rect = response.rect;
-							// Iterate signal samples
-							let mut prev_sample: Vec<LogicState> = signal_group.iter().map(|signal| signal[0]).collect();
-							for sample_i in 0..timing.n_samples {
-								let current_sample: Vec<LogicState> = signal_group.iter().map(|signal| signal[sample_i]).collect();
-								let sample_i_f32: f32 = sample_i as f32;
-								if current_sample.len() == 1 {
-									let (current_y, color) = logic_state_to_graph_y_and_color(current_sample[0]);
-									let stroke = Stroke::new(1.0, u8_3_to_color32(color));
-									if prev_sample[0] != current_sample[0] {// Vertical connection line of states are different
-										let (prev_y, _) = logic_state_to_graph_y_and_color(prev_sample[0]);
-										painter.line_segment([Pos2::new(sample_i_f32*wavelength, prev_y), Pos2::new(sample_i_f32*wavelength, current_y)], stroke);
+						Frame::canvas(ui.style()).show::<()>(ui, |ui| {
+							let canvas_size = Vec2::new(timing.n_samples as f32 * wavelength + 4.0, timing.signal_groups.len() as f32 * vert_spacing);
+							let (response, painter) = ui.allocate_painter(canvas_size, Sense::empty());
+							let logic_state_to_graph_y_and_color = |state: LogicState| -> (f32, [u8; 3]) {
+								match state {
+									LogicState::Floating => (0.0, styles.color_wire_floating),
+									LogicState::Contested => (0.0, styles.color_wire_contested),
+									LogicState::Driven(bit) => match bit {
+										true => (amplitude, styles.color_foreground),
+										false => (-amplitude, styles.color_foreground)
 									}
-									painter.line_segment([Pos2::new(sample_i_f32*wavelength, current_y), Pos2::new((sample_i_f32+1.0)*wavelength, current_y)], stroke);
 								}
-								else {
-									
+							};
+							let graph_pos_to_canvas_pos = |graph_x: f32, graph_y: f32, group_i: usize| -> Pos2 {
+								Pos2::new(graph_x + response.rect.left() + 2.0, (-graph_y) + (group_i as f32 + 0.5)*vert_spacing + response.rect.top())
+							};
+							for (group_i, (_, signal_group)) in timing.signal_groups.iter().enumerate() {
+								//let (response, painter) = ui.allocate_painter(Vec2::new(0.0, 20.0), Sense::empty());
+								// Iterate signal samples
+								let mut prev_sample: Vec<LogicState> = signal_group.iter().map(|signal| signal[0]).collect();
+								for sample_i in 0..timing.n_samples {
+									let current_sample: Vec<LogicState> = signal_group.iter().map(|signal| signal[sample_i]).collect();
+									let sample_i_f32: f32 = sample_i as f32;
+									assert!(current_sample.len() > 0, "Signal group must have at least one bit");
+									if current_sample.len() == 1 {
+										let (current_y, color) = logic_state_to_graph_y_and_color(current_sample[0]);
+										let stroke = Stroke::new(1.0, u8_3_to_color32(color));
+										if prev_sample[0] != current_sample[0] {// Vertical connection line if states are different
+											let (prev_y, _) = logic_state_to_graph_y_and_color(prev_sample[0]);
+											painter.line_segment([graph_pos_to_canvas_pos(sample_i_f32*wavelength, prev_y, group_i), graph_pos_to_canvas_pos(sample_i_f32*wavelength, current_y, group_i)], stroke);
+										}
+										painter.line_segment([graph_pos_to_canvas_pos(sample_i_f32*wavelength, current_y, group_i), graph_pos_to_canvas_pos((sample_i_f32+1.0)*wavelength, current_y, group_i)], stroke);
+									}
+									else {
+										// TODO
+									}
+									prev_sample = current_sample;
 								}
-								prev_sample = current_sample;
 							}
-						}
+						});
 					});
 				}
 			});
@@ -2547,7 +2578,7 @@ impl LogicCircuit {
 		// Compute nets, has to be done after all geometry and connection fixes
 		self.recompute_nets();// TODO Use result
 		// Logic probes
-		self.update_probe_net_connections();
+		self.update_probe_net_connections_and_timing();
 		// Last net computation setep
 		self.update_logical_pin_to_wire_connections();
 		// Recompute BB for circuit internals
@@ -2763,10 +2794,52 @@ impl LogicCircuit {
 			}
 		}
 	}
-	fn update_probe_net_connections(&self) {
+	fn update_probe_net_connections_and_timing(&self) {
 		let mut probes = self.probes.borrow_mut();
 		for probe in probes.values_mut() {
 			probe.nets_opt = self.is_connection_point(probe.ui_data.position).1;
+		}
+		// Now update timing diagram to match
+		let mut timing = self.timing.borrow_mut();
+		let n_samples = timing.n_samples;
+		// Check clock
+		if timing.signal_groups.len() == 0 {
+			timing.signal_groups = vec![(0, vec![vec![]])];
+		}
+		// Add new probes
+		let mut probes_in_use = HashSet::<u64>::new();
+		let _ = timing.signal_groups.iter().enumerate().map(|(group_i, (probe_id, _))| {
+			if group_i > 0 {// Ignore clock
+				probes_in_use.insert(*probe_id);
+			}
+		});
+		for probe_id in probes.keys() {
+			if !probes_in_use.contains(probe_id) {
+				timing.signal_groups.push((*probe_id, vec![(0..n_samples).into_iter().map(|_| LogicState::Floating).collect()]));
+			}
+		}
+		// Set timing signal group bit widths according to probes and remove them if the probe is gone
+		let mut i: usize = 1;// Ignore first signal group which is the clock
+		while i < timing.signal_groups.len() {
+			let (probe_id, ref mut signal_group) = &mut timing.signal_groups[i];
+			if let Some(probe) = probes.get(probe_id) {
+				let diff: isize = probe.nets_opt.len() as isize - (signal_group.len() as isize);
+				if diff > 0 {// Probe has more bits than corresponding signal group, make a new one filled with floating states
+					for _ in 0..diff {
+						signal_group.push((0..n_samples).into_iter().map(|_| LogicState::Floating).collect());
+					}
+				}
+				if diff < 0 {
+					for _ in 0..(-diff) {
+						signal_group.pop();
+					}
+				}
+			}
+			else {// There is no probe corresponding to this group, so delete it
+				timing.signal_groups.remove(i);
+				i -= 1;
+			}
+			i += 1;
 		}
 	}
 	/// Almost last step in recomputing circuit connections after the circuit is edited
@@ -3035,7 +3108,7 @@ impl LogicCircuit {
 			GraphicSelectableItemRef::Pin(pin_id) => self.generic_device.graphic_pins.borrow_mut().remove(pin_id).is_some(),
 			GraphicSelectableItemRef::Splitter(splitter_id) => self.splitters.borrow_mut().remove(splitter_id).is_some(),
 			GraphicSelectableItemRef::GraphicLabel(label_id) => self.labels.borrow_mut().remove(label_id).is_some(),
-			GraphicSelectableItemRef::Probe(probe_index) => self.labels.borrow_mut().remove(probe_index).is_some()
+			GraphicSelectableItemRef::Probe(probe_index) => self.probes.borrow_mut().remove(probe_index).is_some()
 		}
 	}
 	/*pub fn run_function_on_graphic_item<T>(&self, ref_: GraphicSelectableItemRef, mut func: impl FnMut(Box<&dyn GraphicSelectableItem>) -> T) -> Option<T> {
@@ -3345,15 +3418,27 @@ impl LogicCircuit {
 				comp_cell.borrow_mut().compute(&ancestors, *comp_id, clock_state, first_propagation_step);
 			}
 		}
-		// If not changed, update timing diagram
-		let mut timing = self.timing.borrow_mut();
-		let probes = self.probes.borrow();
-		timing.signal_groups[0].1[0].push(clock_state.into());
-		for (probe_id, group) in &timing.signal_groups {
-			// TODO
-		}
 		// Done
 		changed
+	}
+	pub fn update_timing_diagram(&self) {
+		let mut timing = self.timing.borrow_mut();
+		let probes = self.probes.borrow();
+		let nets = self.nets.borrow();
+		timing.signal_groups[0].1[0].push(self.clock.borrow().state.into());
+		for (group_i, (probe_id, group)) in &mut timing.signal_groups.iter_mut().enumerate() {
+			if group_i == 0 {// Clock signal
+				continue;
+			}
+			let probe_net_ids = &probes.get(probe_id).unwrap().nets_opt;
+			for (i, net_opt) in probe_net_ids.iter().enumerate() {
+				group[i].push(match net_opt {
+					Some(net_id) => nets.get(net_id).unwrap().borrow().state,
+					None => LogicState::Floating
+				});
+			}
+		}
+		timing.n_samples += 1;
 	}
 	pub fn create_save_circuit(&self) -> Result<LogicCircuitSave, String> {
 		// Convert components to enum variants to be serialized

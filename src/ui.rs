@@ -681,7 +681,7 @@ impl LogicCircuitToplevelView {
 			(canvas_size, rect_center)
 		});
 		// Top: general controls
-		Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::LEFT_TOP, child: Align2::LEFT_TOP}).id("top-left controls".into()).show(|ui| {
+		Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::RIGHT_TOP, child: Align2::RIGHT_TOP}).id("top-left controls".into()).show(|ui| {
 			if ui.button("Save").clicked() {
 				self.circuit.save_circuit().unwrap();
 				self.saved = true;
@@ -871,16 +871,18 @@ impl LogicCircuitToplevelView {
 			/*Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
 				ScrollArea::both().show(ui, self.)
 			});*/
-			Window::new("Timing Diagram").anchor(Align2::RIGHT_TOP, Vec2::new(0.0, inner_response.response.rect.top())).collapsible(true).show(ui.ctx(), |ui| self.circuit.show_timing_diagram_ui(ui, styles));
+			Window::new("Timing Diagram").anchor(Align2::LEFT_TOP, Vec2::new(0.0, inner_response.response.rect.top())).collapsible(true).resizable(true).show(ui.ctx(), |ui| self.circuit.show_timing_diagram_ui(ui, styles));
 		}
 		(return_new_mouse_pos, return_new_circuit_tab)
 	}
 	/// Runs `compute_step()` repeatedly on the circuit until there are no changes, there must be a limit because there are circuits (ex. NOT gate connected to itself) where this would otherwise never end
 	pub fn propagate_until_stable(&mut self, propagation_limit: usize) -> bool {
 		let mut count: usize = 0;
-		// TODO: keep track of state
 		while count < propagation_limit {
 			if !self.circuit.compute_immutable(&AncestryStack::new(), 0, count == 0) {
+				if count > 0 {
+					self.circuit.update_timing_diagram();
+				}
 				self.frame_compute_cycles = count;
 				return false;
 			}
