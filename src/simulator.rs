@@ -1,10 +1,10 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::{self, Default}, fmt::Debug, fs, ops::{Deref, DerefMut, RangeInclusive}, rc::Rc, time::{Duration, Instant}};
+use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut, RangeInclusive}, rc::Rc, time::{Duration, Instant}};
 use serde::{Deserialize, Serialize};
 use crate::{prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
-use eframe::egui::{self, response::Response, Align2, DragValue, Key, KeyboardShortcut, Modifiers, PointerButton, Pos2, ScrollArea, Vec2};
+use eframe::egui::{self, response::Response, Align2, DragValue, Key, KeyboardShortcut, Label, Modifiers, PointerButton, Pos2, Rect, ScrollArea, Vec2, Widget};
 use arboard;
 use common_macros::hash_map;
 use eframe::egui::{Ui, Sense, Stroke, Frame};
@@ -1234,7 +1234,6 @@ pub struct Probe {
 	ui_data: UIData,
 	name: String,
 	nets_opt: Vec<Option<u64>>,
-	states: Vec<LogicState>,
 	/// Wrt grid
 	text_len: f32
 }
@@ -1245,7 +1244,6 @@ impl Probe {
 			ui_data: UIData::new(save.0, save.1, Self::get_bb(save.3)),
 			name: save.2,
 			nets_opt: vec![None],
-			states: vec![LogicState::Floating],
 			text_len: save.3
 		}
 	}
@@ -1266,21 +1264,28 @@ impl GraphicSelectableItem for Probe {
 	}
 	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
-		let text_length: f32 = draw.text_size(self.name.clone(), 1.5).x;
+		let text_length: f32 = draw.text_size(self.name.clone(), 1.0).x;
+		let half_height: f32 = 0.7;
 		draw.draw_polyline(
 			vec![
 				V2::new(0.0, 0.0),
 				V2::new(1.0, 0.0),
-				V2::new(2.0, -1.0),
-				V2::new(2.0 + text_length, -1.0),
-				V2::new(3.0 + text_length, 0.0),
-				V2::new(2.0 + text_length, 1.0),
-				V2::new(2.0, 1.0),
+				V2::new(1.0 + half_height, -half_height),
+				V2::new(1.0 + text_length + half_height, -half_height),
+				V2::new(1.0 + text_length + half_height*2.0, 0.0),
+				V2::new(1.0 + text_length + half_height, half_height),
+				V2::new(1.0 + half_height, half_height),
 				V2::new(1.0, 0.0),
 			],
 			draw.styles.color_foreground
 		);
-		draw.text(self.name.clone(), V2::new(2.0 + text_length/2.0, 0.0), Align2::CENTER_CENTER, draw.styles.text_color, 1.5, !self.ui_data.direction.is_horizontal());
+		let probe_text_start: f32 = match draw.direction {
+			FourWayDir::E => text_length/2.0,
+			FourWayDir::N => text_length,
+			FourWayDir::W => text_length/2.0,
+			FourWayDir::S =>0.0
+		};
+		draw.text(self.name.clone(), V2::new(1.0 + half_height + probe_text_start, 0.0), Align2::CENTER_CENTER, draw.styles.text_color, 1.0, !self.ui_data.direction.is_horizontal());
 	}
 	fn get_properties(&self) -> Vec<SelectProperty> {
 		vec![
@@ -1727,17 +1732,15 @@ pub struct TimingDiagram {
 	/// List of signal groups and corresponding probe IDs (CLK probe ID is ignored and set to 0), each signal group contains list of signals (one signal per bit width of probe), each signal contains list of samples
 	pub signal_groups: Vec<(u64, Vec<Vec<LogicState>>)>,
 	pub n_samples: usize,
-	pub running: TimingTiagramRunningState,
-	pub time_resolution_px: usize
+	pub running: TimingTiagramRunningState
 }
 
-impl Default for TimingDiagram {
-	fn default() -> Self {
+impl TimingDiagram {
+	pub fn from_probe_id_list(probes: Vec<u64>) -> Self {
 		Self {
-			signal_groups: vec![],
+			signal_groups: vec![0_u64].into_iter().chain(probes.into_iter()).map(|probe_id| (probe_id, vec![vec![]])).collect(),
 			n_samples: 0,
-			running: TimingTiagramRunningState::Clk,
-			time_resolution_px: 40,
+			running: TimingTiagramRunningState::Clk
 		}
 	}
 }
@@ -1887,7 +1890,7 @@ impl LogicCircuit {
 			self_reload_err_opt: None,
 			clock: RefCell::new(Clock::default()),
 			probes: RefCell::new(HashMap::new()),
-			timing: RefCell::new(TimingDiagram::default())
+			timing: RefCell::new(TimingDiagram::from_probe_id_list(Vec::new()))
 		};
 		new.setup_external_connection_sources();
 		new.recompute_default_layout();
@@ -1938,6 +1941,8 @@ impl LogicCircuit {
 			displayed_as_block,
 			true
 		);
+		let probes = HashMap::from_iter(save.probes.into_iter().map(|(id, save)| (id, Probe::load(save))));
+		let timing: TimingDiagram = TimingDiagram::from_probe_id_list(save.timing_probe_order);
 		let mut out = Self {
 			generic_device: generic_device,
 			components: RefCell::new(components),
@@ -1955,8 +1960,8 @@ impl LogicCircuit {
 			fixed_sub_cycles_opt: save.fixed_sub_cycles_opt,
 			self_reload_err_opt: None,
 			clock: RefCell::new(Clock::load(save.clock_enabled, save.clock_freq, save.clock_state)),
-			probes: RefCell::new(HashMap::from_iter(save.probes.into_iter().map(|(id, save)| (id, Probe::load(save))))),
-			timing: RefCell::new(TimingDiagram::default())
+			probes: RefCell::new(probes),
+			timing: RefCell::new(timing)
 		};
 		out.setup_external_connection_sources();
 		out.check_wire_geometry_and_connections();
@@ -2241,7 +2246,7 @@ impl LogicCircuit {
 		}
 		return_recompute_connections
 	}
-	pub fn show_timing_diagram_ui(&self, ui: &mut Ui, styles: &Styles) {
+	pub fn show_timing_diagram_ui(&self, ui: &mut Ui, styles: &mut Styles) {
 		ui.horizontal(|ui| {
 			let mut timing = self.timing.borrow_mut();
 			if ui.button("Clear").clicked() {
@@ -2251,25 +2256,37 @@ impl LogicCircuit {
 				}
 			}
 			ui.label("Resolution:");
-			ui.add(DragValue::new(&mut timing.time_resolution_px).clamp_existing_to_range(true).range(RangeInclusive::new(5, 100)));
+			ui.add(DragValue::new(&mut styles.timing_diagram_resolution_px).clamp_existing_to_range(true).range(RangeInclusive::new(5, 100)));
 		});
+		let timing = self.timing.borrow();
 		ScrollArea::vertical().show(ui, |ui| {
 			ui.horizontal(|ui| {
+				let mut amplitude: f32 = 10.0;
+				let mut vert_spacing: f32 = 25.0;
 				// Labels
-				let mut label_y_positions = Vec::<f32>::new();
+				let vert_widget_extra_spacing = ui.style().spacing.item_spacing.y;
 				ui.vertical(|ui| {
-					label_y_positions.push(ui.label("CLK").rect.top());
-					for (_, probe) in self.probes.borrow().iter() {
-						label_y_positions.push(ui.label(&probe.name).rect.top());
+					ui.add_space(8.0);
+					let height = ui.label("CLK").rect.height() + vert_widget_extra_spacing;
+					if height > vert_spacing {
+						let r = height / vert_spacing;
+						vert_spacing /= r;
+						amplitude /= r;
+					}
+					ui.add_space(vert_spacing - height);
+					let probes = self.probes.borrow();
+					for (i, (probe_id, _)) in timing.signal_groups.iter().enumerate() {
+						if i == 0 {
+							continue;
+						}
+						let height = ui.label(&probes.get(probe_id).unwrap().name).rect.height() + vert_widget_extra_spacing;
+						ui.add_space(vert_spacing - height);
 					}
 				});
 				// Signals
-				let timing = self.timing.borrow();
-				let amplitude: f32 = 10.0;
-				let vert_spacing: f32 = 25.0;
-				let wavelength = timing.time_resolution_px as f32;
+				let wavelength = styles.timing_diagram_resolution_px as f32;
 				if timing.n_samples > 0 {
-					ScrollArea::horizontal().show(ui, |ui| {
+					ScrollArea::horizontal().stick_to_right(true).show(ui, |ui| {
 						Frame::canvas(ui.style()).show::<()>(ui, |ui| {
 							let canvas_size = Vec2::new(timing.n_samples as f32 * wavelength + 4.0, timing.signal_groups.len() as f32 * vert_spacing);
 							let (response, painter) = ui.allocate_painter(canvas_size, Sense::empty());
@@ -2731,13 +2748,6 @@ impl LogicCircuit {
 			}
 		}
 	}
-	fn remove_net_connections(&self) {
-		let nets = self.nets.borrow();
-		for (_, net_cell) in nets.iter() {
-			let mut net = net_cell.borrow_mut();
-			net.connections = Vec::new();
-		}
-	}
 	/// Almost last step in recomputing circuit connections after the circuit is edited
 	/// If any pins (component or external) touch any wire, update the pin's net to the wire's net
 	/// Also make sure pins not touching have no connection
@@ -2808,11 +2818,11 @@ impl LogicCircuit {
 		}
 		// Add new probes
 		let mut probes_in_use = HashSet::<u64>::new();
-		let _ = timing.signal_groups.iter().enumerate().map(|(group_i, (probe_id, _))| {
+		for (group_i, (probe_id, _)) in timing.signal_groups.iter().enumerate() {
 			if group_i > 0 {// Ignore clock
 				probes_in_use.insert(*probe_id);
 			}
-		});
+		}
 		for probe_id in probes.keys() {
 			if !probes_in_use.contains(probe_id) {
 				timing.signal_groups.push((*probe_id, vec![(0..n_samples).into_iter().map(|_| LogicState::Floating).collect()]));
@@ -3478,7 +3488,8 @@ impl LogicCircuit {
 			clock_enabled: clock.enabled,
 			clock_freq: clock.freq,
 			clock_state: clock.state,
-			probes: HashMap::from_iter(self.probes.borrow().iter().map(|(id, probe)| (*id, probe.save())))
+			probes: HashMap::from_iter(self.probes.borrow().iter().map(|(id, probe)| (*id, probe.save()))),
+			timing_probe_order: self.timing.borrow().signal_groups.iter().enumerate().filter(|(i, _)| *i > 0).map(|(_, (probe_id, _))| *probe_id).collect()
 		})
 	}
 	pub fn save_circuit(&self) -> Result<(), String> {

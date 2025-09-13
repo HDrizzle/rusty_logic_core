@@ -55,7 +55,9 @@ pub struct LogicCircuitSave {
 	#[serde(default)]
 	pub clock_state: bool,
 	#[serde(default)]
-	pub probes: HashMap<u64, ProbeSave>
+	pub probes: HashMap<u64, ProbeSave>,
+	#[serde(default)]
+	pub timing_probe_order: Vec<u64>
 }
 
 mod restore_old_files {
@@ -124,7 +126,8 @@ mod restore_old_files {
 				clock_enabled: false,
 				clock_freq: 1.0,
 				clock_state: false,
-				probes: HashMap::new()
+				probes: HashMap::new(),
+				timing_probe_order: Vec::new()
 			}
 		}
 	}

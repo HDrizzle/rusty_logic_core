@@ -1,5 +1,5 @@
 use crate::{builtin_components, prelude::*, resource_interface, simulator::{AncestryStack, GraphicSelectableItemRef, SelectionState, Tool}};
-use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, Color32, DragValue, FontFamily, FontId, Frame, Galley, InputState, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2, Window}, emath, epaint::{PathStroke, TextShape}};
+use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, Color32, DragValue, FontFamily, FontId, Frame, Galley, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2, Window}, emath, epaint::{PathStroke, TextShape}};
 use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
 use serde_json;
@@ -31,7 +31,8 @@ pub struct Styles {
 	pub color_wire_in_progress: [u8; 3],
 	pub text_size_grid: f32,
 	pub text_color: [u8; 3],
-	pub wire_start_point_outline_color: [u8; 3]
+	pub wire_start_point_outline_color: [u8; 3],
+	pub timing_diagram_resolution_px: usize
 }
 
 impl Styles {
@@ -83,8 +84,8 @@ impl Default for Styles {
 			min_grid_size: 1.0,
 			max_grid_size: 1000.0,
 			grid_scale_factor: 1.012,
-			line_size_grid: 0.3,
-			connection_dot_grid_size: 0.5,
+			line_size_grid: 0.15,
+			connection_dot_grid_size: 0.3,
 			color_wire_floating: [128, 128, 128],
 			color_wire_contested: [255, 0, 0],
 			color_wire_low: [0, 0, 255],
@@ -98,7 +99,8 @@ impl Default for Styles {
 			color_wire_in_progress: [2, 156, 99],
 			text_size_grid: 0.9,
 			text_color: [243, 118, 252],
-			wire_start_point_outline_color: [93, 252, 167]
+			wire_start_point_outline_color: [93, 252, 167],
+			timing_diagram_resolution_px: 20
 		}
 	}
 }
@@ -604,7 +606,7 @@ impl LogicCircuitToplevelView {
 		}
 	}
 	/// Returns: (Optional position to set the mouse to, Optional new circuit tab to open)
-	pub fn draw(&mut self, ui: &mut Ui, styles: &Styles, screen_top_left: Pos2) -> (Option<Pos2>, Option<String>) {
+	pub fn draw(&mut self, ui: &mut Ui, styles: &mut Styles, screen_top_left: Pos2) -> (Option<Pos2>, Option<String>) {
 		let mut return_new_mouse_pos = Option::<Pos2>::None;
 		let mut return_new_circuit_tab = Option::<String>::None;
 		let canvas_size: Vec2 = ui.available_size_before_wrap();
@@ -681,7 +683,7 @@ impl LogicCircuitToplevelView {
 			(canvas_size, rect_center)
 		});
 		// Top: general controls
-		Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::RIGHT_TOP, child: Align2::RIGHT_TOP}).id("top-left controls".into()).show(|ui| {
+		Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::LEFT_TOP, child: Align2::LEFT_TOP}).id("top-left controls".into()).show(|ui| {
 			if ui.button("Save").clicked() {
 				self.circuit.save_circuit().unwrap();
 				self.saved = true;
@@ -871,7 +873,7 @@ impl LogicCircuitToplevelView {
 			/*Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
 				ScrollArea::both().show(ui, self.)
 			});*/
-			Window::new("Timing Diagram").anchor(Align2::LEFT_TOP, Vec2::new(0.0, inner_response.response.rect.top())).collapsible(true).resizable(true).show(ui.ctx(), |ui| self.circuit.show_timing_diagram_ui(ui, styles));
+			Window::new("Timing Diagram").anchor(Align2::RIGHT_TOP, Vec2::new(0.0, inner_response.response.rect.top())).collapsible(true).resizable(true).show(ui.ctx(), |ui| self.circuit.show_timing_diagram_ui(ui, styles));
 		}
 		(return_new_mouse_pos, return_new_circuit_tab)
 	}
@@ -1080,7 +1082,7 @@ impl eframe::App for App {
 			}
 			else {
 				let circuit_toplevel: &mut LogicCircuitToplevelView = &mut self.circuit_tabs[self.current_tab_index - 1];
-				let (new_mouse_pos_opt, new_circuit_tab_opt): (Option<Pos2>, Option<String>) = circuit_toplevel.draw(ui, &self.styles, ctx.screen_rect().min);// TODO: Get actual window top-left position
+				let (new_mouse_pos_opt, new_circuit_tab_opt): (Option<Pos2>, Option<String>) = circuit_toplevel.draw(ui, &mut self.styles, ctx.screen_rect().min);// TODO: Get actual window top-left position
 				if let Some(new_pos) = new_mouse_pos_opt {
 					let mouse = mouse_rs::Mouse::new();
 					mouse.move_to(new_pos.x as i32, new_pos.y as i32).unwrap();
