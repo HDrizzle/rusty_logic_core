@@ -1,5 +1,6 @@
 use crate::{builtin_components, prelude::*, resource_interface, simulator::{AncestryStack, GraphicSelectableItemRef, SelectionState, Tool}};
 use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, Color32, DragValue, FontFamily, FontId, Frame, Galley, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2, Window}, emath, epaint::{PathStroke, TextShape}};
+use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
 use serde_json;
@@ -977,7 +978,8 @@ pub struct App {
 	current_tab_index: usize,
 	new_circuit_name: String,
 	new_circuit_path: String,
-	load_circuit_err_opt: Option<String>
+	load_circuit_err_opt: Option<String>,
+	readme_file: String
 }
 
 impl App {
@@ -996,7 +998,8 @@ impl App {
 			current_tab_index: 0,
 			new_circuit_name: String::new(),
 			new_circuit_path: String::new(),
-			load_circuit_err_opt: None
+			load_circuit_err_opt: None,
+			readme_file: resource_interface::load_file_with_better_error("README.md").unwrap()
 		}
 	}
 	fn load_circuit_tab(&mut self, file_path: &str) {
@@ -1078,7 +1081,11 @@ impl eframe::App for App {
 				});
 			});
 			if self.current_tab_index == 0 {// Home tab
-				ui.label("Rusty logic");
+				ui.vertical(|ui| {
+					ScrollArea::vertical().show(ui, |ui| {
+						CommonMarkViewer::new().show(ui, &mut CommonMarkCache::default(), &self.readme_file);
+					});
+				});
 			}
 			else {
 				let circuit_toplevel: &mut LogicCircuitToplevelView = &mut self.circuit_tabs[self.current_tab_index - 1];
