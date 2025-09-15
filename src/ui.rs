@@ -530,7 +530,6 @@ impl<'a> ComponentDrawInfo<'a> {
 		emath_vec2_to_v2(galley.size()) / self.grid_size
 	}
 	pub fn grid_to_px(&self, grid: V2) -> egui::Pos2 {
-		// TODO
 		let nalgebra_v2 = ((self.direction.rotate_v2(grid) + self.offset_grid.to_v2() - self.screen_center_wrt_grid) * self.grid_size) + self.rect_center;
 		if cfg!(feature = "reverse_y") {
 			egui::Pos2{x: nalgebra_v2.x, y: self.rect_size_px.y - nalgebra_v2.y}
@@ -546,7 +545,6 @@ impl<'a> ComponentDrawInfo<'a> {
 		let mouse_pos = V2::new(mouse_pos_y_backwards.x, rect_size_px.y - mouse_pos_y_backwards.y);
 		#[cfg(not(feature = "reverse_y"))]
 		let mouse_pos = emath_pos2_to_v2(mouse_pos_y_backwards);
-		// TODO
 		direction.rotate_v2_reverse(((mouse_pos - rect_center) / grid_size) - offset_grid.to_v2()) + screen_center_wrt_grid
 	}
 	/// `offset_unrotated` is wrt parent coordinates, dir_ is the direction of the local coordinates of whatever this new drawer is being created for

@@ -142,8 +142,8 @@ impl LogicCircuit {
 										if !wires.contains_key(other_wire_id) {
 											continue;
 										}
-										// TODO: Remove this check once no problems are found
-										let other_wire_bw: u16 = if other_wire_id == base_wire_id {
+										// Remove this check once no problems are found
+										/*let other_wire_bw: u16 = if other_wire_id == base_wire_id {
 											wire.bit_width()
 										}
 										else {
@@ -152,7 +152,7 @@ impl LogicCircuit {
 										if bit_index >= other_wire_bw {
 											// Wire ID=17 BW=1 connected to another wire ID=16 BW=1. Bit index=7
 											panic!("Wire ID={} BW={} connected to another wire ID={} BW={}. Bit index={}", base_wire_id, wire.bit_width(), other_wire_id, other_wire_bw, bit_index);
-										}
+										}*/
 										bits_to_explore.push(ConductorBit::Wire(*other_wire_id, bit_index));
 									},
 									WireConnection::Splitter(splitter_id, pin_i) => {
@@ -173,8 +173,8 @@ impl LogicCircuit {
 							if let Some(base_conns) = &splitter.base_connections_opt {
 								for conn in base_conns.borrow().iter() {
 									if let WireConnection::Wire(other_wire_id) = conn {
-										// TODO: Remove this check once no problems are found
-										let wire_bw: u16 = if other_wire_id == base_wire_id {
+										// Remove this check once no problems are found
+										/*let wire_bw: u16 = if other_wire_id == base_wire_id {
 											wire.bit_width()
 										}
 										else {
@@ -182,7 +182,7 @@ impl LogicCircuit {
 										};
 										if splitter_bit_index >= wire_bw {
 											panic!("Splitter (ID={}) matched with wire ID={} which has a bit width of {}. The spliiter's base has as a bit index of {}", splitter_id, other_wire_id, wire_bw, splitter_bit_index);
-										}
+										}*/
 										bits_to_explore.push(ConductorBit::Wire(*other_wire_id, splitter_bit_index));
 									}
 								}
@@ -205,8 +205,8 @@ impl LogicCircuit {
 								if let Some(split_conns_cell) = split_conns_opt {
 									for conn in split_conns_cell.borrow().iter() {
 										if let WireConnection::Wire(other_wire_id) = conn {
-											// TODO: Remove this check once no problems are found
-											let wire_bw: u16 = if other_wire_id == base_wire_id {
+											// Remove this check once no problems are found
+											/*let wire_bw: u16 = if other_wire_id == base_wire_id {
 												wire.bit_width()
 											}
 											else {
@@ -214,7 +214,7 @@ impl LogicCircuit {
 											};
 											if wire_bit_index >= wire_bw {
 												panic!("Splitter (ID={}) matched with wire ID={} which has a bit width of {}. The spliiter pin #{} has as a bit index of {}", splitter_id, other_wire_id, wire_bw, pin_i, wire_bit_index);
-											}
+											}*/
 											// The wire connected to this pin receives the local wire_bit_index.
 											bits_to_explore.push(ConductorBit::Wire(*other_wire_id, wire_bit_index));
 										}

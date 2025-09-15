@@ -431,11 +431,12 @@ impl GraphicPin {
 		name: String,
 		show_name: bool
 	) -> Self {
+		let bw: usize = owned_pins.len();
 		Self {
 			component_all_logic_pins,
 			owned_pins,
 			length,
-			ui_data: UIData::new(relative_end_grid, direction, (V2::new(1.0, -1.0), V2::new(3.0, 1.0))),
+			ui_data: UIData::new(relative_end_grid, direction, Self::get_local_bb(bw as u16)),
 			name,
 			show_name,
 			wire_connections: Some(Rc::new(RefCell::new(HashSet::new())))
@@ -475,6 +476,9 @@ impl GraphicPin {
 		else {
 			styles.color_from_logic_states(&self.states())
 		}
+	}
+	fn get_local_bb(bw: u16) -> (V2, V2) {
+		(V2::new(1.0, -1.0), V2::new(1.0 + (bw as f32 * 2.0), 1.0))
 	}
 }
 
@@ -540,6 +544,7 @@ impl GraphicSelectableItem for GraphicPin {
 		match property {
 			SelectProperty::BitWidth(bit_width) => {
 				assert!(bit_width > 0, "Bit width cannot be 0");
+				self.ui_data.local_bb = Self::get_local_bb(bit_width);
 				let diff: isize = bit_width as isize - (self.owned_pins.len() as isize);
 				if diff > 0 {
 					// Add logic pins
@@ -584,21 +589,28 @@ impl GraphicSelectableItem for GraphicPin {
 	fn copy(&self) -> CopiedGraphicItem {
 		CopiedGraphicItem::ExternalConnection(self.ui_data.position, self.ui_data.direction, self.name.clone(), self.show_name, self.owned_pins.len() as u16)
 	}
-	// TODO
-	/*fn accept_click(&mut self, local_pos: V2) -> bool {
-		match self.external_source.clone().expect("Pin being used as a graphic item must have an external source") {
-			LogicConnectionPinExternalSource::Global => {
-				if self.external_state.is_valid() {
-					self.external_state = (!self.external_state.to_bool()).into();
-					true
-				}
-				else {
-					false
-				}
-			},
-			LogicConnectionPinExternalSource::Net(_) => panic!("Pin being used as a graphic item cannot hav eexternal net source")
+	fn accept_click(&mut self, local_pos: V2) -> bool {
+		let bit_index = ((local_pos.x - 1.0) / 2.0) as isize;
+		if bit_index > 0 && bit_index < self.owned_pins.len() as isize {
+			let comp_pins = self.component_all_logic_pins.borrow();
+			let mut pin_mut = comp_pins.get(&self.owned_pins[bit_index as usize]).unwrap().borrow_mut();
+			match pin_mut.external_source.clone().expect("Pin being used as a graphic item must have an external source") {
+				LogicConnectionPinExternalSource::Global => {
+					if pin_mut.external_state.is_valid() {
+						pin_mut.external_state = (!pin_mut.external_state.to_bool()).into();
+						true
+					}
+					else {
+						false
+					}
+				},
+				LogicConnectionPinExternalSource::Net(_) => panic!("Pin being used as a graphic item cannot have external net source")
+			}
 		}
-	}*/
+		else {
+			false
+		}
+	}
 }
 
 /// Custom implementation to get rid of logic pins owned by this graphic pin
@@ -812,7 +824,6 @@ impl Splitter {
 			self.splits[pin as usize - 1].0
 		}
 	}
-	// TODO
 	/// gets this splitters bit index (logical) from graphical split and logical bit index of a wire connected to that graphical split
 	pub fn get_bit_index_from_pin_i_and_wire_bit_index(&self, pin_i: u16, wire_bit_index: u16) -> u16 {
 		if pin_i == 0 {
@@ -829,7 +840,6 @@ impl Splitter {
 		}
 		panic!("Splitter::get_bit_index_from_split_and_wire_index() given too large split index")
 	}
-	// TODO
 	/// the bit index of a wire connected to a split connection
 	pub fn get_wire_bit_index_from_pin_i_and_bit_index(&self, pin_i: u16, splitter_bit_index: u16) -> u16 {
 		if pin_i == 0 {
@@ -971,7 +981,6 @@ impl GraphicSelectableItem for Splitter {
 		}
 		return false;
 	}*/
-	// TODO
 	fn get_properties(&self) -> Vec<SelectProperty> {
 		vec![
 			SelectProperty::BitWidth(self.bit_width),
@@ -984,8 +993,28 @@ impl GraphicSelectableItem for Splitter {
 	fn set_property(&mut self, property: SelectProperty) {
 		match property {
 			SelectProperty::BitWidth(bit_width) => {
+				let diff = bit_width as i16 - (self.bit_width as i16);
 				self.bit_width = bit_width;
-				// TODO
+				if diff > 0 {
+					for _ in 0..diff {
+						self.splits.push((0, None));
+					}
+				}
+				if diff < 0 {
+					let mut removed_count: i16 = 0;
+					let mut curr_split_index = self.splits.len() - 1;
+					// Haley & Ethan </3
+					while removed_count < (-diff) {
+						if self.splits[curr_split_index].0 == 1 {
+							self.splits.pop();
+							curr_split_index -= 1;
+						}
+						else {
+							self.splits[curr_split_index].0 -= 1;
+						}
+						removed_count += 1;
+					}
+				}
 			},
 			SelectProperty::PositionX(x) => {
 				self.ui_data.position.0 = x;
@@ -1343,17 +1372,6 @@ pub struct LogicDeviceGeneric {
 }
 
 impl LogicDeviceGeneric {
-	// Might not be used
-	/*pub fn new(
-		graphic_pin_config: HashMap<u64, (IntV2, FourWayDir, f32, String, bool)>,
-		bounding_box: (V2, V2),
-		show_name: bool,
-		// {Graphic pin ID: number of logic pins associated with it}
-		logic_bus_pins_opt: Option<HashMap<u64, u16>>
-	) -> Self {
-		// TODO
-		Self::load(LogicDeviceSave::default(), graphic_pin_config, bounding_box, show_name)
-	}*/
 	pub fn load(
 		save: LogicDeviceSave,
 		graphic_pin_config: HashMap<u64, (IntV2, FourWayDir, f32, String, bool, Vec<u64>)>,
@@ -1862,7 +1880,7 @@ impl LogicCircuit {
 		for (ref_, comp) in components_not_celled.into_iter() {
 			components.insert(ref_, RefCell::new(comp));
 		}
-		let mut graphic_pin_config = HashMap::<u64, (IntV2, FourWayDir, f32, String, bool, Vec<u64>)>::new();// TODO
+		let mut graphic_pin_config = HashMap::<u64, (IntV2, FourWayDir, f32, String, bool, Vec<u64>)>::new();
 		for (i, config) in external_graphic_pin_config.into_iter().enumerate() {
 			graphic_pin_config.insert(i as u64, (config.0, config.1, config.2, config.3, true, vec![i as u64]));
 		}
@@ -2331,8 +2349,6 @@ impl LogicCircuit {
 				}
 			});
 		});
-		//ui.label("Timing diagram TODO aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-		// Signal description labels
 	}
 	pub fn paste(&self, item_set: CopiedItemSet) -> Vec<GraphicSelectableItemRef> {
 		let mut out = Vec::<GraphicSelectableItemRef>::new();
@@ -2368,7 +2384,7 @@ impl LogicCircuit {
 			owned_pins.push(new_logic_pin_id);
 			logic_pins.insert(new_logic_pin_id, RefCell::new(LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global))));
 		}
-		graphic_pins.insert(new_pin_id, GraphicPin::new(Rc::clone(&self.generic_device.logic_pins), owned_pins, pos, dir, 1.0, name, show_name));// TODO
+		graphic_pins.insert(new_pin_id, GraphicPin::new(Rc::clone(&self.generic_device.logic_pins), owned_pins, pos, dir, 1.0, name, show_name));
 		new_pin_id
 	}
 	pub fn insert_component(&self, comp_save: &EnumAllLogicDevices) -> GraphicSelectableItemRef {
@@ -3373,11 +3389,6 @@ impl LogicCircuit {
 			net_mut_ref.sources = sources;
 		}
 		// Update pin & wire states from nets
-		// Wires, TODO
-		/*for (wire_id, wire_cell) in self.wires.borrow_mut().iter_mut() {
-			let net_id = wire_cell.borrow().net;
-			wire_cell.borrow_mut().state = self.nets.borrow().get(&net_id).expect(&format!("Wire {} has invalid net ID {}", wire_id, net_id)).borrow().state;
-		}*/
 		// External connection pins
 		for (pin_id, pin_cell) in self.generic_device.logic_pins.borrow_mut().iter_mut() {
 			let int_source_opt = pin_cell.borrow().internal_source.clone();
