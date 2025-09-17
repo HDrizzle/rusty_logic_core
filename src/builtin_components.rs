@@ -33,7 +33,7 @@ struct BlockLayoutHelper {
 	/// 	Name (before numbering if more than 1 pin),
 	/// 	Whether to group them all into a multi-bit-width pin,
 	/// 	Whether to list pins in order of whatever axis they are along, false means backwards,
-	/// 	Starting position
+	/// 	Starting position, ALONG SIDE GOING CCW, NOT ALONG AXIS
 	/// )>
 	pin_groups: Vec<(
 		FourWayDir,
@@ -45,7 +45,7 @@ struct BlockLayoutHelper {
 		i32
 	)>,
 	/// Logical pin ID for given group name and index
-	group_logical_pins: HashMap<(String, u16), u64>,
+	pub group_logical_pins: HashMap<(String, u16), u64>,
 	/// Box to be drawn, pins will be 1 unit away from edges
 	bb: (IntV2, IntV2),
 	/// Map group name to index of `self.pin_groups`
@@ -70,6 +70,8 @@ impl BlockLayoutHelper {
 		min_size_v: IntV2
 	) -> Self {
 		// Build pin groups from static config and save state
+		// When I wrote this only me and god knew how it worked. Now only god knows.
+		// Vec<(Pin dir, Margin, Bit width, Name, Group, List in order)>
 		let pin_groups: Vec<(FourWayDir, u32, u16, String, bool, bool)> = pin_groups_static.into_iter().enumerate().map(|(i, t)| {
 			let (group, forward) = if i < layout_save.0.len() {
 				layout_save.0[i]
@@ -82,21 +84,18 @@ impl BlockLayoutHelper {
 		// Split pin groups by side/direction
 		let mut current_logic_pin_id: u64 = 0;
 		let mut group_logical_pins = HashMap::<(String, u16), u64>::new();
+		// HashMap<Pin dir, (Margin, Bit width, Name, Group, List in order)>
 		let mut groups_per_side = HashMap::<FourWayDir, Vec<(u32, u16, String, bool, bool)>>::new();
-		let mut names_to_pin_groups: HashMap<String, usize> = HashMap::new();
 		for (i, group) in pin_groups.into_iter().enumerate() {
-			let group_name = group.3.clone();
-			if names_to_pin_groups.contains_key(&group_name) {
-				panic!("Layout pin group name \"{}\" used at least twice", &group_name);
-			}
-			names_to_pin_groups.insert(group_name, i);
 			let group_wo_dir = (group.1, group.2, group.3.clone(), group.4, group.5);
+			// If this is is the first pin group in its direction, create new hashmap entry, otherwise add it to the existing hashmap entry
 			if let Some(v) = groups_per_side.get_mut(&group.0) {
 				v.push(group_wo_dir);
 			}
 			else {
 				groups_per_side.insert(group.0, vec![group_wo_dir]);
 			}
+			// Loop bit width
 			for group_i in 0..group.2 {
 				group_logical_pins.insert((group.3.clone(), group_i), current_logic_pin_id);
 				current_logic_pin_id += 1;
@@ -105,16 +104,26 @@ impl BlockLayoutHelper {
 		// Get pin group starting positions
 		let mut groups_with_start_positions = Vec::<(FourWayDir, u32, u16, String, bool, bool, i32)>::new();
 		let mut side_sizes = HashMap::<FourWayDir, i32>::new();
+		let mut names_to_pin_groups: HashMap<String, usize> = HashMap::new();
 		for (side, side_groups) in groups_per_side {
 			let mut size: i32 = 0;
 			let mut current_margin: i32 = 1;
-			for group in &side_groups {
+			for (i, group) in side_groups.iter().enumerate() {
 				// Set margin if bigger then previous
-				if group.0  as i32 > current_margin {
+				if group.0 as i32 > current_margin {
 					current_margin = group.0 as i32;
 				}
+				/*if i == side_groups.len() - 1 {
+					current_margin = 1;
+				}*/
 				// Add margin
 				size += current_margin;
+				// Group name
+				let group_name = group.2.clone();
+				if names_to_pin_groups.contains_key(&group_name) {
+					panic!("Layout pin group name \"{}\" used at least twice", &group_name);
+				}
+				names_to_pin_groups.insert(group_name, groups_with_start_positions.len());
 				// Record group's starting position
 				groups_with_start_positions.push((side, group.0, group.1, group.2.clone(), group.3, group.4, size));
 				// Add group width (n-1), only if expanded
@@ -153,10 +162,27 @@ impl BlockLayoutHelper {
 			};
 			let side_start: i32 = -size/2;
 			for side_group in &mut groups_with_start_positions {
+				// Only modify group if its facing the right way
 				if side_group.0 == dir0 || side_group.0 == dir1 {
 					side_group.6 += side_start;
-					if side_group.5 {// Reverse
-						side_group.6 += (side_group.2 as i32 - 1);
+					// Reverse if direction goes against axis
+					if side_group.0 == FourWayDir::N || side_group.0 == FourWayDir::W {
+						if size % 2 == 1 {
+							side_group.6 -= 1
+						}
+					}
+					// Center on side
+					if side_group.0 == dir0 {
+						let diff = (size - size0) / 2;
+						side_group.6 += diff;
+					}
+					if side_group.0 == dir1 {
+						let diff = (size - size1) / 2;
+						side_group.6 += diff;
+					}
+					// Normal reverse
+					if side_group.5 {
+						side_group.6 += side_group.1 as i32 - 1;
 					}
 				}
 			}
@@ -174,7 +200,7 @@ impl BlockLayoutHelper {
 		let mut out = HashMap::<u64, (IntV2, FourWayDir, f32, String, bool, Vec<u64>)>::new();
 		let mut graphic_pin_id: u64 = 0;
 		for group in &self.pin_groups {
-			let first_pin_pos = group.0.rotate_intv2(IntV2(self.get_bb_half_width(group.0) + 1, group.6));
+			let first_pin_pos = group.0.rotate_intv2(IntV2(self.get_bb_half_width(group.0) + 1, group.6));// + 1 because pin starts 1 away from bounding box
 			if group.4 {// Group to single graphic pin
 				out.insert(graphic_pin_id, (
 					first_pin_pos,
@@ -182,7 +208,7 @@ impl BlockLayoutHelper {
 					1.0,
 					group.3.clone(),
 					true,
-					(graphic_pin_id..(graphic_pin_id + (group.2 as u64))).collect()
+					(0..group.2).into_iter().map(|bit_i| -> u64 {*self.group_logical_pins.get(&(group.3.clone(), bit_i)).unwrap()}).into_iter().collect()
 				));
 				graphic_pin_id += group.2 as u64 + 1;
 			}
@@ -194,7 +220,7 @@ impl BlockLayoutHelper {
 						1.0,
 						format!("{}{}", &group.3,group_i),
 						true,
-						vec![graphic_pin_id]
+						vec![*self.group_logical_pins.get(&(group.3.clone(), group_i)).unwrap()]
 					));
 					graphic_pin_id += 1;
 				}
@@ -235,7 +261,7 @@ impl BlockLayoutHelper {
 	}
 }
 
-/// Vec<(Whether to use a single graphic pin, Whether to list pins in order along whatever axis their side is on)>
+/// Vec<(Whether to group (use a single graphic pin), Whether to list pins in order along whatever axis their side is on)>
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BusLayoutSave(Vec<(bool, bool)>);
 
@@ -1144,7 +1170,7 @@ impl Adder {
 				(FourWayDir::N, 1, 1, "Cin".to_owned()),
 				(FourWayDir::S, 1, 1, "Cout".to_owned()),
 			],
-			IntV2(3, 3)
+			IntV2(4, 4)
 		);
 		Self{
 			generic: LogicDeviceGeneric::load(
@@ -1167,8 +1193,16 @@ impl LogicDevice for Adder {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, ancestors: &AncestryStack, self_component_id: u64, clock_state: bool, first_propagation_step: bool) {
-		// TODO
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _self_component_id: u64, _clock_state: bool, _first_propagation_step: bool) {
+		let mut carry = self.get_pin_state_panic(self.layout.group_logical_pins[&("Cin".to_owned(), 0)]).to_bool();
+		for i in 0..self.bits {
+			let a = self.get_pin_state_panic(self.layout.group_logical_pins[&("A".to_owned(), i)]).to_bool();
+			let b = self.get_pin_state_panic(self.layout.group_logical_pins[&("B".to_owned(), i)]).to_bool();
+			let sum: bool = (a ^ b) ^ carry;
+			self.set_pin_internal_state_panic(self.layout.group_logical_pins[&("C".to_owned(), i)], sum.into());
+			carry = (a & b) | ((a ^ b) & carry);
+		}
+		self.set_pin_internal_state_panic(self.layout.group_logical_pins[&("Cout".to_owned(), 0)], carry.into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::Adder(self.generic.save(), self.layout.save(), self.bits))

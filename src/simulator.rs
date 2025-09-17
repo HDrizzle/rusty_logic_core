@@ -591,7 +591,7 @@ impl GraphicSelectableItem for GraphicPin {
 	}
 	fn accept_click(&mut self, local_pos: V2) -> bool {
 		let bit_index = ((local_pos.x - 1.0) / 2.0) as isize;
-		if bit_index > 0 && bit_index < self.owned_pins.len() as isize {
+		if bit_index >= 0 && bit_index < self.owned_pins.len() as isize {
 			let comp_pins = self.component_all_logic_pins.borrow();
 			let mut pin_mut = comp_pins.get(&self.owned_pins[bit_index as usize]).unwrap().borrow_mut();
 			match pin_mut.external_source.clone().expect("Pin being used as a graphic item must have an external source") {
