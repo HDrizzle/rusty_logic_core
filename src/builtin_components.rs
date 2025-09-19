@@ -1,5 +1,5 @@
 use crate::{prelude::*, simulator::{graphic_pin_config_from_single_pins, AncestryStack}};
-use eframe::egui::Ui;
+use eframe::egui::{Align2, Ui};
 use common_macros::hash_map;
 use std::{collections::HashMap, cell::RefCell, rc::Rc};
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,8 @@ pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
 		EncoderOrDecoder::new().save().unwrap(),
 		Memory::new().save().unwrap(),
 		TriStateBuffer::new().save().unwrap(),
-		Adder::new().save().unwrap()
+		Adder::new().save().unwrap(),
+		DLatch::new().save().unwrap()
 	]
 }
 
@@ -84,7 +85,7 @@ impl BlockLayoutHelper {
 		// Split pin groups by side/direction
 		let mut current_logic_pin_id: u64 = 0;
 		let mut group_logical_pins = HashMap::<(String, u16), u64>::new();
-		// HashMap<Pin dir, (Margin, Bit width, Name, Group, List in order)>
+		// HashMap<Pin dir, (Margin, Bit width, Name, Group, Forward)>
 		let mut groups_per_side = HashMap::<FourWayDir, Vec<(u32, u16, String, bool, bool)>>::new();
 		for (i, group) in pin_groups.into_iter().enumerate() {
 			let group_wo_dir = (group.1, group.2, group.3.clone(), group.4, group.5);
@@ -113,9 +114,9 @@ impl BlockLayoutHelper {
 				if group.0 as i32 > current_margin {
 					current_margin = group.0 as i32;
 				}
-				/*if i == side_groups.len() - 1 {
+				if i == 0 {
 					current_margin = 1;
-				}*/
+				}
 				// Add margin
 				size += current_margin;
 				// Group name
@@ -181,8 +182,8 @@ impl BlockLayoutHelper {
 						side_group.6 += diff;
 					}
 					// Normal reverse
-					if side_group.5 {
-						side_group.6 += side_group.1 as i32 - 1;
+					if side_group.5 && !side_group.4 {
+						side_group.6 += side_group.2 as i32 - 1;
 					}
 				}
 			}
@@ -214,8 +215,12 @@ impl BlockLayoutHelper {
 			}
 			else {
 				for group_i in 0..group.2 {
+					let group_i_possible_reverse: i32 = match group.5 {
+						true => -(group_i as i32),
+						false => group_i as i32
+					};
 					out.insert(graphic_pin_id, (
-						first_pin_pos + group.0.rotate_intv2(IntV2(0, group_i as i32)),
+						first_pin_pos + group.0.rotate_intv2(IntV2(0, group_i_possible_reverse)),
 						group.0,
 						1.0,
 						format!("{}{}", &group.3,group_i),
@@ -1164,15 +1169,15 @@ impl Adder {
 		let layout = BlockLayoutHelper::load(
 			layout_save,
 			vec![
-				(FourWayDir::W, 1, bits, "A".to_owned()),
-				(FourWayDir::W, 1, bits, "B".to_owned()),
+				(FourWayDir::W, 2, bits, "A".to_owned()),
+				(FourWayDir::W, 2, bits, "B".to_owned()),
 				(FourWayDir::E, 1, bits, "C".to_owned()),
 				(FourWayDir::N, 1, 1, "Cin".to_owned()),
 				(FourWayDir::S, 1, 1, "Cout".to_owned()),
 			],
 			IntV2(4, 4)
 		);
-		Self{
+		let mut out = Self{
 			generic: LogicDeviceGeneric::load(
 				save,
 				layout.pin_config(),
@@ -1182,7 +1187,13 @@ impl Adder {
 			),
 			bits,
 			layout
+		};
+		for i in 0..out.bits {
+			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("A".to_owned(), i)).unwrap(), LogicState::Floating);
+			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("B".to_owned(), i)).unwrap(), LogicState::Floating);
 		}
+		out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("Cin".to_owned(), 0)).unwrap(), LogicState::Floating);
+		out
 	}
 }
 
@@ -1208,7 +1219,7 @@ impl LogicDevice for Adder {
 		Ok(EnumAllLogicDevices::Adder(self.generic.save(), self.layout.save(), self.bits))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
-		// TODO
+		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles.color_foreground);
 	}
 	fn get_bit_width(&self) -> Option<u16> {
 		Some(self.bits)
@@ -1221,5 +1232,152 @@ impl LogicDevice for Adder {
 	}
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		self.layout.set_property(property);
+		*self = Self::from_save(self.generic.save(), self.layout.save(), self.bits)
+	}
+}
+
+/// Parameterized Data Latch
+#[derive(Debug)]
+pub struct DLatch {
+	generic: LogicDeviceGeneric,
+	/// 0 to 256
+	bits: u16,
+	layout: BlockLayoutHelper,
+	prev_clock: Option<bool>,
+	data_low: u128,
+	data_high: u128,
+	// Whether there is an output enable pin
+	oe: bool
+}
+
+impl DLatch {
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default(), BusLayoutSave::default(), 8, 0, 0, false)
+	}
+	pub fn from_save(save: LogicDeviceSave, layout_save: BusLayoutSave, bits: u16, data_low: u128, data_high: u128, oe: bool) -> Self {
+		let mut pin_groups = vec![
+			(FourWayDir::W, 1, bits, "D".to_owned()),
+			(FourWayDir::E, 1, bits, "Q".to_owned()),
+			(FourWayDir::W, 1, 1, "CLK".to_owned()),
+		];
+		if oe {
+			pin_groups.push((FourWayDir::W, 1, 1, "OE".to_owned()));
+		}
+		let layout = BlockLayoutHelper::load(
+			layout_save,
+			pin_groups,
+			IntV2(4, 4)
+		);
+		let mut out = Self {
+			generic: LogicDeviceGeneric::load(
+				save,
+				layout.pin_config(),
+				layout.get_bb_float(),
+				false,
+				false
+			),
+			bits,
+			layout,
+			prev_clock: None,
+			data_low,
+			data_high,
+			oe
+		};
+		for i in 0..out.bits {
+			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("D".to_owned(), i)).unwrap(), LogicState::Floating);
+		}
+		out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("CLK".to_owned(), 0)).unwrap(), LogicState::Floating);
+		if out.oe {
+			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("OE".to_owned(), 0)).unwrap(), LogicState::Floating);
+		}
+		out
+	}
+}
+
+impl LogicDevice for DLatch {
+	fn get_generic(&self) -> &LogicDeviceGeneric {
+		&self.generic
+	}
+	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
+		&mut self.generic
+	}
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _self_component_id: u64, _clock_state: bool, _first_propagation_step: bool) {
+		// Check positive clock edge
+		let current_clock: bool = self.get_pin_state_panic(*self.layout.group_logical_pins.get(&("CLK".to_owned(), 0)).unwrap()).to_bool();
+		let clock_rising_edge = match self.prev_clock {
+			Some(bool) => {
+				current_clock && !bool
+			},
+			None => false
+		};
+		self.prev_clock = Some(current_clock);
+		// Load data if clock edge
+		if clock_rising_edge {
+			for i in 0..self.bits {
+				let bit: bool = self.get_pin_state_panic(*self.layout.group_logical_pins.get(&("D".to_owned(), i)).unwrap()).to_bool();
+				if i < 128 {
+					if bit {
+						self.data_low |= 1 << i;
+					}
+					else {
+						self.data_low &= !(1 << i);
+					}
+				}
+				else {
+					if bit {
+						self.data_high |= 1 << (i-128);
+					}
+					else {
+						self.data_high &= !(1 << (i-128));
+					}
+				}
+			}
+		}
+		// Output enable/disable
+		let oe: bool = if self.oe {
+			self.get_pin_state_panic(*self.layout.group_logical_pins.get(&("OE".to_owned(), 0)).unwrap()).to_bool()
+		}
+		else {
+			true
+		};
+		for i in 0..self.bits {
+			if oe {
+				let bit: bool = if i < 128 {
+					((self.data_low >> i) & 1) % 2 == 1
+				}
+				else {
+					((self.data_high >> (i-128)) & 1) % 2 == 1
+				};
+				self.set_pin_internal_state_panic(*self.layout.group_logical_pins.get(&("Q".to_owned(), i)).unwrap(), bit.into());
+			}
+			else {
+				self.set_pin_internal_state_panic(*self.layout.group_logical_pins.get(&("Q".to_owned(), i)).unwrap(), LogicState::Floating);
+			}
+		}
+	}
+	fn save(&self) -> Result<EnumAllLogicDevices, String> {
+		Ok(EnumAllLogicDevices::DLatch(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe))
+	}
+	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles.color_foreground);
+		//draw.text("DLatch".to_owned(), V2::zeros(), Align2::CENTER_CENTER, draw.styles.text_color, draw.styles.text_size_grid, !draw.direction.is_horizontal());
+	}
+	fn get_bit_width(&self) -> Option<u16> {
+		Some(self.bits)
+	}
+	fn set_bit_width(&mut self, bit_width: u16) {
+		*self = Self::from_save(self.generic.save(), self.layout.save(), bit_width, self.data_low, self.data_high, self.oe);
+	}
+	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
+		let mut out = self.layout.get_properties();
+		out.push(SelectProperty::HasPin("OE".to_owned(), self.oe));
+		out
+	}
+	fn device_set_special_select_property(&mut self, property: SelectProperty) {
+		if let SelectProperty::HasPin(_, oe_pin) = &property {
+			self.oe = self.oe;
+		}
+		self.layout.set_property(property);
+		*self = Self::from_save(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe)
 	}
 }

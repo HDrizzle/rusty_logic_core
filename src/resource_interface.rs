@@ -160,7 +160,8 @@ pub enum EnumAllLogicDevices {
 		Option<Vec<u8>>
 	),
 	TriStateBuffer(LogicDeviceSave),
-	Adder(LogicDeviceSave, BusLayoutSave, u16)
+	Adder(LogicDeviceSave, BusLayoutSave, u16),
+	DLatch(LogicDeviceSave, BusLayoutSave, u16, u128, u128, bool)
 }
 
 impl EnumAllLogicDevices {
@@ -179,7 +180,8 @@ impl EnumAllLogicDevices {
 			Self::EncoderOrDecoder(save, addr_size, is_encoder) => Ok(Box::new(builtin_components::EncoderOrDecoder::from_save(save, addr_size, is_encoder))),
 			Self::Memory(save, addr_size, data_opt) => Ok(Box::new(builtin_components::Memory::from_save(save, addr_size, data_opt))),
 			Self::TriStateBuffer(save) => Ok(Box::new(builtin_components::TriStateBuffer::from_save(save))),
-			Self::Adder(save, layout, bw) => Ok(Box::new(builtin_components::Adder::from_save(save, layout, bw)))
+			Self::Adder(save, layout, bw) => Ok(Box::new(builtin_components::Adder::from_save(save, layout, bw))),
+			Self::DLatch(save, layout, bw, low, high, oe) => Ok(Box::new(builtin_components::DLatch::from_save(save, layout, bw, low, high, oe)))
 		}
 	}
 	/// Example: "AND Gate" or "D Latch", for the component search UI
@@ -198,7 +200,8 @@ impl EnumAllLogicDevices {
 			Self::EncoderOrDecoder(_, _, is_encoder) => match *is_encoder {true => "Encoder", false => "Decoder"}.to_owned(),
 			Self::Memory(_, _, _) => "Memory".to_owned(),
 			Self::TriStateBuffer(_) => "Tri-State Buffer".to_owned(),
-			Self::Adder(_, _, _) => "Adder".to_owned()
+			Self::Adder(_, _, _) => "Adder".to_owned(),
+			Self::DLatch(_, _, _, _, _, _) => "Data Latch".to_owned()
 		}
 	}
 }

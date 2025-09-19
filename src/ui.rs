@@ -240,7 +240,9 @@ pub enum SelectProperty {
 	/// Whether to reload, optional error message
 	ReloadCircuit(bool, Option<String>),
 	SplitterSplits(Vec<u16>),
-	BusLayout(String, bool, bool)
+	BusLayout(String, bool, bool),
+	/// Namee of pin (ex: "Output Enable"), whether it is enabled
+	HasPin(String, bool)
 }
 
 impl SelectProperty {
@@ -262,7 +264,8 @@ impl SelectProperty {
 			Self::EncoderOrDecoder(_) => "Encoder/Decoder".to_owned(),
 			Self::ReloadCircuit(_, _) => "Reload circuit".to_owned(),
 			Self::SplitterSplits(_) => "Splits".to_owned(),
-			Self::BusLayout(name, _, _) => format!("{} bus config", name)
+			Self::BusLayout(name, _, _) => format!("{} bus config", name),
+			Self::HasPin(name, _) => format!("Has {} pin", name)
 		}
 	}
 	/// Add this property to a list on the UI
@@ -422,6 +425,9 @@ impl SelectProperty {
 					}
 				}
 				changed
+			}
+			Self::HasPin(_, state) => {
+				ui.checkbox(state, "").changed()
 			}
 		}
 	}
