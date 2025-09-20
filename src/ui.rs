@@ -27,6 +27,7 @@ pub struct Styles {
 	pub color_background: [u8; 3],
 	pub color_foreground: [u8; 3],
 	pub color_grid: [u8; 3],
+	pub color_error_x: [u8; 3],
 	pub select_rect_color: [u8; 4],
 	pub select_rect_edge_color: [u8; 3],
 	pub color_wire_in_progress: [u8; 3],
@@ -95,6 +96,7 @@ impl Default for Styles {
 			color_background: [0, 0, 0],
 			color_foreground: [255, 255, 255],
 			color_grid: [64, 64, 64],
+			color_error_x: [255, 0, 0],
 			select_rect_color: [7, 252, 244, 128],
 			select_rect_edge_color: [252, 7, 7],
 			color_wire_in_progress: [2, 156, 99],
@@ -721,6 +723,11 @@ impl LogicCircuitToplevelView {
 			match self.frame_compute_cycles == CIRCUIT_MAX_COMPUTE_CYCLES {
 				true => {ui.colored_label(u8_3_to_color32([255, 0, 0]), format!("Compute cycles: {}", self.frame_compute_cycles));}
 				false => {ui.label(format!("Compute cycles: {}", self.frame_compute_cycles));}
+			}
+			// Bit width errors
+			let n_bit_widths: usize = self.circuit.bit_width_errors.len();
+			if n_bit_widths > 0 {
+				ui.colored_label(u8_3_to_color32([255, 0, 0]), format!("{} Incompatible bit width islands", n_bit_widths));
 			}
 			// Circuit settings (clock speed, etc)
 			ui.collapsing("Circuit Settings", |ui| {

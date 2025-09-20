@@ -1,10 +1,10 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut, RangeInclusive}, rc::Rc, time::{Duration, Instant}};
+use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::Default, fmt::{format, Debug}, fs, ops::{Deref, DerefMut, RangeInclusive}, pin, rc::Rc, time::{Duration, Instant}};
 use serde::{Deserialize, Serialize};
-use crate::{prelude::*, resource_interface};
+use crate::{circuit_net_computation::NotAWire, prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
-use eframe::egui::{self, response::Response, Align2, DragValue, Key, KeyboardShortcut, Label, Modifiers, PointerButton, Pos2, Rect, ScrollArea, Vec2, Widget};
+use eframe::egui::{self, response::Response, Align2, DragValue, Key, KeyboardShortcut, Modifiers, PointerButton, Pos2, ScrollArea, Vec2};
 use arboard;
 use common_macros::hash_map;
 use eframe::egui::{Ui, Sense, Stroke, Frame};
@@ -1564,7 +1564,6 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 	fn get_ui_data_mut(&mut self) -> &mut UIData {
 		&mut self.get_generic_mut().ui_data
 	}
-	// TODO: fix
 	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
 		let local_bb: (V2, V2) = if self.is_circuit() {
 			if self.get_circuit().displayed_as_block {
@@ -1862,7 +1861,8 @@ pub struct LogicCircuit {
 	pub clock: RefCell<Clock>,
 	/// Timing diagram probes
 	pub probes: RefCell<HashMap<u64, Probe>>,
-	pub timing: RefCell<TimingDiagram>
+	pub timing: RefCell<TimingDiagram>,
+	pub bit_width_errors: Vec<BitWidthError>
 }
 
 impl LogicCircuit {
@@ -1908,7 +1908,8 @@ impl LogicCircuit {
 			self_reload_err_opt: None,
 			clock: RefCell::new(Clock::default()),
 			probes: RefCell::new(HashMap::new()),
-			timing: RefCell::new(TimingDiagram::from_probe_id_list(Vec::new()))
+			timing: RefCell::new(TimingDiagram::from_probe_id_list(Vec::new())),
+			bit_width_errors: Vec::new()
 		};
 		new.setup_external_connection_sources();
 		new.recompute_default_layout();
@@ -1955,7 +1956,7 @@ impl LogicCircuit {
 				name
 			},
 			HashMap::from_iter(save.graphic_pins.into_iter().map(|t| (t.0, (t.1.0, t.1.1, 1.0, t.1.2, t.1.3, t.1.4)))),
-			(V2::zeros(), V2::zeros()),
+			(save.block_bb.0.to_v2(), save.block_bb.1.to_v2()),
 			displayed_as_block,
 			true
 		);
@@ -1979,7 +1980,8 @@ impl LogicCircuit {
 			self_reload_err_opt: None,
 			clock: RefCell::new(Clock::load(save.clock_enabled, save.clock_freq, save.clock_state)),
 			probes: RefCell::new(probes),
-			timing: RefCell::new(timing)
+			timing: RefCell::new(timing),
+			bit_width_errors: Vec::new()
 		};
 		out.setup_external_connection_sources();
 		out.check_wire_geometry_and_connections();
@@ -2609,7 +2611,7 @@ impl LogicCircuit {
 		// Combine consecutive segments in the same direction
 		self.merge_consecutive_wires();
 		// Compute nets, has to be done after all geometry and connection fixes
-		self.recompute_nets();// TODO Use result
+		self.bit_width_errors = self.recompute_nets();
 		// Logic probes
 		self.update_probe_net_connections_and_timing();
 		// Last net computation setep
@@ -3500,7 +3502,8 @@ impl LogicCircuit {
 			clock_freq: clock.freq,
 			clock_state: clock.state,
 			probes: HashMap::from_iter(self.probes.borrow().iter().map(|(id, probe)| (*id, probe.save()))),
-			timing_probe_order: self.timing.borrow().signal_groups.iter().enumerate().filter(|(i, _)| *i > 0).map(|(_, (probe_id, _))| *probe_id).collect()
+			timing_probe_order: self.timing.borrow().signal_groups.iter().enumerate().filter(|(i, _)| *i > 0).map(|(_, (probe_id, _))| *probe_id).collect(),
+			block_bb: (round_v2_to_intv2(self.generic_device.ui_data.local_bb.0), round_v2_to_intv2(self.generic_device.ui_data.local_bb.1))
 		})
 	}
 	pub fn save_circuit(&self) -> Result<(), String> {
@@ -3589,11 +3592,10 @@ impl LogicDevice for LogicCircuit {
 						SelectionState::Fixed => {},
 						SelectionState::Dragging(start_grid, delta_grid) => {
 							if selected_graphics.is_empty() {
-								let select_bb: (V2, V2) = merge_points_to_bb(vec![*start_grid, *start_grid + *delta_grid]);
 								draw.draw_rect(*start_grid, *start_grid + *delta_grid, draw.styles.select_rect_color, draw.styles.select_rect_edge_color);
 							}
 						},
-						SelectionState::FollowingMouse(mouse_pos) => {}
+						SelectionState::FollowingMouse(_) => {}
 					}
 					// Draw selected items BB
 					if selected_graphics.len() >= 1 {
@@ -3632,6 +3634,52 @@ impl LogicDevice for LogicCircuit {
 										segment.0.to_v2(),
 										segment.0.to_v2() + (segment.1.to_unit() * (segment.2 as f32))
 									], draw.styles.color_wire_in_progress);
+								}
+							}
+						}
+					}
+				}
+			}
+			for bit_width_error in &self.bit_width_errors {
+				// Get positions of all connections involved in the error
+				let mut connection_positions_and_bws = Vec::<(IntV2, u16)>::new();
+				// if the mouse position is hovering
+				let mut connection_hover_index = Option::<usize>::None;
+				for (not_wire_conn, bw) in &bit_width_error.0 {
+					let pos: IntV2 = match not_wire_conn {
+						NotAWire::Pin(graphic_pin_id) => match graphic_pin_id {
+							CircuitWideGraphicPinReference::ComponentPin(comp_pin_ref) => {
+								let components = self.components.borrow();
+								let comp = components.get(&comp_pin_ref.component_id).unwrap().borrow();
+								let comp_local_pos: IntV2 = comp.get_pin_position_override(comp_pin_ref.pin_id).unwrap().0;
+								comp.get_ui_data().pos_to_parent_coords(comp_local_pos)
+							},
+							CircuitWideGraphicPinReference::ExternalConnection(ext_conn_graphic_id) => self.generic_device.graphic_pins.borrow().get(&ext_conn_graphic_id).unwrap().ui_data.position
+						},
+						NotAWire::Splitter(splitter_id, splitter_pin_index) => {
+							let splitters = self.splitters.borrow();
+							let splitter = splitters.get(&splitter_id).unwrap();
+							splitter.ui_data.pos_to_parent_coords(Splitter::pin_pos_local(*splitter_pin_index))
+						}
+					};
+					if let Some(mouse_pos) = mouse_pos_grid_opt {
+						if (pos.to_v2() - mouse_pos).magnitude() < 0.707 {
+							connection_hover_index = Some(connection_positions_and_bws.len());
+						}
+					}
+					connection_positions_and_bws.push((pos, *bw));
+				}
+				// Display them
+				for (i, (pos, bw)) in connection_positions_and_bws.iter().enumerate() {
+					let pos_v2 = pos.to_v2();
+					draw.draw_polyline(vec![IntV2(-1, -1), IntV2(1, 1)].iter().map(|intv| pos_v2 + intv.to_v2() / 2.0).collect(), draw.styles.color_error_x);
+					draw.draw_polyline(vec![IntV2(1, -1), IntV2(-1, 1)].iter().map(|intv| pos_v2 + intv.to_v2() / 2.0).collect(), draw.styles.color_error_x);
+					draw.text(format!("{} Bits", bw), pos.to_v2() + V2::new(0.7, 0.0), Align2::LEFT_CENTER, draw.styles.text_color, draw.styles.text_size_grid, false);
+					if let Some(hovered_conn_i) = connection_hover_index {
+						if hovered_conn_i == i {
+							for (i2, (pos2, _)) in connection_positions_and_bws.iter().enumerate() {
+								if i2 != i {
+									draw.draw_polyline(vec![pos.to_v2(), pos2.to_v2()], draw.styles.color_error_x);
 								}
 							}
 						}

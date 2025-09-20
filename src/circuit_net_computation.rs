@@ -1,12 +1,12 @@
 //! This module implements logic for `LogicCircuit` to recompute the nets of all wires, pins, & splitters
 //! The logic for correcting wire geometry is not here
 
-use std::{cell::{Ref, RefCell}, collections::{HashMap, HashSet, VecDeque}};
+use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}};
 use crate::{prelude::*, simulator::CircuitWideGraphicPinReference};
 
 /// Wire or Splitter
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum NotAWire {
+pub enum NotAWire {
 	/// Logical pin
 	Pin(CircuitWideGraphicPinReference),
 	/// Splitter ID, Splitter GRAPHIC pin ID
@@ -40,8 +40,10 @@ impl From<WireConnection> for NotAWire {
 	}
 }
 
+/// Incompatible bit widths are connected
+/// (What wire is connected, Connection bit width)
 #[derive(Debug, Clone)]
-pub struct BitWidthError(Vec<(NotAWire, u16)>);
+pub struct BitWidthError(pub Vec<(NotAWire, u16)>);
 
 struct WireIsland {
 	pub wires: HashSet<u64>,
@@ -67,7 +69,7 @@ impl LogicCircuit {
 		let wires = self.wires.borrow();
 		let splitters = self.splitters.borrow();
 		// Find all wire islands
-		let (islands, ext_conn_island_map): (Vec<WireIsland>, HashMap<NotAWire, usize>) = {
+		let (islands, _): (Vec<WireIsland>, HashMap<NotAWire, usize>) = {
 			let mut islands = Vec::<WireIsland>::new();
 			let mut ext_conn_island_map = HashMap::<NotAWire, usize>::new();
 			let mut i: usize = 0;
@@ -103,7 +105,7 @@ impl LogicCircuit {
 		// DFS over each net to connect it properly
 		let mut visited_bits = HashSet::<ConductorBit>::new();
 		for (base_wire_id, wire_cell) in wires.iter() {
-			let mut wire = wire_cell.borrow_mut();
+			let wire = wire_cell.borrow_mut();
 			let mut base_bit_i: u16 = 0;
 			while base_bit_i < wire.nets.len() as u16 {
 				let base_net: u64 = wire.nets[base_bit_i as usize];

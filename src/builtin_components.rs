@@ -1,5 +1,5 @@
 use crate::{prelude::*, simulator::{graphic_pin_config_from_single_pins, AncestryStack}};
-use eframe::egui::{Align2, Ui};
+use eframe::egui::Ui;
 use common_macros::hash_map;
 use std::{collections::HashMap, cell::RefCell, rc::Rc};
 use serde::{Deserialize, Serialize};
@@ -87,7 +87,7 @@ impl BlockLayoutHelper {
 		let mut group_logical_pins = HashMap::<(String, u16), u64>::new();
 		// HashMap<Pin dir, (Margin, Bit width, Name, Group, Forward)>
 		let mut groups_per_side = HashMap::<FourWayDir, Vec<(u32, u16, String, bool, bool)>>::new();
-		for (i, group) in pin_groups.into_iter().enumerate() {
+		for group in &pin_groups {
 			let group_wo_dir = (group.1, group.2, group.3.clone(), group.4, group.5);
 			// If this is is the first pin group in its direction, create new hashmap entry, otherwise add it to the existing hashmap entry
 			if let Some(v) = groups_per_side.get_mut(&group.0) {
@@ -202,7 +202,7 @@ impl BlockLayoutHelper {
 		let mut graphic_pin_id: u64 = 0;
 		for group in &self.pin_groups {
 			let first_pin_pos = group.0.rotate_intv2(IntV2(self.get_bb_half_width(group.0) + 1, group.6));// + 1 because pin starts 1 away from bounding box
-			if group.4 {// Group to single graphic pin
+			if group.4 || group.2 == 1 {// Group to single graphic pin
 				out.insert(graphic_pin_id, (
 					first_pin_pos,
 					group.0,
@@ -1255,9 +1255,14 @@ impl DLatch {
 		Self::from_save(LogicDeviceSave::default(), BusLayoutSave::default(), 8, 0, 0, false)
 	}
 	pub fn from_save(save: LogicDeviceSave, layout_save: BusLayoutSave, bits: u16, data_low: u128, data_high: u128, oe: bool) -> Self {
+		let d_margin: u32 = match oe {
+			true => 1,
+			false => 2
+		};
 		let mut pin_groups = vec![
-			(FourWayDir::W, 1, bits, "D".to_owned()),
-			(FourWayDir::E, 1, bits, "Q".to_owned()),
+			(FourWayDir::W, d_margin, bits, "D".to_owned()),
+			(FourWayDir::E, 2, bits, "Q#".to_owned()),
+			(FourWayDir::E, 2, bits, "Q".to_owned()),
 			(FourWayDir::W, 1, 1, "CLK".to_owned()),
 		];
 		if oe {
@@ -1349,9 +1354,11 @@ impl LogicDevice for DLatch {
 					((self.data_high >> (i-128)) & 1) % 2 == 1
 				};
 				self.set_pin_internal_state_panic(*self.layout.group_logical_pins.get(&("Q".to_owned(), i)).unwrap(), bit.into());
+				self.set_pin_internal_state_panic(*self.layout.group_logical_pins.get(&("Q#".to_owned(), i)).unwrap(), (!bit).into());
 			}
 			else {
 				self.set_pin_internal_state_panic(*self.layout.group_logical_pins.get(&("Q".to_owned(), i)).unwrap(), LogicState::Floating);
+				self.set_pin_internal_state_panic(*self.layout.group_logical_pins.get(&("Q#".to_owned(), i)).unwrap(), LogicState::Floating);
 			}
 		}
 	}
@@ -1375,7 +1382,7 @@ impl LogicDevice for DLatch {
 	}
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		if let SelectProperty::HasPin(_, oe_pin) = &property {
-			self.oe = self.oe;
+			self.oe = *oe_pin;
 		}
 		self.layout.set_property(property);
 		*self = Self::from_save(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe)
