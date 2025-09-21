@@ -242,6 +242,7 @@ pub enum SelectProperty {
 	/// Whether to reload, optional error message
 	ReloadCircuit(bool, Option<String>),
 	SplitterSplits(Vec<u16>),
+	/// Bus name, Whether to group, Whether to list in forward order
 	BusLayout(String, bool, bool),
 	/// Namee of pin (ex: "Output Enable"), whether it is enabled
 	HasPin(String, bool)

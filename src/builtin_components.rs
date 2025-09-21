@@ -25,7 +25,7 @@ pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
 }
 
 /// For dealing with the geometry of a lot of pins
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct BlockLayoutHelper {
 	/// Vec<(
 	/// 	Block side/pin direction,
@@ -72,23 +72,23 @@ impl BlockLayoutHelper {
 	) -> Self {
 		// Build pin groups from static config and save state
 		// When I wrote this only me and god knew how it worked. Now only god knows.
-		// Vec<(Pin dir, Margin, Bit width, Name, Group, List in order)>
-		let pin_groups: Vec<(FourWayDir, u32, u16, String, bool, bool)> = pin_groups_static.into_iter().enumerate().map(|(i, t)| {
+		// Vec<(Pin dir, Margin, Bit width, Name, Group, List in order, Pin groups static order)>
+		let pin_groups: Vec<(FourWayDir, u32, u16, String, bool, bool, usize)> = pin_groups_static.into_iter().enumerate().map(|(i, t)| {
 			let (group, forward) = if i < layout_save.0.len() {
 				layout_save.0[i]
 			}
 			else {
 				(true, true)
 			};
-			(t.0, t.1, t.2, t.3, group, forward)
+			(t.0, t.1, t.2, t.3, group, forward, i)
 		}).collect();
 		// Split pin groups by side/direction
 		let mut current_logic_pin_id: u64 = 0;
 		let mut group_logical_pins = HashMap::<(String, u16), u64>::new();
 		// HashMap<Pin dir, (Margin, Bit width, Name, Group, Forward)>
-		let mut groups_per_side = HashMap::<FourWayDir, Vec<(u32, u16, String, bool, bool)>>::new();
+		let mut groups_per_side = HashMap::<FourWayDir, Vec<(u32, u16, String, bool, bool, usize)>>::new();
 		for group in &pin_groups {
-			let group_wo_dir = (group.1, group.2, group.3.clone(), group.4, group.5);
+			let group_wo_dir = (group.1, group.2, group.3.clone(), group.4, group.5, group.6);
 			// If this is is the first pin group in its direction, create new hashmap entry, otherwise add it to the existing hashmap entry
 			if let Some(v) = groups_per_side.get_mut(&group.0) {
 				v.push(group_wo_dir);
@@ -103,7 +103,7 @@ impl BlockLayoutHelper {
 			}
 		}
 		// Get pin group starting positions
-		let mut groups_with_start_positions = Vec::<(FourWayDir, u32, u16, String, bool, bool, i32)>::new();
+		let mut groups_with_start_positions = Vec::<(FourWayDir, u32, u16, String, bool, bool, i32, usize)>::new();
 		let mut side_sizes = HashMap::<FourWayDir, i32>::new();
 		let mut names_to_pin_groups: HashMap<String, usize> = HashMap::new();
 		for (side, side_groups) in groups_per_side {
@@ -124,9 +124,9 @@ impl BlockLayoutHelper {
 				if names_to_pin_groups.contains_key(&group_name) {
 					panic!("Layout pin group name \"{}\" used at least twice", &group_name);
 				}
-				names_to_pin_groups.insert(group_name, groups_with_start_positions.len());
+				names_to_pin_groups.insert(group_name, group.5);
 				// Record group's starting position
-				groups_with_start_positions.push((side, group.0, group.1, group.2.clone(), group.3, group.4, size));
+				groups_with_start_positions.push((side, group.0, group.1, group.2.clone(), group.3, group.4, size, group.5));
 				// Add group width (n-1), only if expanded
 				if !group.3 {
 					size += group.1 as i32 - 1;
@@ -190,8 +190,10 @@ impl BlockLayoutHelper {
 			start_corner.push(side_start);
 			rectified_size.push(size);
 		}
+		// Sort `groups_with_start_positions` by their original `pin_groups_static` index so they are the same order and can be saved correctly
+		groups_with_start_positions.sort_by(|t0, t1| t0.7.cmp(&t1.7));
 		Self {
-			pin_groups: groups_with_start_positions,
+			pin_groups: groups_with_start_positions.into_iter().map(|t| (t.0, t.1, t.2, t.3, t.4, t.5, t.6)).collect(),
 			group_logical_pins,
 			bb: (IntV2(start_corner[0], start_corner[1]), IntV2(start_corner[0]+rectified_size[0], start_corner[1]+rectified_size[1])),
 			names_to_pin_groups
@@ -250,12 +252,17 @@ impl BlockLayoutHelper {
 		}
 		out
 	}
-	fn set_property(&mut self, property: SelectProperty) {
+	/// Returns: Whether anything changed
+	fn set_property(&mut self, property: SelectProperty) -> bool {
 		if let SelectProperty::BusLayout(group_name, single_pin, forward) = property {
 			if let Some(group_i) = self.names_to_pin_groups.get(&group_name) {
 				self.pin_groups[*group_i].4 = single_pin;
 				self.pin_groups[*group_i].5 = forward;
 			}
+			true
+		}
+		else {
+			false
 		}
 	}
 	pub fn save(&self) -> BusLayoutSave {
@@ -263,6 +270,9 @@ impl BlockLayoutHelper {
 	}
 	pub fn get_bb_float(&self) -> (V2, V2) {
 		(self.bb.0.to_v2(), self.bb.1.to_v2())
+	}
+	pub fn get_logic_pin_id_panic(&self, group_name: &str, bit_i: u16) -> u64 {
+		*self.group_logical_pins.get(&(group_name.to_owned(), bit_i)).unwrap()
 	}
 }
 
@@ -760,52 +770,57 @@ fn encoder_decoder_geometry(addr_size: u8) -> (i32, i32, (V2, V2)) {
 pub struct EncoderOrDecoder {
 	pub generic: LogicDeviceGeneric,
 	pub addr_size: u8,
-	pub is_encoder: bool
+	pub is_encoder: bool,
+	pub layout: BlockLayoutHelper
 }
 
 impl EncoderOrDecoder {
 	pub fn new() -> Self {
-		Self::from_save(LogicDeviceSave::default(), 3, true)
+		Self::from_save(LogicDeviceSave::default(), 3, true, BusLayoutSave::default())
 	}
-	pub fn from_save(save: LogicDeviceSave, addr_size: u8, is_encoder: bool) -> Self {
+	pub fn from_save(save: LogicDeviceSave, addr_size: u8, is_encoder: bool, layout_save: BusLayoutSave) -> Self {
 		assert!(addr_size > 0);
 		assert!(addr_size <= 8);
-		let (addr_x_start, fanout_y_start, bb) = encoder_decoder_geometry(addr_size);
 		let fanout_size = 2_i32.pow(addr_size as u32);
-		let addr_size_i32 = addr_size as i32;
-		// Generate pins
-		let mut pin_config = HashMap::<u64, (IntV2, FourWayDir, f32, String, bool)>::new();
-		// Input/Enable
-		pin_config.insert(0, (IntV2(addr_x_start - 2, 0), FourWayDir::W, 1.0, "Enable".to_owned(), true));
-		// Addresses
-		for a_u8 in 0..addr_size {
-			let a = a_u8 as i32;
-			pin_config.insert((a_u8+1) as u64, (IntV2(addr_x_start + a, fanout_y_start - 2), FourWayDir::S, 1.0, format!("A{}", a_u8), true));
-		}
-		// Outputs
-		for d in 0..fanout_size {
-			pin_config.insert((1+addr_size_i32+d) as u64, (IntV2(addr_x_start + addr_size_i32 + 2, fanout_y_start + d), FourWayDir::E, 1.0, format!("D{}", d), true));
-		}
-		Self {
+		let layout = BlockLayoutHelper::load(
+			layout_save,
+			vec![
+				(FourWayDir::S, 3, addr_size as u16, "A".to_owned()),
+				(FourWayDir::E, 2, fanout_size as u16, "D".to_owned()),
+				(FourWayDir::W, 1, 1, "Enable".to_owned())
+			],
+			IntV2(6, 4)
+		);
+		let mut out = Self {
 			generic: LogicDeviceGeneric::load(
 				save,
-				graphic_pin_config_from_single_pins(pin_config),
-				bb,
+				layout.pin_config(),
+				layout.get_bb_float(),
 				false,
 				false
 			),
 			addr_size,
-			is_encoder
+			is_encoder,
+			layout
+		};
+		// Clear address inputs
+		for a in 0..out.addr_size {
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("A", a as u16), LogicState::Floating);
 		}
-	}
-	fn get_fanout_pin_id(&self, address: u8) -> u64 {
-		assert!(2_u16.pow(self.addr_size as u32) > address as u16);
-		1 + (self.addr_size as u64) + (address as u64)
+		if is_encoder {// Clear fanout pins
+			for d in 0..2_u16.pow(out.addr_size as u32) {
+				out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("D", d as u16), LogicState::Floating);
+			}
+		}
+		else {// Clear enable/input
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Enable", 0), LogicState::Floating);
+		}
+		out
 	}
 	fn get_address(&self) -> u8 {
 		let mut out: u8 = 0;
 		for a in 0..self.addr_size {
-			if self.get_pin_state_panic(a as u64 + 1).to_bool() {
+			if self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("A", a as u16)).to_bool() {
 				out += 2_u8.pow(a as u32);
 			}
 		}
@@ -822,17 +837,16 @@ impl LogicDevice for EncoderOrDecoder {
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
 		if self.is_encoder {
-			let input = self.get_pin_state_panic(self.get_fanout_pin_id(self.get_address())).to_bool();
-			self.set_pin_internal_state_panic(0, input.into());
+			let input = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("D", self.get_address() as u16)).to_bool();
+			self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Enable", 0), input.into());
 		}
 		else {
 			let addr = self.get_address();
 			for d_16 in 0..2_u16.pow(self.addr_size as u32) {
-				let d = d_16 as u8;
 				self.set_pin_internal_state_panic(
-					self.get_fanout_pin_id(d),
-					match d == addr {
-						true => self.get_pin_state_panic(0).to_bool(),
+					self.layout.get_logic_pin_id_panic("D", d_16),
+					match d_16 as u8 == addr {
+						true => self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("Enable", 0)).to_bool(),
 						false => false
 					}.into()
 				);
@@ -840,23 +854,28 @@ impl LogicDevice for EncoderOrDecoder {
 		}
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
-		Ok(EnumAllLogicDevices::EncoderOrDecoder(self.generic.save(), self.addr_size, self.is_encoder))
+		Ok(EnumAllLogicDevices::EncoderOrDecoder(self.generic.save(), self.addr_size, self.is_encoder, self.layout.save()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(bb_to_polyline(self.generic.ui_data.local_bb), draw.styles.color_foreground);
 	}
 	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
-		vec![
+		let mut out = vec![
 			SelectProperty::AddressWidth(self.addr_size, 8),
 			SelectProperty::EncoderOrDecoder(self.is_encoder)
-		]
+		];
+		out.append(&mut self.layout.get_properties());
+		out
 	}
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		if let SelectProperty::AddressWidth(new_addr_size, _) = property {
-			*self = Self::from_save(self.generic.save(), new_addr_size, self.is_encoder);
+			*self = Self::from_save(self.generic.save(), new_addr_size, self.is_encoder, self.layout.save());
 		}
 		if let SelectProperty::EncoderOrDecoder(new_encoder_state) = property {
-			*self = Self::from_save(self.generic.save(), self.addr_size, new_encoder_state);
+			*self = Self::from_save(self.generic.save(), self.addr_size, new_encoder_state, self.layout.save());
+		}
+		if self.layout.set_property(property) {
+			*self = Self::from_save(self.generic.save(), self.addr_size, self.is_encoder, self.layout.save());
 		}
 	}
 }
@@ -881,13 +900,14 @@ pub struct Memory {
 	pub data: Vec<u8>,
 	pub nonvolatile: bool,
 	ui_csv_paste_string: Rc<RefCell<String>>,
-	ui_error_opt: Option<String>
+	ui_error_opt: Option<String>,
+	layout: BlockLayoutHelper
 }
 
 impl Memory {
 	pub const HALF_WIDTH: i32 = 5;
 	pub fn new() -> Self {
-		Self::from_save(LogicDeviceSave::default(), 8, None)
+		Self::from_save(LogicDeviceSave::default(), 8, None, BusLayoutSave::default())
 	}
 	/// Returns: (BB, pin config)
 	fn compute_geometry_and_pins(addr_size: u8) -> ((IntV2, IntV2), HashMap<u64, (IntV2, FourWayDir, f32, String, bool)>) {
@@ -936,14 +956,24 @@ impl Memory {
 		}
 		len_unchecked
 	}
-	pub fn from_save(save: LogicDeviceSave, addr_size: u8, data_opt: Option<Vec<u8>>) -> Self {
-		let (bb_int, pin_config) = Self::compute_geometry_and_pins(addr_size);
+	pub fn from_save(save: LogicDeviceSave, addr_size: u8, data_opt: Option<Vec<u8>>, layout_save: BusLayoutSave) -> Self {
 		let nonvolatile = data_opt.is_some();
+		let layout = BlockLayoutHelper::load(
+			layout_save,
+			vec![
+				(FourWayDir::E, 2, addr_size as u16, "A".to_owned()),
+				(FourWayDir::W, 2, 8, "D".to_owned()),
+				(FourWayDir::W, 1, 1, "CE".to_owned()),
+				(FourWayDir::W, 1, 1, "WE".to_owned()),
+				(FourWayDir::W, 1, 1, "RE".to_owned())
+			],
+			IntV2(10, 4)
+		);
 		Self {
 			generic: LogicDeviceGeneric::load(
 				save,
-				graphic_pin_config_from_single_pins(pin_config),
-				(bb_int.0.to_v2(), bb_int.1.to_v2()),
+				layout.pin_config(),
+				layout.get_bb_float(),
 				true,
 				false
 			),
@@ -951,13 +981,14 @@ impl Memory {
 			data: Self::format_data(data_opt, addr_size),
 			nonvolatile,
 			ui_csv_paste_string: Rc::new(RefCell::new(String::new())),
-			ui_error_opt: None
+			ui_error_opt: None,
+			layout
 		}
 	}
 	fn get_address(&self) -> u16 {
 		let mut out: u16 = 0;
 		for a in 0..self.addr_size {
-			if self.get_pin_state_panic(a as u64 + 11).to_bool() {
+			if self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("A", a as u16)).to_bool() {
 				out += 2_u16.pow(a as u32);
 			}
 		}
@@ -978,22 +1009,22 @@ impl LogicDevice for Memory {
 		let re: bool = self.get_pin_state_panic(2).to_bool();
 		let address = self.get_address() as usize;
 		if !re || !ce {// Set all data lines floating
-			for i in 3..11_u64 {
-				self.set_pin_internal_state_panic(i, LogicState::Floating);
+			for bit_i in 0..8_u16 {
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("D", bit_i), LogicState::Floating);
 			}
 		}
 		if ce {
 			if re {// Memory read
 				let byte: u8 = self.data[address];
-				for i in 3..11_u64 {
-					self.set_pin_internal_state_panic(i, match (byte >> (i - 3)) & 1 {0 => false, 1 => true, _ => panic!("bruh")}.into());
+				for bit_i in 0..8_u16 {
+					self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("D", bit_i), match (byte >> bit_i) & 1 {0 => false, 1 => true, _ => panic!("bruh")}.into());
 				}
 			}
 			else if we {
 				let mut new_byte: u8 = 0;
-				for i in 3..11_u64 {
-					if self.get_pin_state_panic(i).to_bool() {
-						new_byte += 2_u8.pow((i - 3) as u32);
+				for bit_i in 0..8_u16 {
+					if self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("D", bit_i)).to_bool() {
+						new_byte += 2_u8.pow(bit_i as u32);
 					}
 				}
 				self.data[address] = new_byte;
@@ -1007,23 +1038,26 @@ impl LogicDevice for Memory {
 			match self.nonvolatile {
 				true => Some(self.data.clone()),
 				false => None
-			}
+			},
+			self.layout.save()
 		))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
 		draw.draw_polyline(bb_to_polyline(self.generic.ui_data.local_bb), draw.styles.color_foreground);
 	}
 	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
-		vec![
+		let mut out = vec![
 			SelectProperty::AddressWidth(self.addr_size, 16),
 			SelectProperty::MemoryProperties(MemoryPropertiesUI::new(self.nonvolatile, self.ui_csv_paste_string.clone(), self.ui_error_opt.clone()))
-		]
+		];
+		out.append(&mut self.layout.get_properties());
+		out
 	}
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		if let SelectProperty::AddressWidth(new_addr_size, _) = property {
-			*self = Self::from_save(self.generic.save(), new_addr_size, Some(self.data.clone()));
+			*self = Self::from_save(self.generic.save(), new_addr_size, Some(self.data.clone()), self.layout.save());
 		}
-		if let SelectProperty::MemoryProperties(props) = property {
+		if let SelectProperty::MemoryProperties(props) = &property {
 			let mut new_err_opt = Option::<String>::None;
 			self.nonvolatile = props.nonvolatile;
 			if props.erase {
@@ -1053,6 +1087,9 @@ impl LogicDevice for Memory {
 					self.ui_error_opt = None;
 				}
 			}
+		}
+		if self.layout.set_property(property) {
+			*self = Self::from_save(self.generic.save(), self.addr_size, Some(self.data.clone()), self.layout.save());
 		}
 	}
 }

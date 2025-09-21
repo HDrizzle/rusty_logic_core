@@ -574,7 +574,9 @@ impl GraphicSelectableItem for GraphicPin {
 				let all_pins = self.component_all_logic_pins.borrow();
 				for (i, pin_id) in self.owned_pins.iter().enumerate() {
 					let pin_cell = all_pins.get(pin_id).unwrap();
-					pin_cell.borrow_mut().external_state = driven_opts[i].into();
+					if i < driven_opts.len() {// In case multiple pins with different bit widths are selected and this one is longer than the one setting the property
+						pin_cell.borrow_mut().external_state = driven_opts[i].into();
+					}
 				}
 			},
 			SelectProperty::Direction(direction) => {
@@ -3581,6 +3583,31 @@ impl LogicDevice for LogicCircuit {
 		Ok(EnumAllLogicDevices::SubCircuit(self.save_path.clone(), self.displayed_as_block, self.get_ui_data().position, self.get_ui_data().direction, self.generic_device.name.clone()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+		if self.displayed_as_block {
+			self.draw_as_block(draw, false);
+		}
+		else {
+			// Draws the circuit with wires and everything how you would expect
+			// Get wire colors
+			let nets = self.nets.borrow();
+			for wire_cell in self.wires.borrow().values() {
+				let mut wire = wire_cell.borrow_mut();
+				let states: Vec<LogicState> = wire.nets.iter().map(|net_id| match nets.get(net_id) {
+					Some(net) => net.borrow().state,
+					None => LogicState::Floating
+				}).collect();
+				wire.color = draw.styles.color_from_logic_states(&states);
+			}
+			// Use graphic item trait
+			for ref_ in self.get_all_graphics_references() {
+				if let GraphicSelectableItemRef::Pin(_) = ref_ {
+					if !self.is_toplevel {
+						continue;
+					}
+				}
+				self.run_function_on_graphic_item(ref_, |graphic_item| graphic_item.draw(draw));
+			}
+		}
 		if self.is_toplevel {
 			let mouse_pos_grid_opt: Option<V2> = match draw.mouse_pos {
 				Some(pos_px) => Some(draw.mouse_pos2_to_grid(pos_px)),
@@ -3685,31 +3712,6 @@ impl LogicDevice for LogicCircuit {
 						}
 					}
 				}
-			}
-		}
-		if self.displayed_as_block {
-			self.draw_as_block(draw, false);
-		}
-		else {
-			// Draws the circuit with wires and everything how you would expect
-			// Get wire colors
-			let nets = self.nets.borrow();
-			for wire_cell in self.wires.borrow().values() {
-				let mut wire = wire_cell.borrow_mut();
-				let states: Vec<LogicState> = wire.nets.iter().map(|net_id| match nets.get(net_id) {
-					Some(net) => net.borrow().state,
-					None => LogicState::Floating
-				}).collect();
-				wire.color = draw.styles.color_from_logic_states(&states);
-			}
-			// Use graphic item trait
-			for ref_ in self.get_all_graphics_references() {
-				if let GraphicSelectableItemRef::Pin(_) = ref_ {
-					if !self.is_toplevel {
-						continue;
-					}
-				}
-				self.run_function_on_graphic_item(ref_, |graphic_item| graphic_item.draw(draw));
 			}
 		}
 	}

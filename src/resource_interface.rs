@@ -155,12 +155,13 @@ pub enum EnumAllLogicDevices {
 	GateXnor(LogicDeviceSave),
 	Clock(LogicDeviceSave),
 	FixedSource(LogicDeviceSave, bool),
-	EncoderOrDecoder(LogicDeviceSave, u8, bool),
+	EncoderOrDecoder(LogicDeviceSave, u8, bool, #[serde(default)]BusLayoutSave),
 	Memory(
 		LogicDeviceSave,
 		u8,
 		/// If this is Some then it is nonvolotile memory, otherwise it is RAM
-		Option<Vec<u8>>
+		Option<Vec<u8>>,
+		#[serde(default)]BusLayoutSave
 	),
 	TriStateBuffer(LogicDeviceSave),
 	Adder(LogicDeviceSave, BusLayoutSave, u16),
@@ -180,8 +181,8 @@ impl EnumAllLogicDevices {
 			Self::GateXnor(gate) => Ok(Box::new(builtin_components::GateXnor::from_save(gate))),
 			Self::Clock(save) => Ok(Box::new(builtin_components::ClockSymbol::from_save(save))),
 			Self::FixedSource(save, state) => Ok(Box::new(builtin_components::FixedSource::from_save(save, state))),
-			Self::EncoderOrDecoder(save, addr_size, is_encoder) => Ok(Box::new(builtin_components::EncoderOrDecoder::from_save(save, addr_size, is_encoder))),
-			Self::Memory(save, addr_size, data_opt) => Ok(Box::new(builtin_components::Memory::from_save(save, addr_size, data_opt))),
+			Self::EncoderOrDecoder(save, addr_size, is_encoder, layout) => Ok(Box::new(builtin_components::EncoderOrDecoder::from_save(save, addr_size, is_encoder, layout))),
+			Self::Memory(save, addr_size, data_opt, layout) => Ok(Box::new(builtin_components::Memory::from_save(save, addr_size, data_opt, layout))),
 			Self::TriStateBuffer(save) => Ok(Box::new(builtin_components::TriStateBuffer::from_save(save))),
 			Self::Adder(save, layout, bw) => Ok(Box::new(builtin_components::Adder::from_save(save, layout, bw))),
 			Self::DLatch(save, layout, bw, low, high, oe) => Ok(Box::new(builtin_components::DLatch::from_save(save, layout, bw, low, high, oe)))
@@ -200,8 +201,8 @@ impl EnumAllLogicDevices {
 			Self::GateXnor(_) => "XNOR Gate".to_owned(),
 			Self::Clock(_) => "Clock Source".to_owned(),
 			Self::FixedSource(_, state) => match state {true => "V+", false => "GND"}.to_owned(),
-			Self::EncoderOrDecoder(_, _, is_encoder) => match *is_encoder {true => "Encoder", false => "Decoder"}.to_owned(),
-			Self::Memory(_, _, _) => "Memory".to_owned(),
+			Self::EncoderOrDecoder(_, _, is_encoder, _) => match *is_encoder {true => "Encoder", false => "Decoder"}.to_owned(),
+			Self::Memory(_, _, _, _) => "Memory".to_owned(),
 			Self::TriStateBuffer(_) => "Tri-State Buffer".to_owned(),
 			Self::Adder(_, _, _) => "Adder".to_owned(),
 			Self::DLatch(_, _, _, _, _, _) => "Data Latch".to_owned()
