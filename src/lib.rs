@@ -285,12 +285,12 @@ pub mod prelude {
 			}
 		}
 		#[cfg(feature = "using_egui")]
-		pub fn to_egui_align2(&self) -> Align2 {
+		pub fn to_align2(&self) -> GenericAlign2 {
 			match &self {
-				Self::E => Align2::RIGHT_CENTER,
-				Self::N => Align2::CENTER_TOP,
-				Self::W => Align2::LEFT_CENTER,
-				Self::S => Align2::CENTER_BOTTOM
+				Self::E => GenericAlign2::RIGHT_CENTER,
+				Self::N => GenericAlign2::CENTER_TOP,
+				Self::W => GenericAlign2::LEFT_CENTER,
+				Self::S => GenericAlign2::CENTER_BOTTOM
 			}
 		}
 		/// 2D rotation matrix multiplication
@@ -465,7 +465,7 @@ pub mod prelude {
 use prelude::*;
 
 #[cfg(feature = "using_egui")]
-fn ui_main() {
+pub fn ui_main() {
 	let native_options = eframe::NativeOptions::default();
 	eframe::run_native(&APP_NAME, native_options, Box::new(|_| Ok(Box::new(App::new())))).unwrap();
 }

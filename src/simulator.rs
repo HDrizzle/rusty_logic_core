@@ -484,7 +484,7 @@ impl GraphicPin {
 
 /// ONLY meant to be used on external pins on the toplevel circuit, all other pins are just rendered as part of the component
 impl GraphicSelectableItem for GraphicPin {
-	fn draw<'a>(&self, draw_parent: &dyn DrawInterface<'a>) {
+	fn draw<'a>(&self, draw_parent: &Box<dyn DrawInterface>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
 		let external_and_combined_states: Vec<(LogicState, LogicState)> = self.iter_owned_pins(|pin| (pin.external_state.clone(), pin.state()));
 		let color = draw.styles().color_from_logic_states(&external_and_combined_states.iter().map(|t|t.1.clone()).collect());
@@ -500,7 +500,7 @@ impl GraphicSelectableItem for GraphicPin {
 				draw.styles().color_from_logic_state(external_and_combined_states[i].1)
 			);
 			if let Some(value) = external_and_combined_states[i].0.to_bool_opt() {
-				draw.text(match value {true => "1", false => "0"}.to_owned(), V2::new((i*2) as f32 + 2.0, 0.0), Align2::CENTER_CENTER, draw.styles().text_color, 1.5, false);
+				draw.text(match value {true => "1", false => "0"}.to_owned(), V2::new((i*2) as f32 + 2.0, 0.0), GenericAlign2::CENTER_CENTER, draw.styles().text_color, 1.5, false);
 			}
 		}
 		draw.draw_polyline(
@@ -731,8 +731,8 @@ impl GraphicLabel {
 }
 
 impl GraphicSelectableItem for GraphicLabel {
-	fn draw<'a>(&self, draw_parent: &Box<dyn DrawInterface<'a>>) {
-		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction).to_draw_interface();
+	fn draw<'a>(&self, draw_parent: &Box<dyn DrawInterface>) {
+		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
 		draw.text(self.text.clone(), V2::zeros(), GenericAlign2::CENTER_CENTER, draw.styles().text_color, draw.styles().text_size_grid, false);
 	}
 	fn get_ui_data(&self) -> &UIData {
@@ -942,7 +942,7 @@ impl Splitter {
 }
 
 impl GraphicSelectableItem for Splitter {
-	fn draw<'a>(&self, draw_parent: &dyn DrawInterface<'a>) {
+	fn draw<'a>(&self, draw_parent: &Box<dyn DrawInterface>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
 		draw.draw_polyline(
 			vec![
@@ -968,7 +968,7 @@ impl GraphicSelectableItem for Splitter {
 				true => beginning_index.to_string(),
 				false => format!("{}:{}", beginning_index, beginning_index + split.0 - 1)
 			};
-			draw.text(text, V2::new(2.0, i_f32 + 0.5), Align2::CENTER_CENTER, draw.styles().text_color, 0.8, !draw.direction.is_horizontal());
+			draw.text(text, V2::new(2.0, i_f32 + 0.5), GenericAlign2::CENTER_CENTER, draw.styles().text_color, 0.8, !draw.get_draw_data().direction.is_horizontal());
 			beginning_index += split.0;
 		}
 	}
@@ -1205,7 +1205,7 @@ impl Wire {
 }
 
 impl GraphicSelectableItem for Wire {
-	fn draw<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		let start_pos = self.ui_data.position.to_v2();
 		let end_pos = self.end_pos().to_v2();
 		draw.draw_polyline(
@@ -1306,7 +1306,7 @@ impl GraphicSelectableItem for Probe {
 	fn get_ui_data_mut(&mut self) -> &mut UIData {
 		&mut self.ui_data
 	}
-	fn draw<'a>(&self, draw_parent: &Box<dyn DrawInterface<'a>>) {
+	fn draw<'a>(&self, draw_parent: &Box<dyn DrawInterface>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
 		let text_length: f32 = draw.text_size(self.name.clone(), 1.0).x;
 		let half_height: f32 = 0.7;
@@ -1551,13 +1551,13 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 						position.0.to_v2(),
 						position.0.to_v2() - (position.1.to_unit() * position.2)
 					],
-					pin.get_color(&draw.styles)
+					pin.get_color(&*draw.styles())
 				);
 				if pin.show_name {
 					draw.text(
 						pin.name.clone(),//"test".to_owned(),
 						position.0.to_v2() - (position.1.to_unit()*1.2),
-						global_dir.to_egui_align2(),
+						global_dir.to_align2(),
 						draw.styles().text_color,
 						draw.styles().text_size_grid,
 						vertical
@@ -1569,7 +1569,7 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 					draw.text(
 						pin.name.clone(),//"test".to_owned(),
 						position.0.to_v2() + (position.1.to_unit()*3.2),
-						global_dir.opposite_direction().to_egui_align2(),
+						global_dir.opposite_direction().to_align2(),
 						draw.styles().text_color,
 						draw.styles().text_size_grid,
 						vertical
@@ -3054,8 +3054,8 @@ impl LogicCircuit {
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_path), &raw_string))?;
 		Ok(())
 	}
-	pub fn draw_as_block<'a>(&self, draw: &dyn DrawInterface<'a>, for_block_layout_edit: bool) {
-		let styles = draw.get_draw_data().styles;
+	pub fn draw_as_block<'a>(&self, draw: &Box<dyn DrawInterface>, for_block_layout_edit: bool) {
+		let styles = &draw.get_draw_data().styles;
 		// Rectangle
 		draw.draw_polyline(
 			vec![
@@ -3123,7 +3123,7 @@ impl LogicDevice for LogicCircuit {
 		// Path to save file
 		Ok(EnumAllLogicDevices::SubCircuit(self.save_path.clone(), self.displayed_as_block, self.get_ui_data().position, self.get_ui_data().direction, self.generic_device.name.clone()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		if self.displayed_as_block {
 			self.draw_as_block(draw, false);
 		}

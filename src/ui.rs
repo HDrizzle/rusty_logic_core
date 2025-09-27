@@ -583,7 +583,7 @@ impl LogicCircuit {
 		}
 		return_recompute_connections
 	}
-	pub fn show_timing_diagram_ui(&self, ui: &mut Ui, styles: &mut Styles) {
+	pub fn show_timing_diagram_ui(&self, ui: &mut Ui, styles: Rc<Styles>) {
 		ui.horizontal(|ui| {
 			let mut timing = self.timing.borrow_mut();
 			if ui.button("Clear").clicked() {
@@ -592,8 +592,6 @@ impl LogicCircuit {
 					*signal_group = (0..signal_group.len()).map(|_| vec![]).collect();
 				}
 			}
-			ui.label("Resolution:");
-			ui.add(DragValue::new(&mut styles.timing_diagram_resolution_px).clamp_existing_to_range(true).range(RangeInclusive::new(5, 100)));
 		});
 		let timing = self.timing.borrow();
 		ScrollArea::vertical().show(ui, |ui| {
@@ -879,7 +877,7 @@ impl LogicCircuitToplevelView {
 		}
 	}
 	/// Returns: (Optional position to set the mouse to, Optional new circuit tab to open)
-	pub fn draw(&mut self, ui: &mut Ui, styles: &mut Styles, screen_top_left: Pos2) -> (Option<Pos2>, Option<String>) {
+	pub fn draw(&mut self, ui: &mut Ui, styles: Rc<Styles>, screen_top_left: Pos2) -> (Option<Pos2>, Option<String>) {
 		let mut return_new_mouse_pos = Option::<Pos2>::None;
 		let mut return_new_circuit_tab = Option::<String>::None;
 		let canvas_size: Vec2 = ui.available_size_before_wrap();
@@ -896,12 +894,12 @@ impl LogicCircuitToplevelView {
 					self.grid_size,
 					IntV2(0, 0),
 					FourWayDir::default(),
-					styles,
+					Rc::clone(&styles),
 					rect_center,
 					emath_vec2_to_v2(canvas_size),
 					response.hover_pos().map(|v| emath_pos2_to_v2(v))
 				),
-				&painter
+				Rc::new(painter)
 			);
 			// Scrolling
 			let scroll = input_state.raw_scroll_delta.y;
@@ -951,10 +949,10 @@ impl LogicCircuitToplevelView {
 				self.recompute_conns_next_frame = false;
 			}
 			// graphics help from https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/painting.rs
-			// Draw circuit
-			self.circuit.draw(&Box::new(draw_info));
 			// Right side toolbar
 			self.circuit.tool.borrow().tool_select_ui(&draw_info);
+			// Draw circuit
+			self.circuit.draw(&(Box::new(draw_info) as Box<dyn DrawInterface>));
 			(canvas_size, rect_center)
 		});
 		// Top: general controls
@@ -1173,7 +1171,7 @@ impl LogicCircuitToplevelView {
 		self.frame_compute_cycles = count;
 		return true;
 	}
-	fn edit_block_layout(&mut self, ui: &mut Ui, styles: &Styles, maine_frame_size: Vec2) {
+	fn edit_block_layout(&mut self, ui: &mut Ui, styles: Rc<Styles>, maine_frame_size: Vec2) {
 		let inner_response = Frame::canvas(ui.style()).show(ui, |ui| {
 			//let canvas_size = ui.available_size_before_wrap();
 			let (response, painter) = ui.allocate_painter(maine_frame_size, Sense::all());
@@ -1188,9 +1186,9 @@ impl LogicCircuitToplevelView {
 					emath_vec2_to_v2(maine_frame_size),
 					None
 				),
-				&painter
+				Rc::new(painter)
 			);
-			self.circuit.draw_as_block(&draw_info, true);
+			self.circuit.draw_as_block(&(Box::new(draw_info) as Box<dyn DrawInterface>), true);
 		});
 		//inner_response.response.ctx.input_mut(|input| input.events.clear());
 		Popup::from_response(&inner_response.response).open(true).align(RectAlign{parent: Align2::LEFT_TOP, child: Align2::LEFT_TOP}).id("block edit controls".into()).show(|ui| {
@@ -1254,7 +1252,7 @@ impl LogicCircuitToplevelView {
 
 
 pub struct App {
-	styles: Styles,
+	styles: Rc<Styles>,
 	circuit_tabs: Vec<LogicCircuitToplevelView>,
 	current_tab_index: usize,
 	new_circuit_name: String,
@@ -1274,7 +1272,7 @@ impl App {
 			}
 		};
 		Self {
-			styles,
+			styles: Rc::new(styles),
 			circuit_tabs: Vec::new(),//vec![LogicCircuitToplevelView::new(create_simple_circuit(), false)],
 			current_tab_index: 0,
 			new_circuit_name: String::new(),
@@ -1370,7 +1368,7 @@ impl eframe::App for App {
 			}
 			else {
 				let circuit_toplevel: &mut LogicCircuitToplevelView = &mut self.circuit_tabs[self.current_tab_index - 1];
-				let (new_mouse_pos_opt, new_circuit_tab_opt): (Option<Pos2>, Option<String>) = circuit_toplevel.draw(ui, &mut self.styles, ctx.screen_rect().min);// TODO: Get actual window top-left position
+				let (new_mouse_pos_opt, new_circuit_tab_opt): (Option<Pos2>, Option<String>) = circuit_toplevel.draw(ui, Rc::clone(&self.styles), ctx.screen_rect().min);// TODO: Get actual window top-left position
 				if let Some(new_pos) = new_mouse_pos_opt {
 					let mouse = mouse_rs::Mouse::new();
 					mouse.move_to(new_pos.x as i32, new_pos.y as i32).unwrap();
