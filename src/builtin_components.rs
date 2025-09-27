@@ -319,13 +319,14 @@ impl LogicDevice for GateAnd {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateAnd(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
+		let styles = draw.styles();
 		draw.draw_polyline(vec![
 			V2::new(0.0, -2.0),
 			V2::new(-2.0, -2.0),
 			V2::new(-2.0, 2.0),
 			V2::new(0.0, 2.0)
-		], draw.styles().color_foreground);
+		], styles.color_foreground);
 		draw.draw_arc(V2::zeros(), 2.0, -90.0, 90.0, draw.styles().color_foreground);
 	}
 }
@@ -366,7 +367,7 @@ impl LogicDevice for GateNand {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateNand(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		draw.draw_polyline(vec![
 			V2::new(0.0, -2.0),
 			V2::new(-2.0, -2.0),
@@ -412,7 +413,7 @@ impl LogicDevice for GateNot {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateNot(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		draw.draw_polyline(vec![
 			V2::new(2.0, 0.0),
 			V2::new(-2.0, -2.0),
@@ -458,7 +459,7 @@ impl LogicDevice for GateOr {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateOr(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		draw.draw_polyline(vec![
 			V2::new(-1.5, -2.0),
 			V2::new(-2.1, -2.0)
@@ -508,7 +509,7 @@ impl LogicDevice for GateNor {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateNor(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		draw.draw_polyline(vec![
 			V2::new(-1.5, -2.0),
 			V2::new(-2.1, -2.0)
@@ -559,7 +560,7 @@ impl LogicDevice for GateXor {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateXor(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		draw.draw_polyline(vec![
 			V2::new(-1.5, -2.0),
 			V2::new(-2.1, -2.0)
@@ -610,7 +611,7 @@ impl LogicDevice for GateXnor {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateXnor(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		draw.draw_polyline(vec![
 			V2::new(-1.5, -2.0),
 			V2::new(-2.1, -2.0)
@@ -662,7 +663,7 @@ impl LogicDevice for ClockSymbol {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::Clock(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		draw.draw_polyline(
 			vec![
 				V2::new(1.1, -0.9),
@@ -730,7 +731,7 @@ impl LogicDevice for FixedSource {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::FixedSource(self.generic.save(), self.state))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		match self.state {
 			true => {
 				draw.draw_polyline(vec![V2::new(0.0, 2.0), V2::new(1.0, 1.0), V2::new(-1.0, 1.0), V2::new(0.0, 2.0)], draw.styles().color_foreground);
@@ -862,7 +863,7 @@ impl LogicDevice for EncoderOrDecoder {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::EncoderOrDecoder(self.generic.save(), self.addr_size, self.is_encoder, self.layout.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		draw.draw_polyline(bb_to_polyline(self.generic.ui_data.local_bb), draw.styles().color_foreground);
 	}
 	#[cfg(feature = "using_egui")]
@@ -1050,7 +1051,7 @@ impl LogicDevice for Memory {
 			self.layout.save()
 		))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		draw.draw_polyline(bb_to_polyline(self.generic.ui_data.local_bb), draw.styles().color_foreground);
 	}
 	#[cfg(feature = "using_egui")]
@@ -1191,7 +1192,7 @@ impl LogicDevice for TriStateBufferOld {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::TriStateBuffer(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		draw.draw_polyline(vec![
 			V2::new(2.0, 0.0),
 			V2::new(-2.0, -2.0),
@@ -1258,7 +1259,7 @@ impl LogicDevice for TriStateBuffer {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::TriStateBufferNew(self.0.save(), self.1.save(), self.2))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		draw.draw_polyline(vec![
 			V2::new(2.0, 0.0),
 			V2::new(-2.0, -2.0),
@@ -1348,7 +1349,7 @@ impl LogicDevice for Adder {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::Adder(self.generic.save(), self.layout.save(), self.bits))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles().color_foreground);
 	}
 	fn get_bit_width(&self) -> Option<u16> {
@@ -1497,7 +1498,7 @@ impl LogicDevice for DLatch {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::DLatch(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles().color_foreground);
 		//draw.text("DLatch".to_owned(), V2::zeros(), Align2::CENTER_CENTER, draw.styles().text_color, draw.styles().text_size_grid, !draw.direction.is_horizontal());
 	}
@@ -1637,7 +1638,7 @@ impl LogicDevice for Counter {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::Counter(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe))
 	}
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles().color_foreground);
 		//draw.text("DLatch".to_owned(), V2::zeros(), Align2::CENTER_CENTER, draw.styles().text_color, draw.styles().text_size_grid, !draw.direction.is_horizontal());
 	}

@@ -6,7 +6,7 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
 use serde_json;
-use std::{collections::HashSet, f32::consts::TAU, ops::{AddAssign, RangeInclusive, SubAssign}, sync::Arc, ops::DerefMut};
+use std::{collections::HashSet, f32::consts::TAU, ops::{AddAssign, RangeInclusive, SubAssign}, sync::Arc, ops::DerefMut, rc::Rc};
 use mouse_rs;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -254,15 +254,16 @@ impl CopiedItemSet {
 	}
 }
 
-pub struct EguiDrawInterface<'a> {
-	pub data: DrawData<'a>,
-	pub painter: &'a Painter
+#[derive(Clone)]
+pub struct EguiDrawInterface {
+	pub data: DrawData,
+	pub painter: Rc<Painter>
 }
 
-impl<'a> EguiDrawInterface<'a> {
+impl EguiDrawInterface {
 	pub fn new(
-		data: DrawData<'a>,
-		painter: &'a Painter
+		data: DrawData,
+		painter: Rc<Painter>
 	) -> Self {
 		Self {
 			data,
@@ -271,8 +272,8 @@ impl<'a> EguiDrawInterface<'a> {
 	}
 }
 
-impl<'a> DrawInterface<'a> for EguiDrawInterface<'a> {
-	fn get_draw_data(&self) -> &DrawData<'a> {
+impl DrawInterface for EguiDrawInterface {
+	fn get_draw_data(&self) -> &DrawData {
 		&self.data
 	}
 	fn draw_polyline(&self, points: Vec<V2>, stroke: [u8; 3]) {
@@ -343,17 +344,11 @@ impl<'a> DrawInterface<'a> for EguiDrawInterface<'a> {
 		});
 		emath_vec2_to_v2(galley.size()) / grid_size
 	}
-	fn add_grid_pos_and_direction(&'a self, offset_unrotated: IntV2, dir_: FourWayDir) -> Self {
-		Self {
+	fn add_grid_pos_and_direction(&self, offset_unrotated: IntV2, dir_: FourWayDir) -> Box<dyn DrawInterface> {
+		Box::new(Self {
 			data: self.data.add_grid_pos_and_direction(offset_unrotated, dir_),
-			painter: &self.painter
-		}
-	}
-}
-
-impl<'a> DrawInterface2<'a> for EguiDrawInterface<'a> {
-	fn to_draw_interface(self) -> Box<dyn DrawInterface<'a>> {
-		Box::new(self)
+			painter: Rc::clone(&self.painter)
+		})
 	}
 }
 
@@ -957,7 +952,7 @@ impl LogicCircuitToplevelView {
 			}
 			// graphics help from https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/painting.rs
 			// Draw circuit
-			self.circuit.draw(&draw_info);
+			self.circuit.draw(&Box::new(draw_info));
 			// Right side toolbar
 			self.circuit.tool.borrow().tool_select_ui(&draw_info);
 			(canvas_size, rect_center)

@@ -4,7 +4,7 @@ use crate::{builtin_components, prelude::*, resource_interface, simulator::{Ance
 use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
 use serde_json;
-use std::{collections::HashSet, f32::consts::TAU, ops::{AddAssign, RangeInclusive, SubAssign}, sync::Arc};
+use std::{collections::HashSet, f32::consts::TAU, ops::{AddAssign, RangeInclusive, SubAssign}, rc::Rc, sync::Arc};
 use mouse_rs;
 
 /// Style for the UI, loaded from /resources/styles.json
@@ -144,7 +144,7 @@ impl UIData {
 
 pub trait GraphicSelectableItem {
 	/// The implementation of this is responsible for adding it's own position to the offset
-	fn draw<'a>(&self, draw: &Box<dyn DrawInterface<'a>>);
+	fn draw<'a>(&self, draw: &Box<dyn DrawInterface>);
 	fn get_ui_data(&self) -> &UIData;
 	fn get_ui_data_mut(&mut self) -> &mut UIData;
 	/// Used for the net highlight feature
@@ -202,8 +202,9 @@ pub trait GraphicSelectableItem {
 	}
 }
 
+#[derive(Clone)]
 /// Struct with basic data (grid size, etc) that anything implementing `DrawInterface` should have a field for
-pub struct DrawData<'a> {
+pub struct DrawData {
 	/// Location of center of screen with respect to the grid, it is this way so that it will not have to adjusted when the grid is zoomed in/out
 	pub screen_center_wrt_grid: V2,
 	/// Pixels per grid increment
@@ -211,19 +212,19 @@ pub struct DrawData<'a> {
 	/// Includes component's own position, 
 	pub offset_grid: IntV2,
 	pub direction: FourWayDir,
-	pub styles: &'a Styles,
+	pub styles: Rc<Styles>,
 	pub rect_center: V2,
 	pub rect_size_px: V2,
 	pub mouse_pos: Option<V2>
 }
 
-impl<'a> DrawData<'a> {
+impl DrawData {
 	pub fn new(
 		screen_center_wrt_grid: V2,
 		grid_size: f32,
 		offset_grid: IntV2,
 		direction: FourWayDir,
-		styles: &'a Styles,
+		styles: Rc<Styles>,
 		rect_center: V2,
 		rect_size_px: V2,
 		mouse_pos: Option<V2>
@@ -257,27 +258,27 @@ impl<'a> DrawData<'a> {
 		let mouse_pos = emath_pos2_to_v2(mouse_pos_y_backwards);
 		direction.rotate_v2_reverse(((mouse_pos - rect_center) / grid_size) - offset_grid.to_v2()) + screen_center_wrt_grid
 	}
-	pub fn add_grid_pos_and_direction(&'a self, offset_unrotated: IntV2, dir_: FourWayDir) -> DrawData<'a> {
+	pub fn add_grid_pos_and_direction(&self, offset_unrotated: IntV2, dir_: FourWayDir) -> DrawData {
 		let offset = self.direction.rotate_intv2(offset_unrotated);
 		Self {
 			screen_center_wrt_grid: self.screen_center_wrt_grid,
 			grid_size: self.grid_size,
 			offset_grid: self.offset_grid + offset,
 			direction: self.direction.rotate_intv2(dir_.to_unit_int()).is_along_axis().unwrap(),
-			styles: self.styles,
+			styles: Rc::clone(&self.styles),
 			rect_center: self.rect_center,
 			rect_size_px: self.rect_size_px,
 			mouse_pos: self.mouse_pos
 		}
 	}
 }
-
+/*
 pub trait DrawInterface<'a> {
-	fn get_draw_data(&self) -> &DrawData<'a>;
-	fn get_grid_size(&self) -> f32 {
+	fn get_draw_data(&'a self) -> &'a DrawData;
+	fn get_grid_size(&'a self) -> f32 {
 		self.get_draw_data().grid_size
 	}
-	fn styles(&self) -> &'a Styles {
+	fn styles(&'a self) -> &'a Styles {
 		&self.get_draw_data().styles
 	}
 	fn draw_polyline(&self, points: Vec<V2>, stroke: [u8; 3]);
@@ -287,10 +288,29 @@ pub trait DrawInterface<'a> {
 	fn draw_arc(&self, center_grid: V2, radius_grid: f32, start_deg: f32, end_deg: f32, stroke: [u8; 3]);
 	fn text(&self, text: String, pos: V2, align: GenericAlign2, color: [u8; 3], size_grid: f32, vertical: bool);
 	fn text_size(&self, text: String, size_grid: f32) -> V2;
-	fn add_grid_pos_and_direction(&'a self, offset_unrotated: IntV2, dir_: FourWayDir) -> Box<dyn DrawInterface2<'a>>;
+	/// Can't return something with Self so using a diferent trait that will just convert back to this
+	fn add_grid_pos_and_direction(&self, offset_unrotated: IntV2, dir_: FourWayDir) -> Box<dyn DrawInterface<'a>>;
+}*/
+pub trait DrawInterface {
+	fn get_draw_data(&self) -> &DrawData;
+	fn get_grid_size(&self) -> f32 {
+		self.get_draw_data().grid_size
+	}
+	fn styles(&self) -> &Styles {
+		&self.get_draw_data().styles
+	}
+	fn draw_polyline(&self, points: Vec<V2>, stroke: [u8; 3]);
+	fn draw_rect(&self, start_grid: V2, end_grid: V2, inside_stroke: [u8; 4], border_stroke: [u8; 3]);
+	fn draw_circle(&self, center: V2, radius: f32, stroke: [u8; 3]);
+	fn draw_circle_filled(&self, center: V2, radius: f32, stroke: [u8; 3]);
+	fn draw_arc(&self, center_grid: V2, radius_grid: f32, start_deg: f32, end_deg: f32, stroke: [u8; 3]);
+	fn text(&self, text: String, pos: V2, align: GenericAlign2, color: [u8; 3], size_grid: f32, vertical: bool);
+	fn text_size(&self, text: String, size_grid: f32) -> V2;
+	/// Can't return something with Self so using a diferent trait that will just convert back to this
+	fn add_grid_pos_and_direction(&self, offset_unrotated: IntV2, dir_: FourWayDir) -> Box<dyn DrawInterface>;
 }
-
+/*
 /// `DrawInterface` can't return itself so created this to convert to and back again
 pub trait DrawInterface2<'a> {
-	fn to_draw_interface(self) -> Box<dyn DrawInterface<'a>>;
-}
+	fn to_draw_interface(&self) -> Box<dyn DrawInterface<'a>>;
+}*/

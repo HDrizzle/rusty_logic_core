@@ -1306,7 +1306,7 @@ impl GraphicSelectableItem for Probe {
 	fn get_ui_data_mut(&mut self) -> &mut UIData {
 		&mut self.ui_data
 	}
-	fn draw<'a>(&self, draw_parent: &dyn DrawInterface<'a>) {
+	fn draw<'a>(&self, draw_parent: &Box<dyn DrawInterface<'a>>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
 		let text_length: f32 = draw.text_size(self.name.clone(), 1.0).x;
 		let half_height: f32 = 0.7;
@@ -1323,13 +1323,13 @@ impl GraphicSelectableItem for Probe {
 			],
 			draw.styles().color_foreground
 		);
-		let probe_text_start: f32 = match draw.direction {
+		let probe_text_start: f32 = match draw.get_draw_data().direction {
 			FourWayDir::E => text_length/2.0,
 			FourWayDir::N => text_length,
 			FourWayDir::W => text_length/2.0,
 			FourWayDir::S =>0.0
 		};
-		draw.text(self.name.clone(), V2::new(1.0 + half_height + probe_text_start, 0.0), Align2::CENTER_CENTER, draw.styles().text_color, 1.0, !self.ui_data.direction.is_horizontal());
+		draw.text(self.name.clone(), V2::new(1.0 + half_height + probe_text_start, 0.0), GenericAlign2::CENTER_CENTER, draw.styles().text_color, 1.0, !self.ui_data.direction.is_horizontal());
 	}
 	#[cfg(feature = "using_egui")]
 	fn get_properties(&self) -> Vec<SelectProperty> {
@@ -1460,7 +1460,7 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric;
 	fn compute_step(&mut self, ancestors: &AncestryStack, self_component_id: u64, clock_state: bool, first_propagation_step: bool);
 	fn save(&self) -> Result<EnumAllLogicDevices, String>;
-	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>);
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>);
 	/// In CircuitVerse there can be, for example, one AND gate that acts like 8 gates, with 8-bit busses going in and out of it
 	fn get_bit_width(&self) -> Option<u16> {None}
 	#[allow(unused)]
@@ -1538,12 +1538,12 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 
 /// Everything that implements `Component` also automatically works with the graphics
 impl<T: LogicDevice> GraphicSelectableItem for T {
-	fn draw<'a>(&self, draw_parent: &dyn DrawInterface<'a>) {
+	fn draw<'a>(&self, draw_parent: &Box<dyn DrawInterface>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.get_generic().ui_data.position, self.get_generic().ui_data.direction);
 		self.draw_except_pins(&draw);
 		for (pin_id, pin) in self.get_generic().graphic_pins.borrow().iter() {
 			let position: (IntV2, FourWayDir, f32) = self.get_pin_position_override(*pin_id).unwrap();
-			let global_dir = position.1.rotate_intv2(draw.direction.to_unit_int()).is_along_axis().unwrap();
+			let global_dir = position.1.rotate_intv2(draw.get_draw_data().direction.to_unit_int()).is_along_axis().unwrap();
 			let vertical = global_dir == FourWayDir::N || global_dir == FourWayDir::S;
 			if !self.is_toplevel_circuit() {
 				draw.draw_polyline(
