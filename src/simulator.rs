@@ -4,10 +4,10 @@ use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default
 use serde::{Deserialize, Serialize};
 use crate::{circuit_net_computation::NotAWire, prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
-use eframe::egui::{self, response::Response, Align2, DragValue, Key, KeyboardShortcut, Modifiers, PointerButton, Pos2, ScrollArea, Vec2};
+#[cfg(feature = "using_egui")]
+use eframe::egui::{self, response::Response, Align2, DragValue, Key, KeyboardShortcut, Modifiers, PointerButton, Pos2, ScrollArea, Vec2, Ui, Sense, Stroke, Frame};
 use arboard;
 use common_macros::hash_map;
-use eframe::egui::{Ui, Sense, Stroke, Frame};
 
 fn logic_device_to_graphic_item(x: &dyn LogicDevice) -> &dyn GraphicSelectableItem {
 	x
@@ -150,10 +150,10 @@ pub enum LogicDriveSource {
 	/// Set by the UI or the Clock or whatever
 	Global,
 	/// Connection to something outside this circuit
-	ExternalConnection(GenericQuery<LogicConnectionPin>),
+	ExternalConnection(u64),
 	/// A set of things connected together
 	/// This also depends on context, for example the nets one either side of a sub-circuit pin would be referenced within different "namespaces"
-	Net(GenericQuery<LogicNet>),
+	Net(u64),
 	/// Output of a basic logic gate, the actual transistors are not gonna be simulated
 	ComponentInternal(ComponentLogicPinReference)
 }
@@ -484,10 +484,10 @@ impl GraphicPin {
 
 /// ONLY meant to be used on external pins on the toplevel circuit, all other pins are just rendered as part of the component
 impl GraphicSelectableItem for GraphicPin {
-	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
+	fn draw<'a>(&self, draw_parent: &dyn DrawInterface<'a>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
 		let external_and_combined_states: Vec<(LogicState, LogicState)> = self.iter_owned_pins(|pin| (pin.external_state.clone(), pin.state()));
-		let color = draw.styles.color_from_logic_states(&external_and_combined_states.iter().map(|t|t.1.clone()).collect());
+		let color = draw.styles().color_from_logic_states(&external_and_combined_states.iter().map(|t|t.1.clone()).collect());
 		for i in 0..self.owned_pins.len() {
 			draw.draw_polyline(
 				vec![
@@ -497,10 +497,10 @@ impl GraphicSelectableItem for GraphicPin {
 					V2::new(2.9, -0.9),
 					V2::new(1.1, -0.9)
 				].iter().map(|v| v + V2::new((i*2) as f32, 0.0)).collect(),
-				draw.styles.color_from_logic_state(external_and_combined_states[i].1)
+				draw.styles().color_from_logic_state(external_and_combined_states[i].1)
 			);
 			if let Some(value) = external_and_combined_states[i].0.to_bool_opt() {
-				draw.text(match value {true => "1", false => "0"}.to_owned(), V2::new((i*2) as f32 + 2.0, 0.0), Align2::CENTER_CENTER, draw.styles.text_color, 1.5, false);
+				draw.text(match value {true => "1", false => "0"}.to_owned(), V2::new((i*2) as f32 + 2.0, 0.0), Align2::CENTER_CENTER, draw.styles().text_color, 1.5, false);
 			}
 		}
 		draw.draw_polyline(
@@ -530,6 +530,7 @@ impl GraphicSelectableItem for GraphicPin {
 		});
 		out
 	}
+	#[cfg(feature = "using_egui")]
 	fn get_properties(&self) -> Vec<SelectProperty> {
 		vec![
 			SelectProperty::BitWidth(self.owned_pins.len() as u16),
@@ -540,6 +541,7 @@ impl GraphicSelectableItem for GraphicPin {
 			SelectProperty::Name(self.name.clone())
 		]
 	}
+	#[cfg(feature = "using_egui")]
 	fn set_property(&mut self, property: SelectProperty) {
 		match property {
 			SelectProperty::BitWidth(bit_width) => {
@@ -588,9 +590,11 @@ impl GraphicSelectableItem for GraphicPin {
 			_ => {}
 		}
 	}
+	#[cfg(feature = "using_egui")]
 	fn copy(&self) -> CopiedGraphicItem {
 		CopiedGraphicItem::ExternalConnection(self.ui_data.position, self.ui_data.direction, self.name.clone(), self.show_name, self.owned_pins.len() as u16)
 	}
+	#[cfg(feature = "using_egui")]
 	fn accept_click(&mut self, local_pos: V2) -> bool {
 		let bit_index = ((local_pos.x - 1.0) / 2.0) as isize;
 		if bit_index >= 0 && bit_index < self.owned_pins.len() as isize {
@@ -727,9 +731,9 @@ impl GraphicLabel {
 }
 
 impl GraphicSelectableItem for GraphicLabel {
-	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
-		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
-		draw.text(self.text.clone(), V2::zeros(), Align2::CENTER_CENTER, draw.styles.text_color, draw.styles.text_size_grid, false);
+	fn draw<'a>(&self, draw_parent: &Box<dyn DrawInterface<'a>>) {
+		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction).to_draw_interface();
+		draw.text(self.text.clone(), V2::zeros(), GenericAlign2::CENTER_CENTER, draw.styles().text_color, draw.styles().text_size_grid, false);
 	}
 	fn get_ui_data(&self) -> &UIData {
 		&self.ui_data
@@ -737,6 +741,7 @@ impl GraphicSelectableItem for GraphicLabel {
 	fn get_ui_data_mut(&mut self) -> &mut UIData {
 		&mut self.ui_data
 	}
+	#[cfg(feature = "using_egui")]
 	fn get_properties(&self) -> Vec<SelectProperty> {
 		vec![
 			SelectProperty::PositionX(self.ui_data.position.0),
@@ -745,6 +750,7 @@ impl GraphicSelectableItem for GraphicLabel {
 			SelectProperty::Name(self.text.clone())
 		]
 	}
+	#[cfg(feature = "using_egui")]
 	fn set_property(&mut self, property: SelectProperty) {
 		match property {
 			SelectProperty::PositionX(x) => {
@@ -762,6 +768,7 @@ impl GraphicSelectableItem for GraphicLabel {
 			_ => {}
 		}
 	}
+	#[cfg(feature = "using_egui")]
 	fn copy(&self) -> CopiedGraphicItem {
 		CopiedGraphicItem::GraphicLabel(self.save())
 	}
@@ -935,7 +942,7 @@ impl Splitter {
 }
 
 impl GraphicSelectableItem for Splitter {
-	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
+	fn draw<'a>(&self, draw_parent: &dyn DrawInterface<'a>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
 		draw.draw_polyline(
 			vec![
@@ -944,7 +951,7 @@ impl GraphicSelectableItem for Splitter {
 				V2::new(0.0, 0.0),
 				V2::new(0.0, self.splits.len() as f32 - 1.0)
 			],
-			draw.styles.color_foreground
+			draw.styles().color_foreground
 		);
 		let mut beginning_index: u16 = 0;
 		for (i_usize, split) in self.splits.iter().enumerate() {
@@ -955,13 +962,13 @@ impl GraphicSelectableItem for Splitter {
 					V2::new(1.0, i_f32 + 1.0),
 					V2::new(2.0, i_f32 + 1.0)
 				],
-				draw.styles.color_foreground
+				draw.styles().color_foreground
 			);
 			let text: String = match split.0 == 1 {
 				true => beginning_index.to_string(),
 				false => format!("{}:{}", beginning_index, beginning_index + split.0 - 1)
 			};
-			draw.text(text, V2::new(2.0, i_f32 + 0.5), Align2::CENTER_CENTER, draw.styles.text_color, 0.8, !draw.direction.is_horizontal());
+			draw.text(text, V2::new(2.0, i_f32 + 0.5), Align2::CENTER_CENTER, draw.styles().text_color, 0.8, !draw.direction.is_horizontal());
 			beginning_index += split.0;
 		}
 	}
@@ -983,6 +990,7 @@ impl GraphicSelectableItem for Splitter {
 		}
 		return false;
 	}*/
+	#[cfg(feature = "using_egui")]
 	fn get_properties(&self) -> Vec<SelectProperty> {
 		vec![
 			SelectProperty::BitWidth(self.bit_width),
@@ -992,6 +1000,7 @@ impl GraphicSelectableItem for Splitter {
 			SelectProperty::SplitterSplits(self.splits.iter().map(|t| t.0).collect())
 		]
 	}
+	#[cfg(feature = "using_egui")]
 	fn set_property(&mut self, property: SelectProperty) {
 		match property {
 			SelectProperty::BitWidth(bit_width) => {
@@ -1051,6 +1060,7 @@ impl GraphicSelectableItem for Splitter {
 			_ => {}
 		}
 	}
+	#[cfg(feature = "using_egui")]
 	fn copy(&self) -> CopiedGraphicItem {
 		CopiedGraphicItem::Splitter(self.save())
 	}
@@ -1195,7 +1205,7 @@ impl Wire {
 }
 
 impl GraphicSelectableItem for Wire {
-	fn draw<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+	fn draw<'a>(&self, draw: &dyn DrawInterface<'a>) {
 		let start_pos = self.ui_data.position.to_v2();
 		let end_pos = self.end_pos().to_v2();
 		draw.draw_polyline(
@@ -1206,10 +1216,10 @@ impl GraphicSelectableItem for Wire {
 			self.color
 		);
 		if self.start_connections.borrow().len() >= 3 {
-			draw.draw_circle_filled(start_pos, draw.styles.connection_dot_grid_size, self.color);
+			draw.draw_circle_filled(start_pos, draw.get_draw_data().styles.connection_dot_grid_size, self.color);
 		}
 		if self.end_connections.borrow().len() >= 3 {
-			draw.draw_circle_filled(end_pos, draw.styles.connection_dot_grid_size, self.color);
+			draw.draw_circle_filled(end_pos, draw.get_draw_data().styles.connection_dot_grid_size, self.color);
 		}
 	}
 	fn get_ui_data(&self) -> &UIData {
@@ -1238,10 +1248,13 @@ impl GraphicSelectableItem for Wire {
 		}
 		return false;
 	}
+	#[cfg(feature = "using_egui")]
 	fn get_properties(&self) -> Vec<SelectProperty> {
 		Vec::new()
 	}
+	#[cfg(feature = "using_egui")]
 	fn set_property(&mut self, _property: SelectProperty) {}
+	#[cfg(feature = "using_egui")]
 	fn copy(&self) -> CopiedGraphicItem {
 		CopiedGraphicItem::Wire((self.ui_data.position, self.ui_data.direction, self.length))
 	}
@@ -1263,7 +1276,7 @@ pub enum WireConnection {
 #[derive(Debug, Default, Clone)]
 pub struct Probe {
 	ui_data: UIData,
-	name: String,
+	pub name: String,
 	nets_opt: Vec<Option<u64>>,
 	/// Wrt grid
 	text_len: f32
@@ -1293,7 +1306,7 @@ impl GraphicSelectableItem for Probe {
 	fn get_ui_data_mut(&mut self) -> &mut UIData {
 		&mut self.ui_data
 	}
-	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
+	fn draw<'a>(&self, draw_parent: &dyn DrawInterface<'a>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
 		let text_length: f32 = draw.text_size(self.name.clone(), 1.0).x;
 		let half_height: f32 = 0.7;
@@ -1308,7 +1321,7 @@ impl GraphicSelectableItem for Probe {
 				V2::new(1.0 + half_height, half_height),
 				V2::new(1.0, 0.0),
 			],
-			draw.styles.color_foreground
+			draw.styles().color_foreground
 		);
 		let probe_text_start: f32 = match draw.direction {
 			FourWayDir::E => text_length/2.0,
@@ -1316,8 +1329,9 @@ impl GraphicSelectableItem for Probe {
 			FourWayDir::W => text_length/2.0,
 			FourWayDir::S =>0.0
 		};
-		draw.text(self.name.clone(), V2::new(1.0 + half_height + probe_text_start, 0.0), Align2::CENTER_CENTER, draw.styles.text_color, 1.0, !self.ui_data.direction.is_horizontal());
+		draw.text(self.name.clone(), V2::new(1.0 + half_height + probe_text_start, 0.0), Align2::CENTER_CENTER, draw.styles().text_color, 1.0, !self.ui_data.direction.is_horizontal());
 	}
+	#[cfg(feature = "using_egui")]
 	fn get_properties(&self) -> Vec<SelectProperty> {
 		vec![
 			SelectProperty::PositionX(self.ui_data.position.0),
@@ -1326,6 +1340,7 @@ impl GraphicSelectableItem for Probe {
 			SelectProperty::Name(self.name.clone())
 		]
 	}
+	#[cfg(feature = "using_egui")]
 	fn set_property(&mut self, property: SelectProperty) {
 		match property {
 			SelectProperty::PositionX(x) => {
@@ -1343,6 +1358,7 @@ impl GraphicSelectableItem for Probe {
 			_ => {}
 		}
 	}
+	#[cfg(feature = "using_egui")]
 	fn copy(&self) -> CopiedGraphicItem {
 		CopiedGraphicItem::Probe(self.save())
 	}
@@ -1444,7 +1460,7 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric;
 	fn compute_step(&mut self, ancestors: &AncestryStack, self_component_id: u64, clock_state: bool, first_propagation_step: bool);
 	fn save(&self) -> Result<EnumAllLogicDevices, String>;
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>);
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>);
 	/// In CircuitVerse there can be, for example, one AND gate that acts like 8 gates, with 8-bit busses going in and out of it
 	fn get_bit_width(&self) -> Option<u16> {None}
 	#[allow(unused)]
@@ -1452,8 +1468,10 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn is_toplevel_circuit(&self) -> bool {false}
 	fn is_circuit(&self) -> bool {false}
 	/// Everything besides what `impl<T: LogicDevice> GraphicSelectableItem for T::get_properties()` generates
+	#[cfg(feature = "using_egui")]
 	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {Vec::new()}
 	/// Everything besides what `impl<T: LogicDevice> GraphicSelectableItem for T::set_property()` accepts
+	#[cfg(feature = "using_egui")]
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {drop(property);}// So that unused variable warning doesn't happen
 	/// A circuit might override this to instead use the block display pin locations
 	fn get_pin_position_override(&self, pin_id: u64) -> Option<(IntV2, FourWayDir, f32)> {
@@ -1520,7 +1538,7 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 
 /// Everything that implements `Component` also automatically works with the graphics
 impl<T: LogicDevice> GraphicSelectableItem for T {
-	fn draw<'a>(&self, draw_parent: &ComponentDrawInfo<'a>) {
+	fn draw<'a>(&self, draw_parent: &dyn DrawInterface<'a>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.get_generic().ui_data.position, self.get_generic().ui_data.direction);
 		self.draw_except_pins(&draw);
 		for (pin_id, pin) in self.get_generic().graphic_pins.borrow().iter() {
@@ -1540,8 +1558,8 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 						pin.name.clone(),//"test".to_owned(),
 						position.0.to_v2() - (position.1.to_unit()*1.2),
 						global_dir.to_egui_align2(),
-						draw.styles.text_color,
-						draw.styles.text_size_grid,
+						draw.styles().text_color,
+						draw.styles().text_size_grid,
 						vertical
 					);
 				}
@@ -1552,8 +1570,8 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 						pin.name.clone(),//"test".to_owned(),
 						position.0.to_v2() + (position.1.to_unit()*3.2),
 						global_dir.opposite_direction().to_egui_align2(),
-						draw.styles.text_color,
-						draw.styles.text_size_grid,
+						draw.styles().text_color,
+						draw.styles().text_size_grid,
 						vertical
 					);
 				}
@@ -1566,6 +1584,7 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 	fn get_ui_data_mut(&mut self) -> &mut UIData {
 		&mut self.get_generic_mut().ui_data
 	}
+	#[cfg(feature = "using_egui")]
 	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
 		let local_bb: (V2, V2) = if self.is_circuit() {
 			if self.get_circuit().displayed_as_block {
@@ -1584,6 +1603,7 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 	fn is_connected_to_net(&self, _net_id: u64) -> bool {
 		false// Don't highlight a whole component, only wires and pins
 	}
+	#[cfg(feature = "using_egui")]
 	fn get_properties(&self) -> Vec<SelectProperty> {
 		let mut out = vec![
 			SelectProperty::PositionX(self.get_generic().ui_data.position.0),
@@ -1599,6 +1619,7 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 		out.append(&mut self.device_get_special_select_properties());
 		out
 	}
+	#[cfg(feature = "using_egui")]
 	fn set_property(&mut self, property: SelectProperty) {
 		match property {
 			SelectProperty::BitWidth(bit_width) => {
@@ -1622,6 +1643,7 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 			other => self.device_set_special_select_property(other),
 		}
 	}
+	#[cfg(feature = "using_egui")]
 	fn copy(&self) -> CopiedGraphicItem {
 		CopiedGraphicItem::Component(self.save().unwrap())
 	}
@@ -1825,7 +1847,7 @@ impl Tool {
 			Self::PlaceWire{perp_pairs: _} => false,
 		}
 	}
-	pub fn tool_select_ui(&self, _draw: &ComponentDrawInfo) {
+	pub fn tool_select_ui(&self, _draw: &dyn DrawInterface) {
 		// TODO
 	}
 }
@@ -2038,345 +2060,6 @@ impl LogicCircuit {
 			self.block_pin_positions.remove(&pin_id_to_del);
 		}
 	}
-	/// Returns: Whether to recompute the circuit connections
-	pub fn toplevel_ui_interact<'a, F: Fn(Pos2) -> V2>(&mut self, response: Response, context: &egui::Context, /*draw: &ComponentDrawInfo<'a>,*/ mut input_state: egui::InputState, grid_size: f32, mouse_pos2_to_grid: F) -> bool {
-		let mut return_recompute_connections = false;
-		let mut new_tool_opt = Option::<Tool>::None;
-		let mut recompute_pin_block_positions = false;
-		let mouse_pos_grid_opt: Option<V2> = match response.hover_pos() {
-			Some(pos_px) => Some(mouse_pos2_to_grid(pos_px)),
-			None => None
-		};
-		match self.tool.borrow_mut().deref_mut() {
-			Tool::Select{selected_graphics, selected_graphics_state} => {
-				match selected_graphics_state {
-					SelectionState::Fixed => {
-						if response.drag_started_by(PointerButton::Primary) {
-							let begining_mouse_pos_grid: V2 = mouse_pos_grid_opt.expect("Hover pos should work when dragging");
-							*selected_graphics_state =  SelectionState::Dragging(begining_mouse_pos_grid, emath_vec2_to_v2(response.drag_delta()) / grid_size);
-							for item_ref in selected_graphics.iter() {
-								self.run_function_on_graphic_item_mut(item_ref.clone(), |graphic_item| {
-									graphic_item.start_dragging(begining_mouse_pos_grid);
-								});
-							}
-						}
-						if response.clicked() {
-							// Find if command/ctrl is being held down
-							let multi_select_key: bool = input_state.key_down(Key::A);// TODO: Command / Control
-							// Find what was clicked (if anything)
-							match self.was_anything_clicked(mouse_pos2_to_grid(response.interact_pointer_pos().expect("Interact pointer pos should work when clicked")), multi_select_key) {
-								Some(new_selected_item) => match multi_select_key {
-									true => match selected_graphics.contains(&new_selected_item) {
-										true => {
-											selected_graphics.remove(&new_selected_item);
-										},
-										false => {
-											selected_graphics.insert(new_selected_item);
-										}
-									},
-									false => {
-										selected_graphics.clear();
-										selected_graphics.insert(new_selected_item);
-									}
-								},
-								None => {
-									if !multi_select_key {
-										*selected_graphics = HashSet::new();
-									}
-								}
-							}
-							//println!("Currently selected items: {:?}", &selected_graphics);
-						}
-						// Cmd-A for select-all
-						if input_state.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::A)) {
-							*selected_graphics = HashSet::from_iter(self.get_all_graphics_references());
-						}
-						// W for Wire
-						if input_state.consume_key(Modifiers::NONE, Key::W) {
-							new_tool_opt = Some(Tool::PlaceWire{perp_pairs: vec![]});
-						}
-					},
-					SelectionState::Dragging(start_grid, delta_grid) => {
-						let delta_grid_backwards_y = emath_vec2_to_v2(response.drag_delta()) / grid_size;
-						*delta_grid += if cfg!(feature = "reverse_y") {
-							v2_reverse_y(delta_grid_backwards_y)
-						} else {
-							delta_grid_backwards_y
-						};
-						match selected_graphics.len() {
-							0 => {// Drag a rectangle
-								let select_bb: (V2, V2) = merge_points_to_bb(vec![*start_grid, *start_grid + *delta_grid]);
-								if response.drag_stopped_by(PointerButton::Primary) {
-									// Find all items that have BBs intersected by the rectangle and select them
-									selected_graphics.clear();
-									for item_ref in self.get_all_graphics_references() {
-										if self.run_function_on_graphic_item(item_ref.clone(), |graphic_item| -> bool {
-											bbs_overlap(graphic_item.bounding_box(V2::zeros()), select_bb)
-										}).unwrap_or_else(|| false) {
-											selected_graphics.insert(item_ref.clone());
-										}
-									}
-									// Back to fixed selection
-									*selected_graphics_state = SelectionState::Fixed
-								}
-							},
-							_ => {// Move stuff
-								for item_ref in selected_graphics.iter() {
-									self.run_function_on_graphic_item_mut(item_ref.clone(), |graphic_item| {
-										graphic_item.dragging_to(*start_grid + *delta_grid);
-									});
-								}
-								if response.drag_stopped_by(PointerButton::Primary) {
-									for item_ref in selected_graphics.iter() {
-										self.run_function_on_graphic_item_mut(item_ref.clone(), |graphic_item| {
-											graphic_item.stop_dragging(*start_grid + *delta_grid);
-										});
-									}
-									*selected_graphics_state = SelectionState::Fixed;
-									return_recompute_connections = true;
-								}
-							}
-						}
-					},
-					SelectionState::FollowingMouse(mouse_pos) => {
-						if let Some(new_mouse_pos) = mouse_pos_grid_opt {// In case the mouse goes off the edge or something idk
-							*mouse_pos = new_mouse_pos;
-						}
-						for item_ref in selected_graphics.iter() {
-							self.run_function_on_graphic_item_mut(item_ref.clone(), |item_box| {item_box.get_ui_data_mut().position = round_v2_to_intv2(*mouse_pos) + item_box.get_ui_data().position_before_dragging;});
-						}
-						if response.clicked_by(PointerButton::Primary) {
-							return_recompute_connections = true;
-							new_tool_opt = Some(Tool::default());
-						}
-					}
-				}
-				// Copy and Paste will use a plain-text JSON array of instances of the `CopiedGraphicItem` enum
-				// Copy
-				if input_state.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::C)) {// TODO
-					let mut copied_items = Vec::<CopiedGraphicItem>::new();
-					// Get combined BB center
-					let bb_opt = self.selected_bb(selected_graphics);
-					// If there is a BB then at least one selected item to copy, otherwise do nothing
-					if let Some(bb) = bb_opt {
-						let bb_center: V2 = (bb.1 + bb.0) / 2.0;
-						//let bb_int = (IntV2(bb_float.0.x as i32, bb_float.0.y as i32), IntV2(bb_float.1.x as i32, bb_float.1.y as i32));
-						for item_ref in selected_graphics.iter() {
-							if let Some(copied_item) = self.copy_graphic_item(item_ref.clone()) {
-								copied_items.push(copied_item);
-							}
-						}
-						let item_set = CopiedItemSet::new(copied_items, round_v2_to_intv2(bb_center));
-						let raw_string = serde_json::to_string(&item_set).unwrap();
-						context.copy_text(raw_string);
-					}
-				}
-				// Vaste
-				if input_state.consume_shortcut(&KeyboardShortcut::new(Modifiers::NONE, Key::V)) {// TODO
-					// Attempt to decode from clipboard
-					let mut clipboard = arboard::Clipboard::new().unwrap();
-					let string_raw = clipboard.get_text().unwrap();
-					match serde_json::from_str::<CopiedItemSet>(&string_raw) {
-						Ok(item_set) => {
-							let pasted_selected_graphics = self.paste(item_set);
-							new_tool_opt = Some(Tool::Select{selected_graphics: HashSet::from_iter(pasted_selected_graphics.into_iter()), selected_graphics_state: SelectionState::FollowingMouse(mouse_pos_grid_opt.unwrap_or_default())});
-						},
-						Err(_) => {}
-					}
-					recompute_pin_block_positions = true;
-				}
-				// Delete
-				if input_state.consume_key(Modifiers::NONE, Key::Backspace) {
-					for item_ref in selected_graphics.iter() {
-						self.remove_graphic_item(item_ref);
-					}
-					recompute_pin_block_positions = true;
-					return_recompute_connections = true;
-					*selected_graphics = HashSet::new();
-				}
-				// Rotate w/ arrow keys
-				if input_state.consume_key(Modifiers::NONE, Key::ArrowLeft) {
-					self.rotate_selection(selected_graphics, false);
-					return_recompute_connections = true;
-				}
-				if input_state.consume_key(Modifiers::NONE, Key::ArrowRight) {
-					self.rotate_selection(selected_graphics, true);
-					return_recompute_connections = true;
-				}
-				// Flip w/ arrow keys
-				if input_state.consume_key(Modifiers::COMMAND, Key::ArrowLeft) || input_state.consume_key(Modifiers::COMMAND, Key::ArrowRight) {
-					self.flip_selection(selected_graphics, true);
-					return_recompute_connections = true;
-				}
-				if input_state.consume_key(Modifiers::COMMAND, Key::ArrowDown) || input_state.consume_key(Modifiers::COMMAND, Key::ArrowUp) {
-					self.flip_selection(selected_graphics, false);
-					return_recompute_connections = true;
-				}
-			},
-			Tool::HighlightNet(_net_id) => {
-				// TODO
-			},
-			Tool::PlaceWire{perp_pairs} => {
-				if let Some(mouse_pos_grid) = mouse_pos_grid_opt {
-					let mouse_pos_grid_rounded: IntV2 = round_v2_to_intv2(mouse_pos_grid);
-					let n_pairs = perp_pairs.len();
-					// Wire has been started
-					if n_pairs >= 1 {
-						let latest_pair: &mut (IntV2, FourWayDir) = &mut perp_pairs[n_pairs - 1];
-						// Check if perp pair is perfectly horiz or vert
-						let v: IntV2 = mouse_pos_grid_rounded - latest_pair.0;
-						if let Some(new_dir) = v.is_along_axis() {
-							latest_pair.1 = new_dir;
-						}
-						if response.clicked_by(PointerButton::Primary) {
-							// First, check if this is a wire termination point
-							let (is_term_point, _, _) = self.is_connection_point(mouse_pos_grid_rounded);
-							if is_term_point {
-								// End wire
-								self.add_wire_geometry(perp_pairs.clone(), mouse_pos_grid_rounded);
-								return_recompute_connections = true;
-								new_tool_opt = Some(Tool::default());
-							}
-							else {
-								perp_pairs.push((
-									mouse_pos_grid_rounded,
-									FourWayDir::E
-								));
-							}
-						}
-					}
-					// Wire not started
-					else {
-						if response.clicked_by(PointerButton::Primary) {
-							perp_pairs.push((
-								mouse_pos_grid_rounded,
-								FourWayDir::E
-							));
-						}
-					}
-				}
-				if input_state.consume_key(Modifiers::NONE, Key::Escape) {
-					new_tool_opt = Some(Tool::default());
-				}
-			}
-		}
-		if let Some(new_tool) = new_tool_opt {
-			*self.tool.borrow_mut() = new_tool;
-		}
-		if recompute_pin_block_positions {
-			self.update_pin_block_positions();
-		}
-		return_recompute_connections
-	}
-	pub fn show_timing_diagram_ui(&self, ui: &mut Ui, styles: &mut Styles) {
-		ui.horizontal(|ui| {
-			let mut timing = self.timing.borrow_mut();
-			if ui.button("Clear").clicked() {
-				timing.n_samples = 0;
-				for (_, ref mut signal_group) in &mut timing.signal_groups {
-					*signal_group = (0..signal_group.len()).map(|_| vec![]).collect();
-				}
-			}
-			ui.label("Resolution:");
-			ui.add(DragValue::new(&mut styles.timing_diagram_resolution_px).clamp_existing_to_range(true).range(RangeInclusive::new(5, 100)));
-		});
-		let timing = self.timing.borrow();
-		ScrollArea::vertical().show(ui, |ui| {
-			ui.horizontal(|ui| {
-				let mut amplitude: f32 = 10.0;
-				let mut vert_spacing: f32 = 25.0;
-				// Labels
-				let vert_widget_extra_spacing = ui.style().spacing.item_spacing.y;
-				ui.vertical(|ui| {
-					ui.add_space(8.0);
-					let height = ui.label("CLK").rect.height() + vert_widget_extra_spacing;
-					if height > vert_spacing {
-						let r = height / vert_spacing;
-						vert_spacing /= r;
-						amplitude /= r;
-					}
-					ui.add_space(vert_spacing - height);
-					let probes = self.probes.borrow();
-					for (i, (probe_id, _)) in timing.signal_groups.iter().enumerate() {
-						if i == 0 {
-							continue;
-						}
-						let height = ui.label(&probes.get(probe_id).unwrap().name).rect.height() + vert_widget_extra_spacing;
-						ui.add_space(vert_spacing - height);
-					}
-				});
-				// Signals
-				let wavelength = styles.timing_diagram_resolution_px as f32;
-				if timing.n_samples > 0 {
-					ScrollArea::horizontal().stick_to_right(true).show(ui, |ui| {
-						Frame::canvas(ui.style()).show::<()>(ui, |ui| {
-							let canvas_size = Vec2::new(timing.n_samples as f32 * wavelength + 4.0, timing.signal_groups.len() as f32 * vert_spacing);
-							let (response, painter) = ui.allocate_painter(canvas_size, Sense::empty());
-							let logic_state_to_graph_y_and_color = |state: LogicState| -> (f32, [u8; 3]) {
-								match state {
-									LogicState::Floating => (0.0, styles.color_wire_floating),
-									LogicState::Contested => (0.0, styles.color_wire_contested),
-									LogicState::Driven(bit) => match bit {
-										true => (amplitude, styles.color_foreground),
-										false => (-amplitude, styles.color_foreground)
-									}
-								}
-							};
-							let graph_pos_to_canvas_pos = |graph_x: f32, graph_y: f32, group_i: usize| -> Pos2 {
-								Pos2::new(graph_x + response.rect.left() + 2.0, (-graph_y) + (group_i as f32 + 0.5)*vert_spacing + response.rect.top())
-							};
-							for (group_i, (_, signal_group)) in timing.signal_groups.iter().enumerate() {
-								//let (response, painter) = ui.allocate_painter(Vec2::new(0.0, 20.0), Sense::empty());
-								// Iterate signal samples
-								let mut prev_sample: Vec<LogicState> = signal_group.iter().map(|signal| signal[0]).collect();
-								for sample_i in 0..timing.n_samples {
-									let current_sample: Vec<LogicState> = signal_group.iter().map(|signal| signal[sample_i]).collect();
-									let sample_i_f32: f32 = sample_i as f32;
-									assert!(current_sample.len() > 0, "Signal group must have at least one bit");
-									if current_sample.len() == 1 {
-										let (current_y, color) = logic_state_to_graph_y_and_color(current_sample[0]);
-										let stroke = Stroke::new(1.0, u8_3_to_color32(color));
-										if prev_sample[0] != current_sample[0] {// Vertical connection line if states are different
-											let (prev_y, _) = logic_state_to_graph_y_and_color(prev_sample[0]);
-											painter.line_segment([graph_pos_to_canvas_pos(sample_i_f32*wavelength, prev_y, group_i), graph_pos_to_canvas_pos(sample_i_f32*wavelength, current_y, group_i)], stroke);
-										}
-										painter.line_segment([graph_pos_to_canvas_pos(sample_i_f32*wavelength, current_y, group_i), graph_pos_to_canvas_pos((sample_i_f32+1.0)*wavelength, current_y, group_i)], stroke);
-									}
-									else {
-										// TODO
-									}
-									prev_sample = current_sample;
-								}
-							}
-						});
-					});
-				}
-			});
-		});
-	}
-	pub fn paste(&self, item_set: CopiedItemSet) -> Vec<GraphicSelectableItemRef> {
-		let mut out = Vec::<GraphicSelectableItemRef>::new();
-		for pasted_item in item_set.items {
-			out.push(match pasted_item {
-				CopiedGraphicItem::Component(comp_save) => self.insert_component(&comp_save),
-				CopiedGraphicItem::ExternalConnection(pos, dir, name, show_name, bit_width) => {
-					GraphicSelectableItemRef::Pin(self.insert_graphic_pin(pos, dir, name, show_name, bit_width))
-				},
-				CopiedGraphicItem::Wire((pos, dir, len)) => {
-					let wire_ids = self.add_wire_geometry(vec![(pos, dir)], pos + dir.to_unit_int().mult(len as i32));
-					GraphicSelectableItemRef::Wire(wire_ids[0])// There shoud be exactly one
-				},
-				CopiedGraphicItem::Splitter(save) => self.insert_splitter(save),
-				CopiedGraphicItem::GraphicLabel(save) => self.insert_label(save),
-				CopiedGraphicItem::Probe(save) => self.insert_probe(save)
-			});
-		}
-		// Set each item's pre-drag position to the difference from the BB center it it's position
-		for item_ref in &out {
-			self.run_function_on_graphic_item_mut(item_ref.clone(), |item_box| {item_box.get_ui_data_mut().position_before_dragging = item_box.get_ui_data().position - item_set.bb_center;});
-		}
-		out
-	}
 	pub fn insert_graphic_pin(&self, pos: IntV2, dir: FourWayDir, name: String, show_name: bool, bit_width: u16) -> u64 {
 		let mut graphic_pins = self.generic_device.graphic_pins.borrow_mut();
 		let new_pin_id = lowest_unused_key(&*graphic_pins);
@@ -2421,78 +2104,9 @@ impl LogicCircuit {
 			selected_graphics_state: SelectionState::FollowingMouse(V2::zeros())
 		};
 	}
-	fn selected_bb(&self, selected_graphics: &HashSet<GraphicSelectableItemRef>) -> Option<(V2, V2)> {
-		let mut bb_opt = Option::<(V2, V2)>::None;
-		for item_ref in selected_graphics.iter() {
-			if let Some(bb_float) = self.run_function_on_graphic_item::<(V2, V2)>(item_ref.clone(), |item_box| item_box.bounding_box(V2::zeros())) {
-				bb_opt = Some(match bb_opt.clone() {
-					Some(bb) => {
-						merge_points_to_bb(vec![bb_float.0, bb_float.1, bb.0, bb.1])
-					}
-					None => bb_float
-				});
-			}
-		}
-		bb_opt
-	}
-	pub fn rotate_selection(&self, selected_graphics: &HashSet<GraphicSelectableItemRef>, cw: bool) {
-		// Only do anything of there's at least one thing selected
-		if let Some(bb) = self.selected_bb(selected_graphics) {
-			let bb_center: IntV2 = round_v2_to_intv2((bb.1 + bb.0) / 2.0);
-			for item_ref in selected_graphics.iter() {
-				self.run_function_on_graphic_item_mut(item_ref.clone(), |item_box| {
-					let ui_data: &mut UIData = item_box.get_ui_data_mut();
-					let rotate_dir: FourWayDir = if cw {
-						ui_data.direction = ui_data.direction.turn_cw();
-						FourWayDir::S
-					}
-					else {
-						ui_data.direction = ui_data.direction.turn_ccw();
-						FourWayDir::N
-					};
-					ui_data.position = rotate_dir.rotate_intv2(ui_data.position - bb_center) + bb_center;
-					ui_data.position_before_dragging = rotate_dir.rotate_intv2(ui_data.position_before_dragging);
-				});
-			}
-		}
-	}
-	/// Flips anything with direction W or E if horiz, otherwise anything with N or S
-	pub fn flip_selection(&self, selected_graphics: &HashSet<GraphicSelectableItemRef>, horiz: bool) {
-		// Only do anything of there's at least one thing selected
-		if let Some(bb) = self.selected_bb(selected_graphics) {
-			let bb_center: IntV2 = round_v2_to_intv2((bb.1 + bb.0) / 2.0);
-			for item_ref in selected_graphics.iter() {
-				self.run_function_on_graphic_item_mut(item_ref.clone(), |item_box| {
-					let ui_data: &mut UIData = item_box.get_ui_data_mut();
-					// Fixed by Gemini
-					if horiz {
-						// Check if the item has a horizontal direction to flip
-						if ui_data.direction == FourWayDir::E || ui_data.direction == FourWayDir::W {
-							// Flip the item's direction (e.g., East becomes West)
-							ui_data.direction = ui_data.direction.opposite_direction();
-						}
-						// Reflect the item's absolute position across the center's X-coordinate
-						ui_data.position.0 = 2 * bb_center.0 - ui_data.position.0;
-						// Reflect the relative dragging offset by negating its X-component
-						ui_data.position_before_dragging.0 = -ui_data.position_before_dragging.0;
-					} else { // Vertical flip
-						// Check if the item has a vertical direction to flip
-						if ui_data.direction == FourWayDir::S || ui_data.direction == FourWayDir::N {
-							// Flip the item's direction (e.g., North becomes South)
-							ui_data.direction = ui_data.direction.opposite_direction();
-						}
-						// Reflect the item's absolute position across the center's Y-coordinate
-						ui_data.position.1 = 2 * bb_center.1 - ui_data.position.1;
-						// Reflect the relative dragging offset by negating its Y-component
-						ui_data.position_before_dragging.1 = -ui_data.position_before_dragging.1;
-					}
-				});
-			}
-		}
-	}
 	/// Checks: All wires, external pins, component pins
 	/// Returns: (Is termination point, Vec<Optional nets corresponding to bit width>, Optional shared wire connection set)
-	fn is_connection_point(&self, point: IntV2) -> (bool, Vec<Option<u64>>, Option<Rc<RefCell<HashSet<WireConnection>>>>) {
+	pub fn is_connection_point(&self, point: IntV2) -> (bool, Vec<Option<u64>>, Option<Rc<RefCell<HashSet<WireConnection>>>>) {
 		if let Some((_, net_ids, _, connections_opt)) = self.is_point_on_wire(point, None) {
 			return (true, net_ids.iter().map(|id| Some(*id)).collect(), connections_opt);
 		}
@@ -2560,7 +2174,7 @@ impl LogicCircuit {
 	/// Adds new wires to circuit, `perp_segment_pairs` works the same as described in `Tool::PlaceWire`
 	/// Does not take care of wire connections and nets
 	/// Returns: Vec of new wire IDs
-	fn add_wire_geometry(
+	pub fn add_wire_geometry(
 		&self,
 		perp_segment_pairs: Vec<(IntV2, FourWayDir)>,
 		ending_pos: IntV2
@@ -2619,6 +2233,7 @@ impl LogicCircuit {
 		// Last net computation setep
 		self.update_logical_pin_to_wire_connections();
 		// Recompute BB for circuit internals
+		#[cfg(feature = "using_egui")]
 		self.recompute_internals_bb();
 	}
 	/// Ignores connections, just checks every wire against every other one, so O(n^2)
@@ -3091,47 +2706,8 @@ impl LogicCircuit {
 			other => panic!("LogicCircuit.add_connection_to_wire() provided with invalid wire intercept triple: {:?}", other)
 		}
 	}
-	fn recompute_internals_bb(&mut self) {
-		let mut bb_opt = Option::<(V2, V2)>::None;
-		for item_ref in self.get_all_graphics_references() {
-			if let GraphicSelectableItemRef::Pin(_) = &item_ref {
-				continue;
-			}
-			self.run_function_on_graphic_item(item_ref.clone(), |item_box| {
-				let new_bb = item_box.bounding_box(V2::zeros());
-				if let Some(bb) = &mut bb_opt {
-					*bb = merge_points_to_bb(vec![bb.0, bb.1, new_bb.0, new_bb.1]);
-				}
-				else {
-					bb_opt = Some(new_bb);
-				}
-			});
-		}
-		if let Some(bb) = bb_opt {
-			self.circuit_internals_bb = bb;
-		}
-		else {
-			self.circuit_internals_bb = (V2::zeros(), V2::zeros())
-		}
-	}
-	fn was_anything_clicked<'a>(&self, grid_pos: V2, multi_select_key: bool) -> Option<GraphicSelectableItemRef> {
-		let mut selected_opt = Option::<GraphicSelectableItemRef>::None;
-		for ref_ in self.get_all_graphics_references() {
-			self.run_function_on_graphic_item_mut(ref_.clone(), |graphic_item| {
-				if graphic_item.is_click_hit(grid_pos, V2::zeros()) {
-					if multi_select_key {
-						selected_opt = Some(ref_.clone());
-					}
-					else if !graphic_item.accept_click(graphic_item.get_ui_data().parent_pos_to_local_coords_float(grid_pos)) {
-						selected_opt = Some(ref_.clone());
-					}
-				}
-			});
-		}
-		selected_opt
-	}
 	/// Returns: Whether it was removed
-	fn remove_graphic_item(&self, ref_: &GraphicSelectableItemRef) -> bool {
+	pub fn remove_graphic_item(&self, ref_: &GraphicSelectableItemRef) -> bool {
 		match ref_ {
 			GraphicSelectableItemRef::Component(comp_id) => self.components.borrow_mut().remove(comp_id).is_some(),
 			GraphicSelectableItemRef::Wire(wire_id) => self.wires.borrow_mut().remove(wire_id).is_some(),
@@ -3246,42 +2822,6 @@ impl LogicCircuit {
 			}
 		}
 	}
-	fn copy_graphic_item(&self, ref_: GraphicSelectableItemRef) -> Option<CopiedGraphicItem> {
-		match ref_ {
-			GraphicSelectableItemRef::Component(comp_id) => {
-				let components_ref = self.components.borrow();
-				let comp_rc = components_ref.get(&comp_id)?;
-				let comp_borrow = comp_rc.borrow();
-				Some(comp_borrow.copy())
-			}
-			GraphicSelectableItemRef::Wire(wire_id) => {
-				let wires_ref = self.wires.borrow();
-				let wire_rc = wires_ref.get(&wire_id)?;
-				let wire_borrow = wire_rc.borrow();
-				Some(wire_borrow.copy())
-			}
-			GraphicSelectableItemRef::Pin(pin_id) => {
-				let pins_ref = self.generic_device.graphic_pins.borrow();
-				let pin = pins_ref.get(&pin_id)?;
-				Some(pin.copy())
-			},
-			GraphicSelectableItemRef::Splitter(splitter_id) => {
-				let splitters = self.splitters.borrow();
-				let splitter = splitters.get(&splitter_id)?;
-				Some(splitter.copy())
-			},
-			GraphicSelectableItemRef::GraphicLabel(label_id) => {
-				let labels = self.labels.borrow();
-				let label = labels.get(&label_id)?;
-				Some(label.copy())
-			},
-			GraphicSelectableItemRef::Probe(probe_id) => {
-				let probes = self.probes.borrow();
-				let probe = probes.get(&probe_id)?;
-				Some(probe.copy())
-			}
-		}
-	}
 	/*fn delete_graphic_item(&mut self, ref_: GraphicSelectableItem) {
 		let error_msg = format!("Graphic item reference {:?} cannot be found", &ref_);
 		match ref_ {
@@ -3290,7 +2830,7 @@ impl LogicCircuit {
 			GraphicSelectableItemRef::Pin(pin_id) => func(Box::new(pin_to_graphic_item(&self.generic_device.pins.get_item_tuple(&(pin_id.into())).expect(&error_msg).1))),
 		}
 	}*/
-	fn get_all_graphics_references(&self) -> Vec<GraphicSelectableItemRef> {
+	pub fn get_all_graphics_references(&self) -> Vec<GraphicSelectableItemRef> {
 		let mut out = Vec::<GraphicSelectableItemRef>::new();
 		for (ref_, _) in self.components.borrow().iter() {
 			out.push(GraphicSelectableItemRef::Component(*ref_));
@@ -3514,7 +3054,8 @@ impl LogicCircuit {
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_path), &raw_string))?;
 		Ok(())
 	}
-	pub fn draw_as_block<'a>(&self, draw: &ComponentDrawInfo<'a>, for_block_layout_edit: bool) {
+	pub fn draw_as_block<'a>(&self, draw: &dyn DrawInterface<'a>, for_block_layout_edit: bool) {
+		let styles = draw.get_draw_data().styles;
 		// Rectangle
 		draw.draw_polyline(
 			vec![
@@ -3524,14 +3065,14 @@ impl LogicCircuit {
 				V2::new(self.generic_device.ui_data.local_bb.0.x, self.generic_device.ui_data.local_bb.1.y),
 				V2::new(self.generic_device.ui_data.local_bb.0.x, self.generic_device.ui_data.local_bb.0.y)
 			],
-			draw.styles.color_foreground
+			styles.color_foreground
 		);
 		// Pins at alternate locations
 		for (pin_id, pin) in self.generic_device.graphic_pins.borrow().iter() {
 			let pin_alternate_config = self.block_pin_positions.get(pin_id).expect("Pin missing from block layout");
 			let pin_stroke = match for_block_layout_edit {
-				true => draw.styles.color_foreground,
-				false => draw.styles.color_from_logic_states(&pin.states())
+				true => styles.color_foreground,
+				false => styles.color_from_logic_states(&pin.states())
 			};
 			draw.draw_polyline(
 				vec![
@@ -3541,7 +3082,7 @@ impl LogicCircuit {
 				pin_stroke
 			);
 			if for_block_layout_edit {
-				draw.draw_circle_filled(pin_alternate_config.0.to_v2(), draw.styles.connection_dot_grid_size, draw.styles.color_wire_floating);
+				draw.draw_circle_filled(pin_alternate_config.0.to_v2(), styles.connection_dot_grid_size, styles.color_wire_floating);
 			}
 			// Pin name
 			/*if pin_alternate_config.2 {
@@ -3549,8 +3090,8 @@ impl LogicCircuit {
 					pin.name.clone(),
 					pin_alternate_config.0.to_v2() - (pin_alternate_config.1.to_unit()*1.2),
 					pin_alternate_config.1.rotate_intv2(draw.direction.to_unit_int()).is_along_axis().unwrap().to_egui_align2(),
-					draw.styles.text_color,
-					draw.styles.text_size_grid
+					draw.styles().text_color,
+					draw.styles().text_size_grid
 				);
 			}*/
 		}
@@ -3558,9 +3099,9 @@ impl LogicCircuit {
 		draw.text(
 			self.type_name.clone(),
 			V2::zeros(),// Relative
-			Align2::CENTER_CENTER,
-			draw.styles.text_color,
-			draw.styles.text_size_grid,
+			GenericAlign2::CENTER_CENTER,
+			styles.text_color,
+			styles.text_size_grid,
 			false
 		);
 	}
@@ -3582,7 +3123,7 @@ impl LogicDevice for LogicCircuit {
 		// Path to save file
 		Ok(EnumAllLogicDevices::SubCircuit(self.save_path.clone(), self.displayed_as_block, self.get_ui_data().position, self.get_ui_data().direction, self.generic_device.name.clone()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
 		if self.displayed_as_block {
 			self.draw_as_block(draw, false);
 		}
@@ -3596,7 +3137,7 @@ impl LogicDevice for LogicCircuit {
 					Some(net) => net.borrow().state,
 					None => LogicState::Floating
 				}).collect();
-				wire.color = draw.styles.color_from_logic_states(&states);
+				wire.color = draw.styles().color_from_logic_states(&states);
 			}
 			// Use graphic item trait
 			for ref_ in self.get_all_graphics_references() {
@@ -3609,8 +3150,8 @@ impl LogicDevice for LogicCircuit {
 			}
 		}
 		if self.is_toplevel {
-			let mouse_pos_grid_opt: Option<V2> = match draw.mouse_pos {
-				Some(pos_px) => Some(draw.mouse_pos2_to_grid(pos_px)),
+			let mouse_pos_grid_opt: Option<V2> = match draw.get_draw_data().mouse_pos {
+				Some(pos_px) => Some(draw.get_draw_data().mouse_pos2_to_grid(pos_px)),
 				None => None
 			};
 			match self.tool.borrow().deref() {
@@ -3619,7 +3160,7 @@ impl LogicDevice for LogicCircuit {
 						SelectionState::Fixed => {},
 						SelectionState::Dragging(start_grid, delta_grid) => {
 							if selected_graphics.is_empty() {
-								draw.draw_rect(*start_grid, *start_grid + *delta_grid, draw.styles.select_rect_color, draw.styles.select_rect_edge_color);
+								draw.draw_rect(*start_grid, *start_grid + *delta_grid, draw.styles().select_rect_color, draw.styles().select_rect_edge_color);
 							}
 						},
 						SelectionState::FollowingMouse(_) => {}
@@ -3635,7 +3176,7 @@ impl LogicDevice for LogicCircuit {
 							});
 						}
 						let bb = merge_points_to_bb(points);
-						draw.draw_rect(bb.0, bb.1, [0, 0, 0, 0], draw.styles.select_rect_edge_color);
+						draw.draw_rect(bb.0, bb.1, [0, 0, 0, 0], draw.styles().select_rect_edge_color);
 					}
 				},
 				Tool::HighlightNet(_net_id) => {
@@ -3660,7 +3201,7 @@ impl LogicDevice for LogicCircuit {
 									draw.draw_polyline(vec![
 										segment.0.to_v2(),
 										segment.0.to_v2() + (segment.1.to_unit() * (segment.2 as f32))
-									], draw.styles.color_wire_in_progress);
+									], draw.styles().color_wire_in_progress);
 								}
 							}
 						}
@@ -3699,14 +3240,14 @@ impl LogicDevice for LogicCircuit {
 				// Display them
 				for (i, (pos, bw)) in connection_positions_and_bws.iter().enumerate() {
 					let pos_v2 = pos.to_v2();
-					draw.draw_polyline(vec![IntV2(-1, -1), IntV2(1, 1)].iter().map(|intv| pos_v2 + intv.to_v2() / 2.0).collect(), draw.styles.color_error_x);
-					draw.draw_polyline(vec![IntV2(1, -1), IntV2(-1, 1)].iter().map(|intv| pos_v2 + intv.to_v2() / 2.0).collect(), draw.styles.color_error_x);
-					draw.text(format!("{} Bits", bw), pos.to_v2() + V2::new(0.7, 0.0), Align2::LEFT_CENTER, draw.styles.text_color, draw.styles.text_size_grid, false);
+					draw.draw_polyline(vec![IntV2(-1, -1), IntV2(1, 1)].iter().map(|intv| pos_v2 + intv.to_v2() / 2.0).collect(), draw.styles().color_error_x);
+					draw.draw_polyline(vec![IntV2(1, -1), IntV2(-1, 1)].iter().map(|intv| pos_v2 + intv.to_v2() / 2.0).collect(), draw.styles().color_error_x);
+					draw.text(format!("{} Bits", bw), pos.to_v2() + V2::new(0.7, 0.0), GenericAlign2::LEFT_CENTER, draw.styles().text_color, draw.styles().text_size_grid, false);
 					if let Some(hovered_conn_i) = connection_hover_index {
 						if hovered_conn_i == i {
 							for (i2, (pos2, _)) in connection_positions_and_bws.iter().enumerate() {
 								if i2 != i {
-									draw.draw_polyline(vec![pos.to_v2(), pos2.to_v2()], draw.styles.color_error_x);
+									draw.draw_polyline(vec![pos.to_v2(), pos2.to_v2()], draw.styles().color_error_x);
 								}
 							}
 						}
@@ -3738,11 +3279,13 @@ impl LogicDevice for LogicCircuit {
 			self.get_pin_position(pin_id)
 		}
 	}
+	#[cfg(feature = "using_egui")]
 	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
 		vec![
 			SelectProperty::ReloadCircuit(false, self.self_reload_err_opt.clone())
 		]
 	}
+	#[cfg(feature = "using_egui")]
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		if let SelectProperty::ReloadCircuit(reload, _) = property {
 			if reload {

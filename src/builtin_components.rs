@@ -1,4 +1,5 @@
-use crate::{prelude::*, simulator::{graphic_pin_config_from_single_pins, AncestryStack}};
+use crate::{prelude::*, simulator::AncestryStack};
+#[cfg(feature = "using_egui")]
 use eframe::egui::Ui;
 use common_macros::hash_map;
 use std::{collections::HashMap, cell::RefCell, rc::Rc};
@@ -20,7 +21,8 @@ pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
 		Memory::new().save().unwrap(),
 		TriStateBuffer::new().save().unwrap(),
 		Adder::new().save().unwrap(),
-		DLatch::new().save().unwrap()
+		DLatch::new().save().unwrap(),
+		Counter::new().save().unwrap()
 	]
 }
 
@@ -243,6 +245,7 @@ impl BlockLayoutHelper {
 			FourWayDir::S => -self.bb.0.1
 		}
 	}
+	#[cfg(feature = "using_egui")]
 	fn get_properties(&self) -> Vec<SelectProperty> {
 		let mut out = Vec::new();
 		for group in &self.pin_groups {
@@ -252,6 +255,7 @@ impl BlockLayoutHelper {
 		}
 		out
 	}
+	#[cfg(feature = "using_egui")]
 	/// Returns: Whether anything changed
 	fn set_property(&mut self, property: SelectProperty) -> bool {
 		if let SelectProperty::BusLayout(group_name, single_pin, forward) = property {
@@ -315,14 +319,14 @@ impl LogicDevice for GateAnd {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateAnd(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
 		draw.draw_polyline(vec![
 			V2::new(0.0, -2.0),
 			V2::new(-2.0, -2.0),
 			V2::new(-2.0, 2.0),
 			V2::new(0.0, 2.0)
-		], draw.styles.color_foreground);
-		draw.draw_arc(V2::zeros(), 2.0, -90.0, 90.0, draw.styles.color_foreground);
+		], draw.styles().color_foreground);
+		draw.draw_arc(V2::zeros(), 2.0, -90.0, 90.0, draw.styles().color_foreground);
 	}
 }
 
@@ -362,15 +366,15 @@ impl LogicDevice for GateNand {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateNand(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
 		draw.draw_polyline(vec![
 			V2::new(0.0, -2.0),
 			V2::new(-2.0, -2.0),
 			V2::new(-2.0, 2.0),
 			V2::new(0.0, 2.0)
-		], draw.styles.color_foreground);
-		draw.draw_arc(V2::zeros(), 2.0, -90.0, 90.0, draw.styles.color_foreground);
-		draw.draw_circle(V2::new(2.5, 0.0), 0.5, draw.styles.color_foreground);
+		], draw.styles().color_foreground);
+		draw.draw_arc(V2::zeros(), 2.0, -90.0, 90.0, draw.styles().color_foreground);
+		draw.draw_circle(V2::new(2.5, 0.0), 0.5, draw.styles().color_foreground);
 	}
 }
 
@@ -408,14 +412,14 @@ impl LogicDevice for GateNot {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateNot(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
 		draw.draw_polyline(vec![
 			V2::new(2.0, 0.0),
 			V2::new(-2.0, -2.0),
 			V2::new(-2.0, 2.0),
 			V2::new(2.0, 0.0)
-		], draw.styles.color_foreground);
-		draw.draw_circle(V2::new(2.5, 0.0), 0.5, draw.styles.color_foreground);
+		], draw.styles().color_foreground);
+		draw.draw_circle(V2::new(2.5, 0.0), 0.5, draw.styles().color_foreground);
 	}
 }
 
@@ -454,18 +458,18 @@ impl LogicDevice for GateOr {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateOr(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
 		draw.draw_polyline(vec![
 			V2::new(-1.5, -2.0),
 			V2::new(-2.1, -2.0)
-		], draw.styles.color_foreground);
+		], draw.styles().color_foreground);
 		draw.draw_polyline(vec![
 			V2::new(-1.5, 2.0),
 			V2::new(-2.1, 2.0)
-		], draw.styles.color_foreground);
-		draw.draw_arc(V2::new(-1.5, 2.0), 4.0, -90.0, -30.0, draw.styles.color_foreground);
-		draw.draw_arc(V2::new(-1.5, -2.0), 4.0, 30.0, 90.0, draw.styles.color_foreground);
-		draw.draw_arc(V2::new(-7.8, 0.0), 6.0, -19.5, 19.5, draw.styles.color_foreground);
+		], draw.styles().color_foreground);
+		draw.draw_arc(V2::new(-1.5, 2.0), 4.0, -90.0, -30.0, draw.styles().color_foreground);
+		draw.draw_arc(V2::new(-1.5, -2.0), 4.0, 30.0, 90.0, draw.styles().color_foreground);
+		draw.draw_arc(V2::new(-7.8, 0.0), 6.0, -19.5, 19.5, draw.styles().color_foreground);
 	}
 }
 
@@ -504,19 +508,19 @@ impl LogicDevice for GateNor {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateNor(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
 		draw.draw_polyline(vec![
 			V2::new(-1.5, -2.0),
 			V2::new(-2.1, -2.0)
-		], draw.styles.color_foreground);
+		], draw.styles().color_foreground);
 		draw.draw_polyline(vec![
 			V2::new(-1.5, 2.0),
 			V2::new(-2.1, 2.0)
-		], draw.styles.color_foreground);
-		draw.draw_arc(V2::new(-1.5, 2.0), 4.0, -90.0, -30.0, draw.styles.color_foreground);
-		draw.draw_arc(V2::new(-1.5, -2.0), 4.0, 30.0, 90.0, draw.styles.color_foreground);
-		draw.draw_arc(V2::new(-7.8, 0.0), 6.0, -19.5, 19.5, draw.styles.color_foreground);
-		draw.draw_circle(V2::new(2.5, 0.0), 0.5, draw.styles.color_foreground);
+		], draw.styles().color_foreground);
+		draw.draw_arc(V2::new(-1.5, 2.0), 4.0, -90.0, -30.0, draw.styles().color_foreground);
+		draw.draw_arc(V2::new(-1.5, -2.0), 4.0, 30.0, 90.0, draw.styles().color_foreground);
+		draw.draw_arc(V2::new(-7.8, 0.0), 6.0, -19.5, 19.5, draw.styles().color_foreground);
+		draw.draw_circle(V2::new(2.5, 0.0), 0.5, draw.styles().color_foreground);
 	}
 }
 
@@ -555,19 +559,19 @@ impl LogicDevice for GateXor {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateXor(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
 		draw.draw_polyline(vec![
 			V2::new(-1.5, -2.0),
 			V2::new(-2.1, -2.0)
-		], draw.styles.color_foreground);
+		], draw.styles().color_foreground);
 		draw.draw_polyline(vec![
 			V2::new(-1.5, 2.0),
 			V2::new(-2.1, 2.0)
-		], draw.styles.color_foreground);
-		draw.draw_arc(V2::new(-1.5, 2.0), 4.0, -90.0, -30.0, draw.styles.color_foreground);
-		draw.draw_arc(V2::new(-1.5, -2.0), 4.0, 30.0, 90.0, draw.styles.color_foreground);
-		draw.draw_arc(V2::new(-7.8, 0.0), 6.0, -19.5, 19.5, draw.styles.color_foreground);
-		draw.draw_arc(V2::new(-8.1, 0.0), 6.0, -19.5, 19.5, draw.styles.color_foreground);
+		], draw.styles().color_foreground);
+		draw.draw_arc(V2::new(-1.5, 2.0), 4.0, -90.0, -30.0, draw.styles().color_foreground);
+		draw.draw_arc(V2::new(-1.5, -2.0), 4.0, 30.0, 90.0, draw.styles().color_foreground);
+		draw.draw_arc(V2::new(-7.8, 0.0), 6.0, -19.5, 19.5, draw.styles().color_foreground);
+		draw.draw_arc(V2::new(-8.1, 0.0), 6.0, -19.5, 19.5, draw.styles().color_foreground);
 	}
 }
 
@@ -606,20 +610,20 @@ impl LogicDevice for GateXnor {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateXnor(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
 		draw.draw_polyline(vec![
 			V2::new(-1.5, -2.0),
 			V2::new(-2.1, -2.0)
-		], draw.styles.color_foreground);
+		], draw.styles().color_foreground);
 		draw.draw_polyline(vec![
 			V2::new(-1.5, 2.0),
 			V2::new(-2.1, 2.0)
-		], draw.styles.color_foreground);
-		draw.draw_arc(V2::new(-1.5, 2.0), 4.0, -90.0, -30.0, draw.styles.color_foreground);
-		draw.draw_arc(V2::new(-1.5, -2.0), 4.0, 30.0, 90.0, draw.styles.color_foreground);
-		draw.draw_arc(V2::new(-7.8, 0.0), 6.0, -19.5, 19.5, draw.styles.color_foreground);
-		draw.draw_arc(V2::new(-8.1, 0.0), 6.0, -19.5, 19.5, draw.styles.color_foreground);
-		draw.draw_circle(V2::new(2.5, 0.0), 0.5, draw.styles.color_foreground);
+		], draw.styles().color_foreground);
+		draw.draw_arc(V2::new(-1.5, 2.0), 4.0, -90.0, -30.0, draw.styles().color_foreground);
+		draw.draw_arc(V2::new(-1.5, -2.0), 4.0, 30.0, 90.0, draw.styles().color_foreground);
+		draw.draw_arc(V2::new(-7.8, 0.0), 6.0, -19.5, 19.5, draw.styles().color_foreground);
+		draw.draw_arc(V2::new(-8.1, 0.0), 6.0, -19.5, 19.5, draw.styles().color_foreground);
+		draw.draw_circle(V2::new(2.5, 0.0), 0.5, draw.styles().color_foreground);
 	}
 }
 
@@ -658,7 +662,7 @@ impl LogicDevice for ClockSymbol {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::Clock(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
 		draw.draw_polyline(
 			vec![
 				V2::new(1.1, -0.9),
@@ -667,7 +671,7 @@ impl LogicDevice for ClockSymbol {
 				V2::new(2.9, -0.9),
 				V2::new(1.1, -0.9)
 			],
-			draw.styles.color_from_logic_state(self.get_pin_state_panic(0))
+			draw.styles().color_from_logic_state(self.get_pin_state_panic(0))
 		);
 		let clk_scale = 0.7;
 		draw.draw_polyline(
@@ -679,7 +683,7 @@ impl LogicDevice for ClockSymbol {
 				V2::new(clk_scale, -clk_scale),
 				V2::new(clk_scale, 0.0)
 			].iter().map(|p| self.0.ui_data.direction.rotate_v2_reverse(*p) + V2::new(2.0, 0.0)).collect(),
-			draw.styles.color_foreground
+			draw.styles().color_foreground
 		);
 	}
 }
@@ -726,21 +730,23 @@ impl LogicDevice for FixedSource {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::FixedSource(self.generic.save(), self.state))
 	}
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
 		match self.state {
 			true => {
-				draw.draw_polyline(vec![V2::new(0.0, 2.0), V2::new(1.0, 1.0), V2::new(-1.0, 1.0), V2::new(0.0, 2.0)], draw.styles.color_foreground);
+				draw.draw_polyline(vec![V2::new(0.0, 2.0), V2::new(1.0, 1.0), V2::new(-1.0, 1.0), V2::new(0.0, 2.0)], draw.styles().color_foreground);
 			},
 			false => {
-				draw.draw_polyline(vec![V2::new(1.0, -1.0), V2::new(-1.0, -1.0)], draw.styles.color_foreground);
-				draw.draw_polyline(vec![V2::new(0.75, -1.5), V2::new(-0.75, -1.5)], draw.styles.color_foreground);
-				draw.draw_polyline(vec![V2::new(0.5, -2.0), V2::new(-0.5, -2.0)], draw.styles.color_foreground);
+				draw.draw_polyline(vec![V2::new(1.0, -1.0), V2::new(-1.0, -1.0)], draw.styles().color_foreground);
+				draw.draw_polyline(vec![V2::new(0.75, -1.5), V2::new(-0.75, -1.5)], draw.styles().color_foreground);
+				draw.draw_polyline(vec![V2::new(0.5, -2.0), V2::new(-0.5, -2.0)], draw.styles().color_foreground);
 			}
 		}
 	}
+	#[cfg(feature = "using_egui")]
 	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
 		vec![SelectProperty::FixedSourceState(self.state)]
 	}
+	#[cfg(feature = "using_egui")]
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		if let SelectProperty::FixedSourceState(state) = property {
 			self.state = state;
@@ -856,9 +862,10 @@ impl LogicDevice for EncoderOrDecoder {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::EncoderOrDecoder(self.generic.save(), self.addr_size, self.is_encoder, self.layout.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
-		draw.draw_polyline(bb_to_polyline(self.generic.ui_data.local_bb), draw.styles.color_foreground);
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+		draw.draw_polyline(bb_to_polyline(self.generic.ui_data.local_bb), draw.styles().color_foreground);
 	}
+	#[cfg(feature = "using_egui")]
 	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
 		let mut out = vec![
 			SelectProperty::AddressWidth(self.addr_size, 8),
@@ -867,6 +874,7 @@ impl LogicDevice for EncoderOrDecoder {
 		out.append(&mut self.layout.get_properties());
 		out
 	}
+	#[cfg(feature = "using_egui")]
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		if let SelectProperty::AddressWidth(new_addr_size, _) = property {
 			*self = Self::from_save(self.generic.save(), new_addr_size, self.is_encoder, self.layout.save());
@@ -1042,9 +1050,10 @@ impl LogicDevice for Memory {
 			self.layout.save()
 		))
 	}
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
-		draw.draw_polyline(bb_to_polyline(self.generic.ui_data.local_bb), draw.styles.color_foreground);
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+		draw.draw_polyline(bb_to_polyline(self.generic.ui_data.local_bb), draw.styles().color_foreground);
 	}
+	#[cfg(feature = "using_egui")]
 	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
 		let mut out = vec![
 			SelectProperty::AddressWidth(self.addr_size, 16),
@@ -1053,6 +1062,7 @@ impl LogicDevice for Memory {
 		out.append(&mut self.layout.get_properties());
 		out
 	}
+	#[cfg(feature = "using_egui")]
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		if let SelectProperty::AddressWidth(new_addr_size, _) = property {
 			*self = Self::from_save(self.generic.save(), new_addr_size, Some(self.data.clone()), self.layout.save());
@@ -1094,6 +1104,7 @@ impl LogicDevice for Memory {
 	}
 }
 
+#[cfg(feature = "using_egui")]
 #[derive(Clone, Debug, PartialEq)]
 pub struct MemoryPropertiesUI {
 	pub nonvolatile: bool,
@@ -1104,6 +1115,7 @@ pub struct MemoryPropertiesUI {
 	pub changed: bool
 }
 
+#[cfg(feature = "using_egui")]
 impl MemoryPropertiesUI {
 	pub fn new(
 		nonvolatile: bool,
@@ -1140,9 +1152,9 @@ impl MemoryPropertiesUI {
 }
 
 #[derive(Debug)]
-pub struct TriStateBuffer(LogicDeviceGeneric);
+pub struct TriStateBufferOld(LogicDeviceGeneric);
 
-impl TriStateBuffer {
+impl TriStateBufferOld {
 	pub fn new() -> Self {
 		Self::from_save(LogicDeviceSave::default())
 	}
@@ -1161,7 +1173,7 @@ impl TriStateBuffer {
 	}
 }
 
-impl LogicDevice for TriStateBuffer {
+impl LogicDevice for TriStateBufferOld {
 	fn get_generic(&self) -> &LogicDeviceGeneric {
 		&self.0
 	}
@@ -1179,13 +1191,94 @@ impl LogicDevice for TriStateBuffer {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::TriStateBuffer(self.0.save()))
 	}
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
 		draw.draw_polyline(vec![
 			V2::new(2.0, 0.0),
 			V2::new(-2.0, -2.0),
 			V2::new(-2.0, 2.0),
 			V2::new(2.0, 0.0)
-		], draw.styles.color_foreground);
+		], draw.styles().color_foreground);
+	}
+}
+
+#[derive(Debug)]
+pub struct TriStateBuffer(LogicDeviceGeneric, BlockLayoutHelper, u16);
+
+impl TriStateBuffer {
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default(), BusLayoutSave::default(), 1)
+	}
+	pub fn from_save(save: LogicDeviceSave, layout_save: BusLayoutSave, bw: u16) -> Self {
+		let layout = BlockLayoutHelper::load(
+			layout_save,
+			vec![
+				(FourWayDir::E, 1, bw, "Q".to_owned()),
+				(FourWayDir::W, 1, bw, "D".to_owned()),
+				(FourWayDir::S, 1, 1, "En".to_owned())
+			],
+			IntV2(4, 2)
+		);
+		let mut out = Self(
+			LogicDeviceGeneric::load(
+				save,
+				layout.pin_config(),
+				layout.get_bb_float(),
+				false,
+				false
+			),
+			layout,
+			bw
+		);
+		for bit_i in 0..out.2 {
+			out.set_pin_internal_state_panic(out.1.get_logic_pin_id_panic("D", bit_i), LogicState::Floating);
+		}
+		out
+	}
+}
+
+impl LogicDevice for TriStateBuffer {
+	fn get_generic(&self) -> &LogicDeviceGeneric {
+		&self.0
+	}
+	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
+		&mut self.0
+	}
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
+		let enable: bool = self.get_pin_state_panic(self.1.get_logic_pin_id_panic("En", 0)).to_bool();
+		for bit_i in 0..self.2 {
+			let state: LogicState = if enable {
+				self.get_pin_state_panic(self.1.get_logic_pin_id_panic("D", bit_i))
+			}
+			else {
+				LogicState::Floating
+			};
+			self.set_pin_internal_state_panic(self.1.get_logic_pin_id_panic("Q", bit_i), state);
+		}
+	}
+	fn save(&self) -> Result<EnumAllLogicDevices, String> {
+		Ok(EnumAllLogicDevices::TriStateBufferNew(self.0.save(), self.1.save(), self.2))
+	}
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+		draw.draw_polyline(vec![
+			V2::new(2.0, 0.0),
+			V2::new(-2.0, -2.0),
+			V2::new(-2.0, 2.0),
+			V2::new(2.0, 0.0)
+		], draw.styles().color_foreground);
+	}
+	#[cfg(feature = "using_egui")]
+	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
+		let mut out = self.1.get_properties();
+		out.push(SelectProperty::BitWidth(self.2));
+		out
+	}
+	#[cfg(feature = "using_egui")]
+	fn device_set_special_select_property(&mut self, property: SelectProperty) {
+		self.1.set_property(property);
+		*self = Self::from_save(self.0.save(), self.1.save(), self.2);
+	}
+	fn set_bit_width(&mut self, bit_width: u16) {
+		*self = Self::from_save(self.0.save(), self.1.save(), bit_width);
 	}
 }
 
@@ -1226,10 +1319,10 @@ impl Adder {
 			layout
 		};
 		for i in 0..out.bits {
-			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("A".to_owned(), i)).unwrap(), LogicState::Floating);
-			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("B".to_owned(), i)).unwrap(), LogicState::Floating);
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("A", i), LogicState::Floating);
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("B", i), LogicState::Floating);
 		}
-		out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("Cin".to_owned(), 0)).unwrap(), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Cin", 0), LogicState::Floating);
 		out
 	}
 }
@@ -1255,8 +1348,8 @@ impl LogicDevice for Adder {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::Adder(self.generic.save(), self.layout.save(), self.bits))
 	}
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
-		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles.color_foreground);
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles().color_foreground);
 	}
 	fn get_bit_width(&self) -> Option<u16> {
 		Some(self.bits)
@@ -1264,9 +1357,11 @@ impl LogicDevice for Adder {
 	fn set_bit_width(&mut self, bit_width: u16) {
 		*self = Self::from_save(self.generic.save(), self.layout.save(), bit_width);
 	}
+	#[cfg(feature = "using_egui")]
 	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
 		self.layout.get_properties()
 	}
+	#[cfg(feature = "using_egui")]
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		self.layout.set_property(property);
 		*self = Self::from_save(self.generic.save(), self.layout.save(), self.bits)
@@ -1299,12 +1394,12 @@ impl DLatch {
 		let mut pin_groups = vec![
 			(FourWayDir::W, d_margin, bits, "D".to_owned()),
 			(FourWayDir::E, 2, bits, "Q#".to_owned()),
-			(FourWayDir::E, 2, bits, "Q".to_owned()),
-			(FourWayDir::W, 1, 1, "CLK".to_owned()),
+			(FourWayDir::E, 2, bits, "Q".to_owned())
 		];
 		if oe {
 			pin_groups.push((FourWayDir::W, 1, 1, "OE".to_owned()));
 		}
+		pin_groups.push((FourWayDir::W, 1, 1, "CLK".to_owned()));
 		let layout = BlockLayoutHelper::load(
 			layout_save,
 			pin_groups,
@@ -1390,21 +1485,21 @@ impl LogicDevice for DLatch {
 				else {
 					((self.data_high >> (i-128)) & 1) % 2 == 1
 				};
-				self.set_pin_internal_state_panic(*self.layout.group_logical_pins.get(&("Q".to_owned(), i)).unwrap(), bit.into());
-				self.set_pin_internal_state_panic(*self.layout.group_logical_pins.get(&("Q#".to_owned(), i)).unwrap(), (!bit).into());
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q", i), bit.into());
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q#", i), (!bit).into());
 			}
 			else {
-				self.set_pin_internal_state_panic(*self.layout.group_logical_pins.get(&("Q".to_owned(), i)).unwrap(), LogicState::Floating);
-				self.set_pin_internal_state_panic(*self.layout.group_logical_pins.get(&("Q#".to_owned(), i)).unwrap(), LogicState::Floating);
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q", i), LogicState::Floating);
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q#", i), LogicState::Floating);
 			}
 		}
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::DLatch(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe))
 	}
-	fn draw_except_pins<'a>(&self, draw: &ComponentDrawInfo<'a>) {
-		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles.color_foreground);
-		//draw.text("DLatch".to_owned(), V2::zeros(), Align2::CENTER_CENTER, draw.styles.text_color, draw.styles.text_size_grid, !draw.direction.is_horizontal());
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles().color_foreground);
+		//draw.text("DLatch".to_owned(), V2::zeros(), Align2::CENTER_CENTER, draw.styles().text_color, draw.styles().text_size_grid, !draw.direction.is_horizontal());
 	}
 	fn get_bit_width(&self) -> Option<u16> {
 		Some(self.bits)
@@ -1412,11 +1507,153 @@ impl LogicDevice for DLatch {
 	fn set_bit_width(&mut self, bit_width: u16) {
 		*self = Self::from_save(self.generic.save(), self.layout.save(), bit_width, self.data_low, self.data_high, self.oe);
 	}
+	#[cfg(feature = "using_egui")]
 	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
 		let mut out = self.layout.get_properties();
 		out.push(SelectProperty::HasPin("OE".to_owned(), self.oe));
 		out
 	}
+	#[cfg(feature = "using_egui")]
+	fn device_set_special_select_property(&mut self, property: SelectProperty) {
+		if let SelectProperty::HasPin(_, oe_pin) = &property {
+			self.oe = *oe_pin;
+		}
+		self.layout.set_property(property);
+		*self = Self::from_save(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe)
+	}
+}
+
+/// Parameterized Counter
+#[derive(Debug)]
+pub struct Counter {
+	generic: LogicDeviceGeneric,
+	/// 0 to 256
+	bits: u16,
+	layout: BlockLayoutHelper,
+	prev_clock: Option<bool>,
+	data_low: u128,
+	data_high: u128,
+	// Whether there is an output enable pin
+	oe: bool
+}
+
+impl Counter {
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default(), BusLayoutSave::default(), 8, 0, 0, false)
+	}
+	pub fn from_save(save: LogicDeviceSave, layout_save: BusLayoutSave, bits: u16, data_low: u128, data_high: u128, oe: bool) -> Self {
+		let mut pin_groups = vec![
+			(FourWayDir::E, 1, bits, "Q".to_owned()),
+			(FourWayDir::S, 1, 1, "RCO#".to_owned()),
+			(FourWayDir::N, 1, 1, "CLK".to_owned()),
+			(FourWayDir::W, 1, 1, "CLR".to_owned()),
+			(FourWayDir::W, 1, 1, "CLK EN".to_owned()),
+		];
+		if oe {
+			pin_groups.push((FourWayDir::W, 1, 1, "OE".to_owned()));
+		}
+		let layout = BlockLayoutHelper::load(
+			layout_save,
+			pin_groups,
+			IntV2(6, 6)
+		);
+		let mut out = Self {
+			generic: LogicDeviceGeneric::load(
+				save,
+				layout.pin_config(),
+				layout.get_bb_float(),
+				false,
+				false
+			),
+			bits,
+			layout,
+			prev_clock: None,
+			data_low,
+			data_high,
+			oe
+		};
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("CLK", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("CLR", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("CLK EN", 0), LogicState::Floating);
+		if out.oe {
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("OE", 0), LogicState::Floating);
+		}
+		out
+	}
+}
+
+impl LogicDevice for Counter {
+	fn get_generic(&self) -> &LogicDeviceGeneric {
+		&self.generic
+	}
+	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
+		&mut self.generic
+	}
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _self_component_id: u64, _clock_state: bool, _first_propagation_step: bool) {
+		// Check positive clock edge
+		let current_clock: bool = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("CLK", 0)).to_bool();
+		let clock_rising_edge = match self.prev_clock {
+			Some(bool) => {
+				current_clock && !bool
+			},
+			None => false
+		} && self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("CLK EN", 0)).to_bool();
+		self.prev_clock = Some(current_clock);
+		// Increment data if clock edge
+		if clock_rising_edge {
+			let old_data_low = self.data_low;
+			self.data_low = self.data_low.wrapping_add(1);
+			if old_data_low > self.data_low {// Will this ever be be used?
+				self.data_high = self.data_high.wrapping_add(1);
+			}
+		}
+		// Clear
+		if self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("CLR", 0)).to_bool() {
+			self.data_low = 0;
+			self.data_high = 0;
+		}
+		// Output enable/disable
+		let oe: bool = if self.oe {
+			self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("OE", 0)).to_bool()
+		}
+		else {
+			true
+		};
+		for i in 0..self.bits {
+			if oe {
+				let bit: bool = if i < 128 {
+					((self.data_low >> i) & 1) % 2 == 1
+				}
+				else {
+					((self.data_high >> (i-128)) & 1) % 2 == 1
+				};
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q", i), bit.into());
+			}
+			else {
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q", i), LogicState::Floating);
+			}
+		}
+	}
+	fn save(&self) -> Result<EnumAllLogicDevices, String> {
+		Ok(EnumAllLogicDevices::Counter(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe))
+	}
+	fn draw_except_pins<'a>(&self, draw: &dyn DrawInterface<'a>) {
+		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles().color_foreground);
+		//draw.text("DLatch".to_owned(), V2::zeros(), Align2::CENTER_CENTER, draw.styles().text_color, draw.styles().text_size_grid, !draw.direction.is_horizontal());
+	}
+	fn get_bit_width(&self) -> Option<u16> {
+		Some(self.bits)
+	}
+	fn set_bit_width(&mut self, bit_width: u16) {
+		*self = Self::from_save(self.generic.save(), self.layout.save(), bit_width, self.data_low, self.data_high, self.oe);
+	}
+	#[cfg(feature = "using_egui")]
+	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
+		let mut out = self.layout.get_properties();
+		out.push(SelectProperty::HasPin("OE".to_owned(), self.oe));
+		out
+	}
+	#[cfg(feature = "using_egui")]
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		if let SelectProperty::HasPin(_, oe_pin) = &property {
 			self.oe = *oe_pin;
