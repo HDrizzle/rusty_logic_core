@@ -1,11 +1,9 @@
 //! Graphics functionality that will be used regardless of whether egui is being used
 
-use crate::{builtin_components, prelude::*, resource_interface, simulator::{AncestryStack, GraphicSelectableItemRef, SelectionState, Tool}};
-use nalgebra::ComplexField;
+use crate::{prelude::*, resource_interface};
 use serde::{Serialize, Deserialize};
 use serde_json;
-use std::{collections::HashSet, f32::consts::TAU, ops::{AddAssign, RangeInclusive, SubAssign}, rc::Rc, sync::Arc};
-use mouse_rs;
+use std::rc::Rc;
 
 /// Style for the UI, loaded from /resources/styles.json
 #[derive(Clone, Deserialize)]
@@ -38,6 +36,7 @@ pub struct Styles {
 }
 
 impl Styles {
+	#[cfg(feature = "using_filesystem")]
 	pub fn load() -> Result<Self, String> {
 		let raw_string: String = load_file_with_better_error(resource_interface::STYLES_FILE)?;
 		let styles: Self = to_string_err(serde_json::from_str(&raw_string))?;

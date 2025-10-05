@@ -7,6 +7,7 @@ use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
 use serde_json;
 use std::{collections::HashSet, f32::consts::TAU, ops::{AddAssign, RangeInclusive, SubAssign}, sync::Arc, ops::DerefMut, rc::Rc};
+#[cfg(feature = "kicad_scrolling")]
 use mouse_rs;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -282,11 +283,12 @@ impl DrawInterface for EguiDrawInterface {
 		self.painter.add(Shape::line(px_points, PathStroke::new(draw_data.grid_size * draw_data.styles.line_size_grid, u8_3_to_color32(stroke))));
 	}
 	fn draw_rect(&self, start_grid: V2, end_grid: V2, inside_stroke: [u8; 4], border_stroke: [u8; 3]) {
+		let draw_data = self.get_draw_data();
 		let rectified_bb: (V2, V2) = merge_points_to_bb(vec![start_grid, end_grid]);
-		let (start, end) = (self.get_draw_data().grid_to_px(rectified_bb.0), self.get_draw_data().grid_to_px(rectified_bb.1));
+		let (start, end) = (draw_data.grid_to_px(rectified_bb.0), draw_data.grid_to_px(rectified_bb.1));
 		let px_rectified_bb = Rect{min: Pos2::new(start.x, end.y), max: Pos2::new(end.x, start.y)};// After Y is flipped, Y needs to be swapped so that the bb is correct in pixel coordinates, Gemini helped find this problem
 		self.painter.rect_filled(px_rectified_bb, 0, u8_4_to_color32(inside_stroke));
-		self.painter.rect_stroke(px_rectified_bb, 0, Stroke::new(1.0, u8_3_to_color32(border_stroke)), StrokeKind::Outside);
+		self.painter.rect_stroke(px_rectified_bb, 0, Stroke::new(draw_data.grid_size * draw_data.styles.line_size_grid, u8_3_to_color32(border_stroke)), StrokeKind::Outside);
 	}
 	fn draw_circle(&self, center: V2, radius: f32, stroke: [u8; 3]) {
 		let draw_data = self.get_draw_data();
@@ -877,7 +879,8 @@ impl LogicCircuitToplevelView {
 		}
 	}
 	/// Returns: (Optional position to set the mouse to, Optional new circuit tab to open)
-	pub fn draw(&mut self, ui: &mut Ui, styles: Rc<Styles>, screen_top_left: Pos2) -> (Option<Pos2>, Option<String>) {
+	pub fn draw(&mut self, ui: &mut Ui, styles: Rc<Styles>, #[allow(unused)]screen_top_left: Pos2) -> (Option<Pos2>, Option<String>) {
+		#[allow(unused_mut)]
 		let mut return_new_mouse_pos = Option::<Pos2>::None;
 		let mut return_new_circuit_tab = Option::<String>::None;
 		let canvas_size: Vec2 = ui.available_size_before_wrap();
@@ -905,6 +908,7 @@ impl LogicCircuitToplevelView {
 			let scroll = input_state.raw_scroll_delta.y;
 			if scroll != 0.0 {
 				// Set mouse position to center of screen and move grid offset along with it, inspired by KiCad
+				#[cfg(feature = "kicad_scrolling")]
 				if let Some(og_mouse_pos) = response.hover_pos() {
 					// Make sure its rounded
 					let shift_grid: IntV2 = round_v2_to_intv2(emath_vec2_to_v2(response.rect.center() - og_mouse_pos) / self.grid_size);
@@ -914,6 +918,8 @@ impl LogicCircuitToplevelView {
 				// Scroll
 				let scale = styles.grid_scale_factor.powf(scroll);
 				let new_grid_unclamped = self.grid_size.scale(scale);
+				#[cfg(not(feature = "kicad_scrolling"))]
+				let old_grid_size = self.grid_size;
 				self.grid_size = if new_grid_unclamped < styles.max_grid_size {
 					if new_grid_unclamped > styles.min_grid_size {
 						new_grid_unclamped
@@ -924,6 +930,12 @@ impl LogicCircuitToplevelView {
 				}
 				else {
 					styles.max_grid_size
+				};
+				#[cfg(not(feature = "kicad_scrolling"))]
+				if let Some(og_mouse_pos) = response.hover_pos() {
+					let shift_px = emath_vec2_to_v2(response.rect.center() - og_mouse_pos);
+					let shift_grid: V2 = (shift_px / self.grid_size) - (shift_px / old_grid_size);
+					self.screen_center_wrt_grid += V2::new(shift_grid.x, -shift_grid.y);
 				};
 			}
 			//let recompute_connections: bool = self.circuit.toplevel_ui_interact(response, ui.ctx(), &draw_info, input_state);
@@ -1368,7 +1380,9 @@ impl eframe::App for App {
 			}
 			else {
 				let circuit_toplevel: &mut LogicCircuitToplevelView = &mut self.circuit_tabs[self.current_tab_index - 1];
+				#[allow(unused)]
 				let (new_mouse_pos_opt, new_circuit_tab_opt): (Option<Pos2>, Option<String>) = circuit_toplevel.draw(ui, Rc::clone(&self.styles), ctx.screen_rect().min);// TODO: Get actual window top-left position
+				#[cfg(feature = "kicad_scrolling")]
 				if let Some(new_pos) = new_mouse_pos_opt {
 					let mouse = mouse_rs::Mouse::new();
 					mouse.move_to(new_pos.x as i32, new_pos.y as i32).unwrap();

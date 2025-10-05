@@ -17,7 +17,7 @@ The simulator has a variety of built-in logic gates as well as some more complic
 
 ### Splitters & Buses
 
-Often when building computers and other such complicated circuits, there will be a bunch of wires all connected similarly to corresponding pins. This is called a bus and can be annoying to work when all the individual wire are seperate, which is why I added Splitters (inspired by CircuitVerse). Spltters can merge a bunch of individual wires into one graphical wire to make a bus more compact yet still keep corresponding wires connected normally.
+Often when building computers and other such complicated circuits, there will be a bunch of wires all connected similarly to corresponding pins. This is called a bus and can be annoying to work with when all the individual wires are seperate, which is why I added Splitters (inspired by CircuitVerse). Spltters can merge a bunch of individual wires into one graphical wire to make a bus more compact yet still keep corresponding wires connected normally. They are only a graphical feature and do not affect the performance of the simulation.
 
 ### Sub-circuits
 
@@ -65,6 +65,10 @@ The fixed sub cycles is a feature I implemented after running into a specific pr
 ### Timing diagram
 
 The timing diagram in the top-right displayes the state of the circuit's clock alongside all the probes with respect to time.
+
+## LLM Usage
+
+Or "AI" as its called was used mostly for debugging my code whenever I couldn't fix a problem myself. I used it to write a few specific functions when I was lazy and I always commented where it was used.
 
 ## Bugs/Feedback
 

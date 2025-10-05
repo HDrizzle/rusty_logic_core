@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use crate::prelude::*;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "using_filesystem")]
 use serde_json;
 use crate::builtin_components::{self, BusLayoutSave};
 
@@ -19,25 +20,35 @@ pub static STYLES_FILE: &str = "resources/styles.json";
 
 /// Loads circuit, path is relative to `CIRCUITS_DIR` and does not include .json extension
 /// Example: File is located at `resources/circuits/sequential/d_latch.json` -> circuit path is `sequential/d_latch`
-#[cfg(feature = "using_filesystem")]
 pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String) -> Result<LogicCircuit, String> {
-	let path = get_circuit_file_path(circuit_rel_path);
-	let string_raw = load_file_with_better_error(&path)?;
-	/*match restore_old_files::attempt_restore_file(circuit_rel_path, displayed_as_block, toplevel, pos, dir, name) {
-		Ok(circuit) => Ok(circuit),
-		Err(err_old_format) => Err(format!("Old format error for circuit \"{}\": {}", circuit_rel_path, err_old_format))
-	}*/
-	let save: LogicCircuitSave = match to_string_err(serde_json::from_str::<LogicCircuitSave>(&string_raw)) {
-		Ok(circuit) => Ok(circuit),
-		Err(err_new_format) => {
-			//println!("Load error: {}, attempting to load old format", &err_new_format);
-			match restore_old_files::attempt_restore_file(circuit_rel_path) {
-				Ok(circuit) => Ok(circuit),
-				Err(err_old_format) => Err(format!("New format error: {}. Old format error for circuit \"{}\": {}", err_new_format, circuit_rel_path, err_old_format))
+	#[allow(unused)]
+	let mut save_opt: Option<LogicCircuitSave> = None;
+	#[cfg(feature = "using_filesystem")]
+	{
+		let path = get_circuit_file_path(circuit_rel_path);
+		let string_raw = load_file_with_better_error(&path)?;
+		save_opt = Some(match to_string_err(serde_json::from_str::<LogicCircuitSave>(&string_raw)) {
+			Ok(circuit) => Ok(circuit),
+			Err(err_new_format) => {
+				//println!("Load error: {}, attempting to load old format", &err_new_format);
+				match restore_old_files::attempt_restore_file(circuit_rel_path) {
+					Ok(circuit) => Ok(circuit),
+					Err(err_old_format) => Err(format!("New format error: {}. Old format error for circuit \"{}\": {}", err_new_format, circuit_rel_path, err_old_format))
+				}
 			}
-		}
-	}?;
-	LogicCircuit::from_save(save, circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir, name.clone())
+		}?);
+	}
+	#[cfg(feature = "using_wasm")]
+	{
+		save_opt = match crate::wasm_get_circuit_save_file(circuit_rel_path) {
+			Some(string_raw) => Some(to_string_err(serde_json::from_str::<LogicCircuitSave>(&string_raw))?),
+			None => {return Err(format!("JS external code did not supply raw JSON for circuit \"{}\"", circuit_rel_path));}
+		};
+	}
+	match save_opt {
+		Some(save) => LogicCircuit::from_save(save, circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir, name.clone()),
+		None => Err("Both `using_filesystem` and `using_wasm` features are disabled, therefore there is no mechanism for loading sub-circuits".to_owned())
+	}
 }
 
 /// Like LogicCircuit but serializable
@@ -68,6 +79,7 @@ pub struct LogicCircuitSave {
 	pub block_bb: (IntV2, IntV2)
 }
 
+#[cfg(feature = "using_filesystem")]
 mod restore_old_files {
 	use super::*;
 	/// Like LogicCircuit but serializable
@@ -173,7 +185,8 @@ pub enum EnumAllLogicDevices {
 	Adder(LogicDeviceSave, BusLayoutSave, u16),
 	DLatch(LogicDeviceSave, BusLayoutSave, u16, u128, u128, bool),
 	Counter(LogicDeviceSave, BusLayoutSave, u16, u128, u128, bool),
-	TriStateBufferNew(LogicDeviceSave, BusLayoutSave, u16)
+	TriStateBufferNew(LogicDeviceSave, BusLayoutSave, u16),
+	SRLatch(LogicDeviceSave, BusLayoutSave, bool)
 }
 
 impl EnumAllLogicDevices {
@@ -195,7 +208,8 @@ impl EnumAllLogicDevices {
 			Self::Adder(save, layout, bw) => Ok(Box::new(builtin_components::Adder::from_save(save, layout, bw))),
 			Self::DLatch(save, layout, bw, low, high, oe) => Ok(Box::new(builtin_components::DLatch::from_save(save, layout, bw, low, high, oe))),
 			Self::Counter(save, layout, bw, low, high, oe) => Ok(Box::new(builtin_components::Counter::from_save(save, layout, bw, low, high, oe))),
-			Self::TriStateBufferNew(save, layout, bw) => Ok(Box::new(builtin_components::TriStateBuffer::from_save(save, layout, bw)))
+			Self::TriStateBufferNew(save, layout, bw) => Ok(Box::new(builtin_components::TriStateBuffer::from_save(save, layout, bw))),
+			Self::SRLatch(save, layout, state) => Ok(Box::new(builtin_components::SRLatch::from_save(save, layout, state)))
 		}
 	}
 	/// Example: "AND Gate" or "D Latch", for the component search UI
@@ -217,11 +231,13 @@ impl EnumAllLogicDevices {
 			Self::Adder(_, _, _) => "Adder".to_owned(),
 			Self::DLatch(_, _, _, _, _, _) => "Data Latch".to_owned(),
 			Self::Counter(_, _, _, _, _, _) => "Counter".to_owned(),
-			Self::TriStateBufferNew(_, _, _) => "Tri-State Buffer (new)".to_owned()
+			Self::TriStateBufferNew(_, _, _) => "Tri-State Buffer (new)".to_owned(),
+			Self::SRLatch(_, _, _) => "SR Latch".to_owned()
 		}
 	}
 }
 
+#[cfg(feature = "using_filesystem")]
 pub fn list_all_circuit_files() -> Result<Vec<String>, String> {
 	let mut out = Vec::<String>::new();
 	for dir_entry_result in fs::read_dir(CIRCUITS_DIR).expect("Cannot find circuits directory") {
@@ -235,10 +251,12 @@ pub fn list_all_circuit_files() -> Result<Vec<String>, String> {
 	Ok(out)
 }
 
+#[cfg(feature = "using_filesystem")]
 pub fn get_circuit_file_path(circuit_rel_path: &str) -> String {
 	CIRCUITS_DIR.to_owned() + circuit_rel_path + ".json"
 }
 
+#[cfg(feature = "using_filesystem")]
 pub fn load_file_with_better_error(path: &str) -> Result<String, String> {// With help from ChatGPT because I'm lasy
 	match fs::read_to_string(path) {
 		Ok(contents) => Ok(contents),

@@ -1,12 +1,9 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::Default, fmt::{format, Debug}, fs, ops::{Deref, DerefMut, RangeInclusive}, pin, rc::Rc, time::{Duration, Instant}};
+use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, rc::Rc, time::{Duration, Instant}};
 use serde::{Deserialize, Serialize};
 use crate::{circuit_net_computation::NotAWire, prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
-#[cfg(feature = "using_egui")]
-use eframe::egui::{self, response::Response, Align2, DragValue, Key, KeyboardShortcut, Modifiers, PointerButton, Pos2, ScrollArea, Vec2, Ui, Sense, Stroke, Frame};
-use arboard;
 use common_macros::hash_map;
 
 fn logic_device_to_graphic_item(x: &dyn LogicDevice) -> &dyn GraphicSelectableItem {
@@ -2853,6 +2850,7 @@ impl LogicCircuit {
 		out
 	}
 	/// Creates a new flatened circuit and saves it, returning the path to the saved circuit
+	#[cfg(feature = "using_filesystem")]
 	pub fn flatten(&self, apply_transform: bool) -> Result<EnumAllLogicDevices, String> {
 		let mut save = self.create_save_circuit().unwrap();
 		let (wires, comps) = self.flatten_recursive(apply_transform)?;
@@ -2865,6 +2863,7 @@ impl LogicCircuit {
 		Ok(EnumAllLogicDevices::SubCircuit(save_path, self.displayed_as_block, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone()))
 	}
 	/// Recursively extracts all sub-circuits that don't have a fixed sub-cycle count
+	#[cfg(feature = "using_filesystem")]
 	pub fn flatten_recursive(&self, apply_transform: bool) -> Result<(Vec<(IntV2, FourWayDir, u32)>, Vec<EnumAllLogicDevices>), String> {
 		let mut wire_geometry = Vec::<(IntV2, FourWayDir, u32)>::new();
 		let mut components = Vec::<EnumAllLogicDevices>::new();
@@ -3048,6 +3047,7 @@ impl LogicCircuit {
 			block_bb: (round_v2_to_intv2(self.generic_device.ui_data.local_bb.0), round_v2_to_intv2(self.generic_device.ui_data.local_bb.1))
 		})
 	}
+	#[cfg(feature = "using_filesystem")]
 	pub fn save_circuit(&self) -> Result<(), String> {
 		let save = self.create_save_circuit()?;
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
@@ -3166,6 +3166,7 @@ impl LogicDevice for LogicCircuit {
 						SelectionState::FollowingMouse(_) => {}
 					}
 					// Draw selected items BB
+					#[cfg(feature = "using_egui")]
 					if selected_graphics.len() >= 1 {
 						let mut points = Vec::<V2>::new();
 						for item_ref in selected_graphics.iter() {

@@ -22,13 +22,14 @@ pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
 		TriStateBuffer::new().save().unwrap(),
 		Adder::new().save().unwrap(),
 		DLatch::new().save().unwrap(),
-		Counter::new().save().unwrap()
+		Counter::new().save().unwrap(),
+		SRLatch::new().save().unwrap()
 	]
 }
 
 /// For dealing with the geometry of a lot of pins
 #[derive(Debug, Clone)]
-struct BlockLayoutHelper {
+pub struct BlockLayoutHelper {
 	/// Vec<(
 	/// 	Block side/pin direction,
 	/// 	Margin (for other groups on same side, not edge),
@@ -641,7 +642,7 @@ impl ClockSymbol {
 			hash_map!(
 				0 => (IntV2(0, 0), FourWayDir::W, 1.0, "CLK".to_owned(), false, vec![0])
 			),
-			(V2::new(-2.0, -2.0), V2::new(2.0, 2.0)),
+			(V2::new(1.0, -1.0), V2::new(3.0, 1.0)),
 			false,
 			false
 		))
@@ -753,20 +754,6 @@ impl LogicDevice for FixedSource {
 			self.state = state;
 		}
 	}
-}
-
-/// Returns: (Address X start, in/out Y start, BB)
-fn encoder_decoder_geometry(addr_size: u8) -> (i32, i32, (V2, V2)) {
-	let (addr_x_start, fanout_y_start) = (-((addr_size / 2 + 1) as i32), -2_i32.pow((addr_size - 1) as u32));
-	let fanout_size = 2_i32.pow(addr_size as u32);
-	(
-		addr_x_start,
-		fanout_y_start,
-		(
-			IntV2(addr_x_start - 1, fanout_y_start - 1).to_v2(),
-			IntV2(addr_x_start + (addr_size as i32) + 1, fanout_y_start + fanout_size).to_v2()
-		)
-	)
 }
 
 /// Encoder/Decoder, these have very similar layouts and stuff so easier to combine them to avoid repeating code
@@ -917,34 +904,6 @@ impl Memory {
 	pub const HALF_WIDTH: i32 = 5;
 	pub fn new() -> Self {
 		Self::from_save(LogicDeviceSave::default(), 8, None, BusLayoutSave::default())
-	}
-	/// Returns: (BB, pin config)
-	fn compute_geometry_and_pins(addr_size: u8) -> ((IntV2, IntV2), HashMap<u64, (IntV2, FourWayDir, f32, String, bool)>) {
-		let height: i32 = match addr_size < 12 {
-			true => 14,
-			false => addr_size as i32 + 2
-		};
-		let data_y_start = -2;
-		let addr_y_start = -6;
-		let bb_int = (IntV2(-Self::HALF_WIDTH, -height/2), IntV2(Self::HALF_WIDTH, height/2));
-		let mut pin_config = HashMap::<u64, (IntV2, FourWayDir, f32, String, bool)>::new();
-		// Pin config
-		// Controls
-		pin_config.insert(0, (IntV2(-Self::HALF_WIDTH - 1, data_y_start - 2), FourWayDir::W, 1.0, "CE".to_owned(), true));
-		pin_config.insert(1, (IntV2(-Self::HALF_WIDTH - 1, data_y_start - 3), FourWayDir::W, 1.0, "WE".to_owned(), true));
-		pin_config.insert(2, (IntV2(-Self::HALF_WIDTH - 1, data_y_start - 4), FourWayDir::W, 1.0, "RE".to_owned(), true));
-		// Data
-		for d in 0..8_i32 {
-			pin_config.insert(d as u64 + 3, (IntV2(-Self::HALF_WIDTH - 1, data_y_start + d), FourWayDir::W, 1.0, format!("D{}", d), true));
-		}
-		// Addresses
-		for a in 0..(addr_size as i32) {
-			pin_config.insert(a as u64 + 11, (IntV2(Self::HALF_WIDTH + 1, addr_y_start + a), FourWayDir::E, 1.0, format!("A{}", a), true));
-		}
-		(
-			bb_int,
-			pin_config
-		)
 	}
 	fn format_data(data_opt: Option<Vec<u8>>, addr_size: u8) -> Vec<u8> {
 		let correct_size: usize = 2_usize.pow(addr_size as u32);
@@ -1385,7 +1344,7 @@ pub struct DLatch {
 
 impl DLatch {
 	pub fn new() -> Self {
-		Self::from_save(LogicDeviceSave::default(), BusLayoutSave::default(), 8, 0, 0, false)
+		Self::from_save(LogicDeviceSave::default(), BusLayoutSave::default(), 1, 0, 0, false)
 	}
 	pub fn from_save(save: LogicDeviceSave, layout_save: BusLayoutSave, bits: u16, data_low: u128, data_high: u128, oe: bool) -> Self {
 		let d_margin: u32 = match oe {
@@ -1521,6 +1480,83 @@ impl LogicDevice for DLatch {
 		}
 		self.layout.set_property(property);
 		*self = Self::from_save(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe)
+	}
+}
+
+/// Parameterized Data Latch
+#[derive(Debug)]
+pub struct SRLatch {
+	generic: LogicDeviceGeneric,
+	layout: BlockLayoutHelper,
+	state: bool
+}
+
+impl SRLatch {
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default(), BusLayoutSave::default(), false)
+	}
+	pub fn from_save(save: LogicDeviceSave, layout_save: BusLayoutSave, state: bool) -> Self {
+		let layout = BlockLayoutHelper::load(
+			layout_save,
+			vec![
+				(FourWayDir::W, 2, 1, "S".to_owned()),
+				(FourWayDir::W, 2, 1, "R".to_owned()),
+				(FourWayDir::E, 2, 1, "Q#".to_owned()),
+				(FourWayDir::E, 2, 1, "Q".to_owned())
+			],
+			IntV2(4, 4)
+		);
+		let mut out = Self {
+			generic: LogicDeviceGeneric::load(
+				save,
+				layout.pin_config(),
+				layout.get_bb_float(),
+				false,
+				false
+			),
+			layout,
+			state
+		};
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("S", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("R", 0), LogicState::Floating);
+		out
+	}
+}
+
+impl LogicDevice for SRLatch {
+	fn get_generic(&self) -> &LogicDeviceGeneric {
+		&self.generic
+	}
+	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
+		&mut self.generic
+	}
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _self_component_id: u64, _clock_state: bool, _first_propagation_step: bool) {
+		let s = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("S", 0)).to_bool();
+		let r = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("R", 0)).to_bool();
+		if s {
+			self.state = true;
+		}
+		if r {
+			self.state = false;
+		}
+		self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q", 0), self.state.into());
+		self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q#", 0), (!(self.state || (s && r))).into());
+	}
+	fn save(&self) -> Result<EnumAllLogicDevices, String> {
+		Ok(EnumAllLogicDevices::SRLatch(self.generic.save(), self.layout.save(), self.state))
+	}
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
+		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles().color_foreground);
+		//draw.text("DLatch".to_owned(), V2::zeros(), Align2::CENTER_CENTER, draw.styles().text_color, draw.styles().text_size_grid, !draw.direction.is_horizontal());
+	}
+	#[cfg(feature = "using_egui")]
+	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
+		self.layout.get_properties()
+	}
+	#[cfg(feature = "using_egui")]
+	fn device_set_special_select_property(&mut self, property: SelectProperty) {
+		self.layout.set_property(property);
+		*self = Self::from_save(self.generic.save(), self.layout.save(), self.state)
 	}
 }
 

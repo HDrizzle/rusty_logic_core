@@ -1,6 +1,6 @@
 //! Simulation inspired by CircuitVerse, UI based off of KiCad
 
-use std::{marker::PhantomData, cell::RefCell, ops, f32::consts::PI};
+use std::{cell::RefCell, ops, f32::consts::PI};
 use serde::{Serialize, Deserialize};
 use nalgebra::Vector2;
 #[cfg(feature = "using_egui")]
@@ -33,7 +33,9 @@ pub mod prelude {
 	pub use ui::{LogicCircuitToplevelView, App, SelectProperty, CopiedGraphicItem, CopiedItemSet};
 	pub use graphics::{UIData, GraphicSelectableItem, DrawInterface, Styles, DrawData};
 	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, GraphicPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection, LogicDeviceSave, GraphicLabel, GraphicLabelSave, Splitter, SplitterSave, Probe, ProbeSave};
-	pub use resource_interface::{load_file_with_better_error, EnumAllLogicDevices};
+	pub use resource_interface::EnumAllLogicDevices;
+	#[cfg(feature = "using_filesystem")]
+	pub use resource_interface::load_file_with_better_error;
 	pub use circuit_net_computation::BitWidthError;
 	#[cfg(feature = "using_egui")]
 	pub fn u8_3_to_color32(in_: [u8; 3]) -> Color32 {
@@ -284,7 +286,6 @@ pub mod prelude {
 				Self::S => (0, -1)
 			}
 		}
-		#[cfg(feature = "using_egui")]
 		pub fn to_align2(&self) -> GenericAlign2 {
 			match &self {
 				Self::E => GenericAlign2::RIGHT_CENTER,
@@ -461,8 +462,16 @@ pub mod prelude {
 	}
 }
 
+#[cfg(feature = "using_wasm")]
+#[wasm_bindgen]
+extern "C" {
+    pub fn wasm_get_circuit_save_file(name: &str) -> Option<String>;
+}
+
 #[cfg(feature = "using_egui")]
 use prelude::*;
+#[cfg(feature = "using_wasm")]
+use wasm_bindgen::prelude::wasm_bindgen;
 
 #[cfg(feature = "using_egui")]
 pub fn ui_main() {

@@ -13,14 +13,6 @@ pub enum NotAWire {
 	Splitter(u64, u16)
 }
 
-/// For net island search
-#[derive(Clone)]
-enum Conductor {
-	Wire(u64),
-	/// Splitter ID, Splitter net index (NOT graphical split)
-	Splitter(u64, u16)
-}
-
 /// Wire or Splitter specific bit
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ConductorBit {
