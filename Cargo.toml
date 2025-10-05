@@ -4,14 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["reverse_y", "restore_pin_states", "using_egui", "using_filesystem"]#, "using_wasm", "kicad_scrolling"]
+default = ["reverse_y", "restore_pin_states"]#, "using_egui", "using_filesystem", "using_wasm", "kicad_scrolling"]
 kicad_scrolling = ["mouse-rs"]
 # When enabled: Uses regular coordinates (Y up) as opposed to weird graphics stuff
 reverse_y = []
 # Restore pin states when a circuit is loaded
 restore_pin_states = []
 # Disable eframe/egui for doing weird stuff like the Motion Canvas integration
-using_egui = ["eframe", "egui_commonmark"]
+using_egui = ["eframe", "egui_commonmark", "arboard"]
 # Disable if compiling for the web
 using_filesystem = []
 # Web Assembly
@@ -23,7 +23,7 @@ nalgebra = {version = "^0.33", features = ["serde-serialize"]}
 serde = {version = "1.0.219", features = ["derive", "rc"]}
 serde_json = "1.0.140"
 common_macros = "0.1.1"
-arboard = "3.6.0"
+arboard = {version = "3.6.0", optional = true}
 mouse-rs = {version = "0.4.2", optional = true}
 egui_commonmark = {version = "0.21.1", optional = true}
 wasm-bindgen = {version = "0.2.104", optional = true}

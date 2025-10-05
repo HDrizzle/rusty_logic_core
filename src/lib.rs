@@ -5,6 +5,8 @@ use serde::{Serialize, Deserialize};
 use nalgebra::Vector2;
 #[cfg(feature = "using_egui")]
 use eframe::emath;
+#[cfg(feature = "using_wasm")]
+use wasm_bindgen::prelude::wasm_bindgen;
 
 pub mod simulator;
 #[cfg(feature = "using_egui")]
@@ -470,8 +472,6 @@ extern "C" {
 
 #[cfg(feature = "using_egui")]
 use prelude::*;
-#[cfg(feature = "using_wasm")]
-use wasm_bindgen::prelude::wasm_bindgen;
 
 #[cfg(feature = "using_egui")]
 pub fn ui_main() {
