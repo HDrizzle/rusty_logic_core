@@ -8,7 +8,7 @@ This is a program that simulates digital logic circuits made from components, wi
 
 ### Logic states
 
-There are 4 states that any wire cn have: True, False, Floating, and Contested. True and False are the usual 1s and 0s which are driven by the positive or negative side of the power supply. Floating means that there is nothing pulling the wire high or low, for the simulation this is interpreted as a 0 at logic inputs however in the real world reading a floating state can lead to undefined behaviour. Contested means that there are at least two outputs fighting over the logic state of the same wire, in the real world this means that components will be ruined and a lot of current will be drawn. Some components have outputs which can be disabled (put into a floating state) so that they can be safely connected to other outputs. This feature is used for example when many components are connected on a bus.
+There are 4 states that any wire can have: True, False, Floating, and Contested. True and False are the usual 1s and 0s which are driven by the positive or negative side of the power supply. Floating means that there is nothing pulling the wire high or low, for the simulation this is interpreted as a 0 at logic inputs however in the real world reading a floating state can lead to undefined behaviour. Contested means that there are at least two outputs fighting over the logic state of the same wire, in the real world this means that components will be ruined and a lot of current will be drawn. Some components have outputs which can be disabled (put into a floating state) so that they can be safely connected to other outputs. This feature is used for example when many components are connected on a bus.
 It is also possible for a single graphical wire to to represent more than one actual wire which is useful for buses. See the section below.
 
 ### Components
@@ -56,7 +56,7 @@ Under "Circuit Settings" there is a button that says "Edit block layout...". Thi
 
 ### Circuit flattening
 
-Also under Circuit Settings there is a feature to extract the components of all sub-circuits in the circuit and build a new "flattened" circuit. Flattened circuits are faster to simulate yet can be very slow when editing.
+Also under Circuit Settings there is a feature to extract the components of all sub-circuits in the circuit and build a new "flattened" circuit. Flattened circuits are faster to simulate yet can be very slow and annoying to edit, similar to Phtoshop.
 
 ### Fixed sub-cycles
 

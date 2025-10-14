@@ -40,8 +40,9 @@ pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: 
 	}
 	#[cfg(feature = "using_wasm")]
 	{
-		save_opt = match crate::wasm_get_circuit_save_file(circuit_rel_path) {
-			Some(string_raw) => Some(to_string_err(serde_json::from_str::<LogicCircuitSave>(&string_raw))?),
+		let raw_string_opt = crate::js_get_circuit_save_file(circuit_rel_path);
+		save_opt = match raw_string_opt {
+			Some(string_raw) =>Some(to_string_err(serde_json::from_str::<LogicCircuitSave>(&string_raw))?),
 			None => {return Err(format!("JS external code did not supply raw JSON for circuit \"{}\"", circuit_rel_path));}
 		};
 	}

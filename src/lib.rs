@@ -20,7 +20,7 @@ pub mod tests;
 
 #[allow(unused)]
 pub mod prelude {
-	use std::{clone, collections::{HashMap, HashSet}, fmt::Formatter, hash::Hash, rc::Rc};
+	use std::{clone, collections::{HashMap, HashSet}, fmt::Formatter, hash::Hash, rc::Rc, time::Instant};
 	use super::*;
 	// Name of this app
 	pub const APP_NAME: &str = "Rusty Logic";
@@ -465,9 +465,10 @@ pub mod prelude {
 }
 
 #[cfg(feature = "using_wasm")]
-#[wasm_bindgen]
+#[wasm_bindgen(js_name = "js_get_circuit_save_file")]
 extern "C" {
-    pub fn wasm_get_circuit_save_file(name: &str) -> Option<String>;
+    pub fn js_get_circuit_save_file(name: &str) -> Option<String>;
+	pub fn alert(s: &str);
 }
 
 #[cfg(feature = "using_egui")]

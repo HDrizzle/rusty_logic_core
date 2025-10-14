@@ -360,6 +360,7 @@ impl LogicCircuit {
 		let mut return_recompute_connections = false;
 		let mut new_tool_opt = Option::<Tool>::None;
 		let mut recompute_pin_block_positions = false;
+		let mut new_highlighted_net = Option::<Option<u64>>::None;
 		let mouse_pos_grid_opt: Option<V2> = match response.hover_pos() {
 			Some(pos_px) => Some(mouse_pos2_to_grid(pos_px)),
 			None => None
@@ -530,8 +531,21 @@ impl LogicCircuit {
 					return_recompute_connections = true;
 				}
 			},
-			Tool::HighlightNet(_net_id) => {
-				// TODO
+			Tool::HighlightNet => {
+				if response.clicked_by(PointerButton::Primary) {
+					if let Some(mouse_grid) = mouse_pos_grid_opt {
+						let net_opts: Vec<Option<u64>> = self.is_connection_point(round_v2_to_intv2(mouse_grid)).1;
+						new_highlighted_net = Some(None);
+						for net_opt in net_opts {
+							if let Some(test_net) = net_opt {
+								new_highlighted_net = Some(Some(test_net));
+							}
+						}
+					}
+				}
+				if input_state.consume_key(Modifiers::NONE, Key::Escape) {
+					new_tool_opt = Some(Tool::default());
+				}
 			},
 			Tool::PlaceWire{perp_pairs} => {
 				if let Some(mouse_pos_grid) = mouse_pos_grid_opt {
@@ -582,6 +596,9 @@ impl LogicCircuit {
 		}
 		if recompute_pin_block_positions {
 			self.update_pin_block_positions();
+		}
+		if let Some(net_opt) = new_highlighted_net {
+			self.highlighted_net_opt = net_opt;
 		}
 		return_recompute_connections
 	}

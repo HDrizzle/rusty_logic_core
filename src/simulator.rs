@@ -1,10 +1,11 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, rc::Rc, time::{Duration, Instant}};
+use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, rc::Rc};
 use serde::{Deserialize, Serialize};
 use crate::{circuit_net_computation::NotAWire, prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
 use common_macros::hash_map;
+use web_time::{Duration, Instant};
 
 fn logic_device_to_graphic_item(x: &dyn LogicDevice) -> &dyn GraphicSelectableItem {
 	x
@@ -258,10 +259,6 @@ impl LogicNet {
 									}
 								}
 							}
-							// TODO: Only assert this if toplevel
-							/*else {
-								panic!("External connection doesn't have source");
-							}*/
 						},
 						None => panic!("Net references external connection {:?} which is invalid", connection)
 					}
@@ -1733,10 +1730,11 @@ pub struct Clock {
 
 impl Clock {
 	pub fn load(enabled: bool, freq: f32, state: bool) -> Self {
+		let last_change = Instant::now();
 		Self {
 			enabled,
 			freq,
-			last_change: Instant::now(),
+			last_change,
 			state
 		}
 	}
@@ -1819,7 +1817,7 @@ pub enum Tool {
 		selected_graphics: HashSet<GraphicSelectableItemRef>,
 		selected_graphics_state: SelectionState
 	},
-	HighlightNet(Option<u64>),
+	HighlightNet,
 	/// Wire initially horizontal/vertical rules:
 	/// When the firt perpindicular pair is placed it defauts to Horizontal (horiz), meaning the first segment is horizontal and then a vertical one from the end of that to the mouse
 	/// Whenever the most recent pair is completely horiz or vert, its initial direction is set to that direction
@@ -1840,7 +1838,7 @@ impl Tool {
 				SelectionState::Dragging(_, _) => false,
 				SelectionState::FollowingMouse(_) => false
 			},
-			Self::HighlightNet(_) => true,
+			Self::HighlightNet => false,
 			Self::PlaceWire{perp_pairs: _} => false,
 		}
 	}
@@ -1883,7 +1881,8 @@ pub struct LogicCircuit {
 	/// Timing diagram probes
 	pub probes: RefCell<HashMap<u64, Probe>>,
 	pub timing: RefCell<TimingDiagram>,
-	pub bit_width_errors: Vec<BitWidthError>
+	pub bit_width_errors: Vec<BitWidthError>,
+	pub highlighted_net_opt: Option<u64>
 }
 
 impl LogicCircuit {
@@ -1930,7 +1929,8 @@ impl LogicCircuit {
 			clock: RefCell::new(Clock::default()),
 			probes: RefCell::new(HashMap::new()),
 			timing: RefCell::new(TimingDiagram::from_probe_id_list(Vec::new())),
-			bit_width_errors: Vec::new()
+			bit_width_errors: Vec::new(),
+			highlighted_net_opt: None
 		};
 		new.setup_external_connection_sources();
 		new.recompute_default_layout();
@@ -2002,7 +2002,8 @@ impl LogicCircuit {
 			clock: RefCell::new(Clock::load(save.clock_enabled, save.clock_freq, save.clock_state)),
 			probes: RefCell::new(probes),
 			timing: RefCell::new(timing),
-			bit_width_errors: Vec::new()
+			bit_width_errors: Vec::new(),
+			highlighted_net_opt: None
 		};
 		out.setup_external_connection_sources();
 		out.check_wire_geometry_and_connections();
@@ -3146,6 +3147,7 @@ impl LogicDevice for LogicCircuit {
 						continue;
 					}
 				}
+				// TODO: Tell thingy if it is connected to a highlighted net
 				self.run_function_on_graphic_item(ref_, |graphic_item| graphic_item.draw(draw));
 			}
 		}
@@ -3180,9 +3182,7 @@ impl LogicDevice for LogicCircuit {
 						draw.draw_rect(bb.0, bb.1, [0, 0, 0, 0], draw.styles().select_rect_edge_color);
 					}
 				},
-				Tool::HighlightNet(_net_id) => {
-					// TODO
-				},
+				Tool::HighlightNet => {},
 				Tool::PlaceWire{perp_pairs} => {
 					if let Some(mouse_pos_grid) = mouse_pos_grid_opt {
 						let mouse_pos_grid_rounded: IntV2 = round_v2_to_intv2(mouse_pos_grid);
