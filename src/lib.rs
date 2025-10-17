@@ -114,6 +114,26 @@ pub mod prelude {
 
 		(V2::new(min_x, min_y), V2::new(max_x, max_y))
 	}
+	pub fn merge_points_to_bb_reversed_y(points: Vec<V2>) -> (V2, V2) {// From ChatGPT, modified
+		if points.is_empty() {
+			// Return a degenerate bounding box at the origin if there are no points
+			return (V2::new(0.0, 0.0), V2::new(0.0, 0.0));
+		}
+
+		let mut min_x = points[0].x;
+		let mut min_y = points[0].y;
+		let mut max_x = points[0].x;
+		let mut max_y = points[0].y;
+
+		for p in &points[1..] {
+			if p.x < min_x { min_x = p.x; }
+			if p.y < min_y { min_y = p.y; }
+			if p.x > max_x { max_x = p.x; }
+			if p.y > max_y { max_y = p.y; }
+		}
+
+		(V2::new(min_x, max_y), V2::new(max_x, min_y))
+	}
 	pub fn bbs_overlap(a: (V2, V2), b: (V2, V2)) -> bool {// From ChatGPT
 		let (a_min, a_max) = a;
 		let (b_min, b_max) = b;

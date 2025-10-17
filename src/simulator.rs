@@ -494,7 +494,7 @@ impl GraphicSelectableItem for GraphicPin {
 				draw.styles().color_from_logic_state(external_and_combined_states[i].1)
 			);
 			if let Some(value) = external_and_combined_states[i].0.to_bool_opt() {
-				draw.text(match value {true => "1", false => "0"}.to_owned(), V2::new((i*2) as f32 + 2.0, 0.0), GenericAlign2::CENTER_CENTER, draw.styles().text_color, 1.5, false);
+				draw.text(match value {true => "1", false => "0"}, V2::new((i*2) as f32 + 2.0, 0.0), GenericAlign2::CENTER_CENTER, draw.styles().text_color, 1.5, false);
 			}
 		}
 		draw.draw_polyline(
@@ -696,7 +696,8 @@ pub struct GraphicLabel {
 	ui_data: UIData,
 	text: String,
 	/// Relative to parent circuit
-	vertical: bool
+	vertical: bool,
+	text_width: RefCell<f32>
 }
 
 impl GraphicLabel {
@@ -704,7 +705,8 @@ impl GraphicLabel {
 		Self {
 			ui_data: UIData::new(IntV2(0, 0), FourWayDir::default(), (V2::zeros(), V2::zeros())),
 			text: "New Label".to_owned(),
-			vertical: false
+			vertical: false,
+			text_width: RefCell::new(0.0)
 		}
 	}
 	pub fn save(&self) -> GraphicLabelSave {
@@ -719,7 +721,8 @@ impl GraphicLabel {
 		Self {
 			ui_data: UIData::new(save.pos, save.dir, (V2::zeros(), V2::zeros())),
 			text: save.text,
-			vertical: save.vertical
+			vertical: save.vertical,
+			text_width: RefCell::new(0.0)
 		}
 	}
 }
@@ -727,7 +730,11 @@ impl GraphicLabel {
 impl GraphicSelectableItem for GraphicLabel {
 	fn draw<'a>(&self, draw_parent: &Box<dyn DrawInterface>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
-		draw.text(self.text.clone(), V2::zeros(), GenericAlign2::CENTER_CENTER, draw.styles().text_color, draw.styles().text_size_grid, false);
+		let text_size_grid: f32 = draw.styles().text_size_grid;
+		draw.text(&self.text, V2::zeros(), GenericAlign2::CENTER_CENTER, draw.styles().text_color, text_size_grid, false);
+		{
+			*self.text_width.borrow_mut() = draw.text_size(&self.text, text_size_grid).x;
+		}
 	}
 	fn get_ui_data(&self) -> &UIData {
 		&self.ui_data
@@ -962,7 +969,7 @@ impl GraphicSelectableItem for Splitter {
 				true => beginning_index.to_string(),
 				false => format!("{}:{}", beginning_index, beginning_index + split.0 - 1)
 			};
-			draw.text(text, V2::new(2.0, i_f32 + 0.5), GenericAlign2::CENTER_CENTER, draw.styles().text_color, 0.8, !draw.get_draw_data().direction.is_horizontal());
+			draw.text(&text, V2::new(2.0, i_f32 + 0.5), GenericAlign2::CENTER_CENTER, draw.styles().text_color, 0.8, !draw.get_draw_data().direction.is_horizontal());
 			beginning_index += split.0;
 		}
 	}
@@ -1302,7 +1309,7 @@ impl GraphicSelectableItem for Probe {
 	}
 	fn draw<'a>(&self, draw_parent: &Box<dyn DrawInterface>) {
 		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
-		let text_length: f32 = draw.text_size(self.name.clone(), 1.0).x;
+		let text_length: f32 = draw.text_size(&self.name, 1.0).x;
 		let half_height: f32 = 0.7;
 		draw.draw_polyline(
 			vec![
@@ -1321,9 +1328,9 @@ impl GraphicSelectableItem for Probe {
 			FourWayDir::E => text_length/2.0,
 			FourWayDir::N => text_length,
 			FourWayDir::W => text_length/2.0,
-			FourWayDir::S =>0.0
+			FourWayDir::S => 0.0
 		};
-		draw.text(self.name.clone(), V2::new(1.0 + half_height + probe_text_start, 0.0), GenericAlign2::CENTER_CENTER, draw.styles().text_color, 1.0, !self.ui_data.direction.is_horizontal());
+		draw.text(&self.name, V2::new(1.0 + half_height + probe_text_start, 0.0), GenericAlign2::CENTER_CENTER, draw.styles().text_color, 1.0, !self.ui_data.direction.is_horizontal());
 	}
 	#[cfg(feature = "using_egui")]
 	fn get_properties(&self) -> Vec<SelectProperty> {
@@ -1549,7 +1556,7 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 				);
 				if pin.show_name {
 					draw.text(
-						pin.name.clone(),//"test".to_owned(),
+						&pin.name,//"test".to_owned(),
 						position.0.to_v2() - (position.1.to_unit()*1.2),
 						global_dir.to_align2(),
 						draw.styles().text_color,
@@ -1561,7 +1568,7 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 			else {
 				if pin.show_name {
 					draw.text(
-						pin.name.clone(),//"test".to_owned(),
+						&pin.name,//"test".to_owned(),
 						position.0.to_v2() + (position.1.to_unit()*3.2),
 						global_dir.opposite_direction().to_align2(),
 						draw.styles().text_color,
@@ -3098,7 +3105,7 @@ impl LogicCircuit {
 		}
 		// Name
 		draw.text(
-			self.type_name.clone(),
+			&self.type_name,
 			V2::zeros(),// Relative
 			GenericAlign2::CENTER_CENTER,
 			styles.text_color,
@@ -3243,7 +3250,7 @@ impl LogicDevice for LogicCircuit {
 					let pos_v2 = pos.to_v2();
 					draw.draw_polyline(vec![IntV2(-1, -1), IntV2(1, 1)].iter().map(|intv| pos_v2 + intv.to_v2() / 2.0).collect(), draw.styles().color_error_x);
 					draw.draw_polyline(vec![IntV2(1, -1), IntV2(-1, 1)].iter().map(|intv| pos_v2 + intv.to_v2() / 2.0).collect(), draw.styles().color_error_x);
-					draw.text(format!("{} Bits", bw), pos.to_v2() + V2::new(0.7, 0.0), GenericAlign2::LEFT_CENTER, draw.styles().text_color, draw.styles().text_size_grid, false);
+					draw.text(&format!("{} Bits", bw), pos.to_v2() + V2::new(0.7, 0.0), GenericAlign2::LEFT_CENTER, draw.styles().text_color, draw.styles().text_size_grid, false);
 					if let Some(hovered_conn_i) = connection_hover_index {
 						if hovered_conn_i == i {
 							for (i2, (pos2, _)) in connection_positions_and_bws.iter().enumerate() {

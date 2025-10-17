@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["reverse_y", "restore_pin_states"]#, "using_egui", "using_filesystem", "using_wasm", "kicad_scrolling"]
+default = ["reverse_y", "restore_pin_states", "using_egui", "using_filesystem"]#, "using_wasm", "kicad_scrolling"]
 kicad_scrolling = ["mouse-rs"]
 # When enabled: Uses regular coordinates (Y up) as opposed to weird graphics stuff
 reverse_y = []

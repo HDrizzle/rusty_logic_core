@@ -303,8 +303,8 @@ pub trait DrawInterface {
 	fn draw_circle(&self, center: V2, radius: f32, stroke: [u8; 3]);
 	fn draw_circle_filled(&self, center: V2, radius: f32, stroke: [u8; 3]);
 	fn draw_arc(&self, center_grid: V2, radius_grid: f32, start_deg: f32, end_deg: f32, stroke: [u8; 3]);
-	fn text(&self, text: String, pos: V2, align: GenericAlign2, color: [u8; 3], size_grid: f32, vertical: bool);
-	fn text_size(&self, text: String, size_grid: f32) -> V2;
+	fn text(&self, text: &str, pos: V2, align: GenericAlign2, color: [u8; 3], size_grid: f32, vertical: bool);
+	fn text_size(&self, text: &str, size_grid: f32) -> V2;
 	/// Can't return something with Self so using a diferent trait that will just convert back to this
 	fn add_grid_pos_and_direction(&self, offset_unrotated: IntV2, dir_: FourWayDir) -> Box<dyn DrawInterface>;
 }

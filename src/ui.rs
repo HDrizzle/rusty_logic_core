@@ -284,8 +284,7 @@ impl DrawInterface for EguiDrawInterface {
 	}
 	fn draw_rect(&self, start_grid: V2, end_grid: V2, inside_stroke: [u8; 4], border_stroke: [u8; 3]) {
 		let draw_data = self.get_draw_data();
-		let rectified_bb: (V2, V2) = merge_points_to_bb(vec![start_grid, end_grid]);
-		let (start, end) = (draw_data.grid_to_px(rectified_bb.0), draw_data.grid_to_px(rectified_bb.1));
+		let (start, end) = merge_points_to_bb_reversed_y(vec![draw_data.grid_to_px(start_grid), draw_data.grid_to_px(end_grid)]);
 		let px_rectified_bb = Rect{min: Pos2::new(start.x, end.y), max: Pos2::new(end.x, start.y)};// After Y is flipped, Y needs to be swapped so that the bb is correct in pixel coordinates, Gemini helped find this problem
 		self.painter.rect_filled(px_rectified_bb, 0, u8_4_to_color32(inside_stroke));
 		self.painter.rect_stroke(px_rectified_bb, 0, Stroke::new(draw_data.grid_size * draw_data.styles.line_size_grid, u8_3_to_color32(border_stroke)), StrokeKind::Outside);
@@ -310,7 +309,7 @@ impl DrawInterface for EguiDrawInterface {
 		}
 		self.draw_polyline(polyline, stroke);
 	}
-	fn text(&self, text: String, pos: V2, align: GenericAlign2, color: [u8; 3], size_grid: f32, vertical: bool) {
+	fn text(&self, text: &str, pos: V2, align: GenericAlign2, color: [u8; 3], size_grid: f32, vertical: bool) {
 		let draw_data = self.get_draw_data();
 		let color32 = u8_3_to_color32(color);
 		let pos_px = draw_data.grid_to_px(pos);
@@ -318,7 +317,7 @@ impl DrawInterface for EguiDrawInterface {
 		if vertical {
 			let galley = self.painter.fonts::<Arc<Galley>>(|fonts| {
 				let mut job: LayoutJob = LayoutJob::default();
-				job.append(&text, 0.0, TextFormat::simple(font_id, color32));
+				job.append(text, 0.0, TextFormat::simple(font_id, color32));
 				fonts.layout_job(job)
 			});
 			let y_offet = if align == GenericAlign2::CENTER_BOTTOM {
@@ -336,12 +335,12 @@ impl DrawInterface for EguiDrawInterface {
 		}
 	}
 	/// gets text size in grid without actually drawing it
-	fn text_size(&self, text: String, size_grid: f32) -> V2 {
+	fn text_size(&self, text: &str, size_grid: f32) -> V2 {
 		let grid_size = self.get_grid_size();
 		let font_id = FontId::new(grid_size * size_grid, FontFamily::Monospace);
 		let galley = self.painter.fonts::<Arc<Galley>>(|fonts| {
 			let mut job: LayoutJob = LayoutJob::default();
-			job.append(&text, 0.0, TextFormat::simple(font_id, Color32::default()));
+			job.append(text, 0.0, TextFormat::simple(font_id, Color32::default()));
 			fonts.layout_job(job)
 		});
 		emath_vec2_to_v2(galley.size()) / grid_size

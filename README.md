@@ -27,15 +27,15 @@ Imagine having to manually create a bunch of full-adders to create an 8b + 8b ad
 
 To create a new circuit press on the "+" button then select the new circuit option. The new circuit's screen will be blank because there is nothing in it yet. There are some buttons on the left for adding circuit elements:
 * "+ Component / Subcircuit" - Shows a popup with a list of built-in components and saved circuits.
-* "+ I/O Pin" - Creates a pin with which you can interact with the circuit when it is the toplevel circuit. External pins are also be how sub-circuits are connected to the outside.
+* "+ I/O Pin" - Creates a pin with which you can interact with the circuit when it is the toplevel circuit. External pins are also how sub-circuits are connected to the outside.
 * "+ Splitter" - Creates a splitter for combining single-bit-width wires (or smaller bus wires) into a bus wire. Splitters are simply a way to make a circuit graphically easier to edit and do not affect the simulation.
 * "+ Label" - Graphical label.
 * "+ Probe" - Probes are not the same as external pins. They are used to read logic states from wires and update the Timing Diagram.
 
 ### Mouse & Keyboard
 
-Selecting: Drag the mouse to select anything whise bounding box intersects the dragged rectangle.
-Mouse following: When a new object is created it will be selected and following the mouse. Click to place it down.
+Selecting: Drag the mouse to select anything whose bounding box intersects the dragged rectangle.
+Mouse following: When a new object is created or freshly pasted it will be selected and following the mouse. Click to place it down.
 
 Ctrl/Command + A to select all.
 
