@@ -1075,6 +1075,21 @@ pub struct SplitterSave {
 	split_sizes: Vec<u16>
 }
 
+#[derive(Debug, Clone)]
+pub struct Resistor {
+	ui_data: UIData,
+	bit_width: u16
+}
+
+// TODO
+/*impl Resistor {
+	pub fn new() -> Self {
+		Self {
+			ui_data: UIData::new(position, direction, local_bb)
+		}
+	}
+}*/
+
 /// Just a straight segment, either horizontal or vertical
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Wire {

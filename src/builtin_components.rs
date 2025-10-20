@@ -1339,14 +1339,16 @@ pub struct DLatch {
 	data_low: u128,
 	data_high: u128,
 	// Whether there is an output enable pin
-	oe: bool
+	oe: bool,
+	// Whether there are Set and Reset pins
+	sr: bool
 }
 
 impl DLatch {
 	pub fn new() -> Self {
-		Self::from_save(LogicDeviceSave::default(), BusLayoutSave::default(), 1, 0, 0, false)
+		Self::from_save(LogicDeviceSave::default(), BusLayoutSave::default(), 1, 0, 0, false, false)
 	}
-	pub fn from_save(save: LogicDeviceSave, layout_save: BusLayoutSave, bits: u16, data_low: u128, data_high: u128, oe: bool) -> Self {
+	pub fn from_save(save: LogicDeviceSave, layout_save: BusLayoutSave, bits: u16, data_low: u128, data_high: u128, oe: bool, sr: bool) -> Self {
 		let d_margin: u32 = match oe {
 			true => 1,
 			false => 2
@@ -1358,6 +1360,10 @@ impl DLatch {
 		];
 		if oe {
 			pin_groups.push((FourWayDir::W, 1, 1, "OE".to_owned()));
+		}
+		if sr {
+			pin_groups.push((FourWayDir::S, 2, 1, "S".to_owned()));
+			pin_groups.push((FourWayDir::S, 2, 1, "R".to_owned()));
 		}
 		pin_groups.push((FourWayDir::W, 1, 1, "CLK".to_owned()));
 		let layout = BlockLayoutHelper::load(
@@ -1378,7 +1384,8 @@ impl DLatch {
 			prev_clock: None,
 			data_low,
 			data_high,
-			oe
+			oe,
+			sr
 		};
 		for i in 0..out.bits {
 			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("D".to_owned(), i)).unwrap(), LogicState::Floating);
@@ -1386,6 +1393,10 @@ impl DLatch {
 		out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("CLK".to_owned(), 0)).unwrap(), LogicState::Floating);
 		if out.oe {
 			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("OE".to_owned(), 0)).unwrap(), LogicState::Floating);
+		}
+		if out.sr {
+			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("S".to_owned(), 0)).unwrap(), LogicState::Floating);
+			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("R".to_owned(), 0)).unwrap(), LogicState::Floating);
 		}
 		out
 	}
@@ -1430,6 +1441,17 @@ impl LogicDevice for DLatch {
 				}
 			}
 		}
+		// Check if set or reset
+		if self.sr {
+			if self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("S", 0)).to_bool() {
+				self.data_low = u128::MAX;
+				self.data_high = u128::MAX;
+			}
+			if self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("R", 0)).to_bool() {
+				self.data_low = 0;
+				self.data_high = 0;
+			}
+		}
 		// Output enable/disable
 		let oe: bool = if self.oe {
 			self.get_pin_state_panic(*self.layout.group_logical_pins.get(&("OE".to_owned(), 0)).unwrap()).to_bool()
@@ -1455,7 +1477,7 @@ impl LogicDevice for DLatch {
 		}
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
-		Ok(EnumAllLogicDevices::DLatch(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe))
+		Ok(EnumAllLogicDevices::DLatch(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe, self.sr))
 	}
 	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles().color_foreground);
@@ -1465,21 +1487,32 @@ impl LogicDevice for DLatch {
 		Some(self.bits)
 	}
 	fn set_bit_width(&mut self, bit_width: u16) {
-		*self = Self::from_save(self.generic.save(), self.layout.save(), bit_width, self.data_low, self.data_high, self.oe);
+		*self = Self::from_save(self.generic.save(), self.layout.save(), bit_width, self.data_low, self.data_high, self.oe, self.sr);
 	}
 	#[cfg(feature = "using_egui")]
 	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
 		let mut out = self.layout.get_properties();
 		out.push(SelectProperty::HasPin("OE".to_owned(), self.oe));
+		out.push(SelectProperty::HasPin("SR".to_owned(), self.oe));
 		out
 	}
 	#[cfg(feature = "using_egui")]
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
-		if let SelectProperty::HasPin(_, oe_pin) = &property {
-			self.oe = *oe_pin;
+		if let SelectProperty::HasPin(pin_name, pin_en) = &property {
+			match pin_name.as_str() {
+				"OE" => {
+					self.oe = *pin_en;
+				},
+				"SR" => {
+					self.sr = *pin_en;
+				},
+				_ => {}
+			}
 		}
-		self.layout.set_property(property);
-		*self = Self::from_save(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe)
+		else {
+			self.layout.set_property(property);
+		}
+		*self = Self::from_save(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe, self.sr)
 	}
 }
 

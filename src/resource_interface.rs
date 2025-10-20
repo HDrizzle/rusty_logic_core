@@ -184,7 +184,7 @@ pub enum EnumAllLogicDevices {
 	),
 	TriStateBuffer(LogicDeviceSave),
 	Adder(LogicDeviceSave, BusLayoutSave, u16),
-	DLatch(LogicDeviceSave, BusLayoutSave, u16, u128, u128, bool),
+	DLatch(LogicDeviceSave, BusLayoutSave, u16, u128, u128, bool, #[serde(default)]bool),
 	Counter(LogicDeviceSave, BusLayoutSave, u16, u128, u128, bool),
 	TriStateBufferNew(LogicDeviceSave, BusLayoutSave, u16),
 	SRLatch(LogicDeviceSave, BusLayoutSave, bool)
@@ -207,7 +207,7 @@ impl EnumAllLogicDevices {
 			Self::Memory(save, addr_size, data_opt, layout) => Ok(Box::new(builtin_components::Memory::from_save(save, addr_size, data_opt, layout))),
 			Self::TriStateBuffer(save) => Ok(Box::new(builtin_components::TriStateBufferOld::from_save(save))),
 			Self::Adder(save, layout, bw) => Ok(Box::new(builtin_components::Adder::from_save(save, layout, bw))),
-			Self::DLatch(save, layout, bw, low, high, oe) => Ok(Box::new(builtin_components::DLatch::from_save(save, layout, bw, low, high, oe))),
+			Self::DLatch(save, layout, bw, low, high, oe, sr) => Ok(Box::new(builtin_components::DLatch::from_save(save, layout, bw, low, high, oe, sr))),
 			Self::Counter(save, layout, bw, low, high, oe) => Ok(Box::new(builtin_components::Counter::from_save(save, layout, bw, low, high, oe))),
 			Self::TriStateBufferNew(save, layout, bw) => Ok(Box::new(builtin_components::TriStateBuffer::from_save(save, layout, bw))),
 			Self::SRLatch(save, layout, state) => Ok(Box::new(builtin_components::SRLatch::from_save(save, layout, state)))
@@ -230,7 +230,7 @@ impl EnumAllLogicDevices {
 			Self::Memory(_, _, _, _) => "Memory".to_owned(),
 			Self::TriStateBuffer(_) => "Tri-State Buffer (old)".to_owned(),
 			Self::Adder(_, _, _) => "Adder".to_owned(),
-			Self::DLatch(_, _, _, _, _, _) => "Data Latch".to_owned(),
+			Self::DLatch(_, _, _, _, _, _, _) => "Data Latch".to_owned(),
 			Self::Counter(_, _, _, _, _, _) => "Counter".to_owned(),
 			Self::TriStateBufferNew(_, _, _) => "Tri-State Buffer (new)".to_owned(),
 			Self::SRLatch(_, _, _) => "SR Latch".to_owned()
