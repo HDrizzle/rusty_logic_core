@@ -102,7 +102,7 @@ impl Default for Styles {
 			text_size_grid: 0.9,
 			text_color: [243, 118, 252],
 			wire_start_point_outline_color: [93, 252, 167],
-			timing_diagram_resolution_px: 20
+			timing_diagram_resolution_px: 30
 		}
 	}
 }

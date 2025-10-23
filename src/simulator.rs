@@ -697,7 +697,7 @@ pub struct GraphicLabel {
 	text: String,
 	/// Relative to parent circuit
 	vertical: bool,
-	text_width: RefCell<f32>
+	text_size: RefCell<V2>
 }
 
 impl GraphicLabel {
@@ -706,7 +706,7 @@ impl GraphicLabel {
 			ui_data: UIData::new(IntV2(0, 0), FourWayDir::default(), (V2::zeros(), V2::zeros())),
 			text: "New Label".to_owned(),
 			vertical: false,
-			text_width: RefCell::new(0.0)
+			text_size: RefCell::new(V2::zeros())
 		}
 	}
 	pub fn save(&self) -> GraphicLabelSave {
@@ -722,7 +722,7 @@ impl GraphicLabel {
 			ui_data: UIData::new(save.pos, save.dir, (V2::zeros(), V2::zeros())),
 			text: save.text,
 			vertical: save.vertical,
-			text_width: RefCell::new(0.0)
+			text_size: RefCell::new(V2::zeros())
 		}
 	}
 }
@@ -733,7 +733,7 @@ impl GraphicSelectableItem for GraphicLabel {
 		let text_size_grid: f32 = draw.styles().text_size_grid;
 		draw.text(&self.text, V2::zeros(), GenericAlign2::CENTER_CENTER, draw.styles().text_color, text_size_grid, false);
 		{
-			*self.text_width.borrow_mut() = draw.text_size(&self.text, text_size_grid).x;
+			*self.text_size.borrow_mut() = V2::new(draw.text_size(&self.text, text_size_grid).x, text_size_grid);
 		}
 	}
 	fn get_ui_data(&self) -> &UIData {
@@ -772,6 +772,11 @@ impl GraphicSelectableItem for GraphicLabel {
 	#[cfg(feature = "using_egui")]
 	fn copy(&self) -> CopiedGraphicItem {
 		CopiedGraphicItem::GraphicLabel(self.save())
+	}
+	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
+		let text_half_size: V2 = *self.text_size.borrow() / 2.0;
+		let local_bb = (-text_half_size, text_half_size);
+		merge_points_to_bb(vec![grid_offset + self.ui_data.pos_to_parent_coords_float(local_bb.0), grid_offset + self.ui_data.pos_to_parent_coords_float(local_bb.1)])
 	}
 }
 
@@ -1295,23 +1300,20 @@ pub struct Probe {
 	pub name: String,
 	nets_opt: Vec<Option<u64>>,
 	/// Wrt grid
-	text_len: f32
+	text_len: RefCell<f32>
 }
 
 impl Probe {
 	pub fn load(save: ProbeSave) -> Self {
 		Self {
-			ui_data: UIData::new(save.0, save.1, Self::get_bb(save.3)),
+			ui_data: UIData::new(save.0, save.1, (V2::zeros(), V2::zeros())),
 			name: save.2,
 			nets_opt: vec![None],
-			text_len: save.3
+			text_len: RefCell::new(save.3)
 		}
 	}
 	pub fn save(&self) -> ProbeSave {
-		(self.ui_data.position, self.ui_data.direction, self.name.clone(), self.text_len)
-	}
-	fn get_bb(text_len: f32) -> (V2, V2) {
-		(V2::new(1.0, -1.0), V2::new(2.0 + text_len, 1.0))
+		(self.ui_data.position, self.ui_data.direction, self.name.clone(), *self.text_len.borrow())
 	}
 }
 
@@ -1346,6 +1348,7 @@ impl GraphicSelectableItem for Probe {
 			FourWayDir::S => 0.0
 		};
 		draw.text(&self.name, V2::new(1.0 + half_height + probe_text_start, 0.0), GenericAlign2::CENTER_CENTER, draw.styles().text_color, 1.0, !self.ui_data.direction.is_horizontal());
+		*self.text_len.borrow_mut() = text_length;
 	}
 	#[cfg(feature = "using_egui")]
 	fn get_properties(&self) -> Vec<SelectProperty> {
@@ -1377,6 +1380,10 @@ impl GraphicSelectableItem for Probe {
 	#[cfg(feature = "using_egui")]
 	fn copy(&self) -> CopiedGraphicItem {
 		CopiedGraphicItem::Probe(self.save())
+	}
+	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
+		let local_bb = (V2::new(1.0, -1.0), V2::new(2.0 + *self.text_len.borrow(), 1.0));
+		merge_points_to_bb(vec![grid_offset + self.ui_data.pos_to_parent_coords_float(local_bb.0), grid_offset + self.ui_data.pos_to_parent_coords_float(local_bb.1)])
 	}
 }
 
@@ -1561,7 +1568,19 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 			let position: (IntV2, FourWayDir, f32) = self.get_pin_position_override(*pin_id).unwrap();
 			let global_dir = position.1.rotate_intv2(draw.get_draw_data().direction.to_unit_int()).is_along_axis().unwrap();
 			let vertical = global_dir == FourWayDir::N || global_dir == FourWayDir::S;
-			if !self.is_toplevel_circuit() {
+			if self.is_toplevel_circuit() {
+				if pin.show_name {
+					draw.text(
+						&pin.name,//"test".to_owned(),
+						position.0.to_v2() + (position.1.to_unit()*(1.2 + (pin.owned_pins.len() as f32)*2.0)),
+						global_dir.opposite_direction().to_align2(),
+						draw.styles().text_color,
+						draw.styles().text_size_grid,
+						vertical
+					);
+				}
+			}
+			else {
 				draw.draw_polyline(
 					vec![
 						position.0.to_v2(),
@@ -1574,18 +1593,6 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 						&pin.name,//"test".to_owned(),
 						position.0.to_v2() - (position.1.to_unit()*1.2),
 						global_dir.to_align2(),
-						draw.styles().text_color,
-						draw.styles().text_size_grid,
-						vertical
-					);
-				}
-			}
-			else {
-				if pin.show_name {
-					draw.text(
-						&pin.name,//"test".to_owned(),
-						position.0.to_v2() + (position.1.to_unit()*3.2),
-						global_dir.opposite_direction().to_align2(),
 						draw.styles().text_color,
 						draw.styles().text_size_grid,
 						vertical
@@ -1760,16 +1767,25 @@ impl Clock {
 			state
 		}
 	}
-	pub fn update(&mut self) {
+	/// Returns: Whether it changed
+	pub fn update(&mut self) -> bool {
 		if self.enabled {
 			if self.freq == 0.0 {
 				self.state = !self.state;
 				self.last_change = Instant::now();
+				true
 			}
 			else if self.last_change.elapsed() > Duration::from_secs_f32(0.5 / self.freq) {// The frequency is based on a whole period, it must change twice per period, so 0.5/f not 1/f
 				self.state = !self.state;
 				self.last_change = Instant::now();
+				true
 			}
+			else {
+				false
+			}
+		}
+		else {
+			false
 		}
 	}
 }

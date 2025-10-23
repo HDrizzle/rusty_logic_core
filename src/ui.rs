@@ -657,11 +657,15 @@ impl LogicCircuit {
 							let graph_pos_to_canvas_pos = |graph_x: f32, graph_y: f32, group_i: usize| -> Pos2 {
 								Pos2::new(graph_x + response.rect.left() + 2.0, (-graph_y) + (group_i as f32 + 0.5)*vert_spacing + response.rect.top())
 							};
+							// Iterate signal groups, each line on the timing diagram
 							for (group_i, (_, signal_group)) in timing.signal_groups.iter().enumerate() {
 								//let (response, painter) = ui.allocate_painter(Vec2::new(0.0, 20.0), Sense::empty());
-								// Iterate signal samples
 								let mut prev_sample: Vec<LogicState> = signal_group.iter().map(|signal| signal[0]).collect();
 								let mut prev_n_opt: Option<(u128, u128)> = None;
+								// I Love you Haley
+								let mut bus_labels = Vec::<((u128, u128), f32)>::new();
+								let mut latest_bus_label_start: usize = 0;
+								// Iterate signal samples
 								for sample_i in 0..timing.n_samples {
 									let current_sample: Vec<LogicState> = signal_group.iter().map(|signal| signal[sample_i]).collect();
 									let sample_i_f32: f32 = sample_i as f32;
@@ -720,8 +724,12 @@ impl LogicCircuit {
 													],
 													stroke_normal
 												);
+												// End current bus
+												bus_labels.push((prev_n, (latest_bus_label_start as f32 + sample_i_f32)/2.0));
+												// Is it weird for guys to name their dicks?
 											}
 										}
+										// Campus is looking really pretty in the fall
 										// Diagonals to this segment
 										let diags_to_this_segment = both_valid_diff || (prev_n_opt.is_none() && valid);
 										if diags_to_this_segment {
@@ -739,6 +747,7 @@ impl LogicCircuit {
 												],
 												stroke_normal
 											);
+											latest_bus_label_start = sample_i;
 										}
 										// horiz line(s)
 										if valid {
@@ -779,6 +788,24 @@ impl LogicCircuit {
 										}
 									}
 									prev_sample = current_sample;
+								}
+								if let Some(last_n) = prev_n_opt {
+									bus_labels.push((last_n, (latest_bus_label_start as f32 + (timing.n_samples as f32))/2.0));
+								}
+								// Bus labels
+								for (n_256, label_center_x) in bus_labels {
+									let mut text = format!("{:X}", n_256.0);
+									if n_256.1 != 0 {
+										text += &format!("{:X}", n_256.1);
+									}
+									let font_id = FontId::new(amplitude*1.5, FontFamily::Monospace);
+									painter.text(
+										graph_pos_to_canvas_pos(label_center_x*wavelength, logic_state_to_graph_y_and_color(LogicState::Floating).0, group_i),
+										Align2::CENTER_CENTER,
+										text,
+										font_id,
+										u8_3_to_color32(styles.text_color)
+									);
 								}
 							}
 						});
@@ -1288,9 +1315,11 @@ impl LogicCircuitToplevelView {
 	/// Runs `compute_step()` repeatedly on the circuit until there are no changes, there must be a limit because there are circuits (ex. NOT gate connected to itself) where this would otherwise never end
 	pub fn propagate_until_stable(&mut self, propagation_limit: usize) -> bool {
 		let mut count: usize = 0;
+		let clock_initial_state = self.circuit.clock.borrow().state;
 		while count < propagation_limit {
 			if !self.circuit.compute_immutable(&AncestryStack::new(), 0, count == 0) {
-				if count > 0 {
+				// Only only if clock changes
+				if count > 0 {// && (self.circuit.clock.borrow().state != clock_initial_state) {
 					self.circuit.update_timing_diagram();
 				}
 				self.frame_compute_cycles = count;
