@@ -601,6 +601,7 @@ impl LogicCircuit {
 		}
 		return_recompute_connections
 	}
+	/// Inspired by Wavedrom.com/editor.html
 	pub fn show_timing_diagram_ui(&self, ui: &mut Ui, styles: Rc<Styles>) {
 		ui.horizontal(|ui| {
 			let mut timing = self.timing.borrow_mut();
@@ -660,6 +661,7 @@ impl LogicCircuit {
 								//let (response, painter) = ui.allocate_painter(Vec2::new(0.0, 20.0), Sense::empty());
 								// Iterate signal samples
 								let mut prev_sample: Vec<LogicState> = signal_group.iter().map(|signal| signal[0]).collect();
+								let mut prev_n_opt: Option<(u128, u128)> = None;
 								for sample_i in 0..timing.n_samples {
 									let current_sample: Vec<LogicState> = signal_group.iter().map(|signal| signal[sample_i]).collect();
 									let sample_i_f32: f32 = sample_i as f32;
@@ -673,8 +675,108 @@ impl LogicCircuit {
 										}
 										painter.line_segment([graph_pos_to_canvas_pos(sample_i_f32*wavelength, current_y, group_i), graph_pos_to_canvas_pos((sample_i_f32+1.0)*wavelength, current_y, group_i)], stroke);
 									}
-									else {
-										// TODO
+									else {// Multiple bits
+										const DIAGONAL_HALF_WIDTH: f32 = 0.1;
+										let ((y_low, _), (y_high, _)) = (logic_state_to_graph_y_and_color(LogicState::Driven(false)), logic_state_to_graph_y_and_color(LogicState::Driven(true)));
+										// Compile binary number, quit if any states are floating or contested
+										let mut valid = true;
+										let mut curr_n: (u128, u128) = (0, 0);
+										for (i, state) in current_sample.iter().enumerate() {
+											if state.is_valid() {
+												if state.to_bool() {
+													if i < 128 {
+														curr_n.0 += 1 << i;
+													}
+													else {
+														curr_n.1 += 1 << (i - 128);
+													}
+												}
+											}
+											else {
+												valid = false;
+												break;
+											}
+										}
+										let center_pt = graph_pos_to_canvas_pos((sample_i_f32+DIAGONAL_HALF_WIDTH)*wavelength, (y_high+y_low)/2.0, group_i);
+										let stroke_normal = Stroke::new(1.0, u8_3_to_color32(styles.color_foreground));
+										let mut both_valid_diff = false;
+										let mut diags_from_prev_segment = false;
+										// Diagonals from prev segment
+										if let Some(prev_n) = prev_n_opt {
+											both_valid_diff = (prev_n != curr_n) && valid;
+											if both_valid_diff || !valid {
+												diags_from_prev_segment = true;
+												painter.line_segment(
+													[
+														graph_pos_to_canvas_pos(sample_i_f32*wavelength, y_high, group_i),
+														center_pt
+													],
+													stroke_normal
+												);
+												painter.line_segment(
+													[
+														center_pt,
+														graph_pos_to_canvas_pos(sample_i_f32*wavelength, y_low, group_i),
+													],
+													stroke_normal
+												);
+											}
+										}
+										// Diagonals to this segment
+										let diags_to_this_segment = both_valid_diff || (prev_n_opt.is_none() && valid);
+										if diags_to_this_segment {
+											painter.line_segment(
+												[
+													graph_pos_to_canvas_pos((sample_i_f32+DIAGONAL_HALF_WIDTH*2.0)*wavelength, y_high, group_i),
+													center_pt
+												],
+												stroke_normal
+											);
+											painter.line_segment(
+												[
+													center_pt,
+													graph_pos_to_canvas_pos((sample_i_f32+DIAGONAL_HALF_WIDTH*2.0)*wavelength, y_low, group_i),
+												],
+												stroke_normal
+											);
+										}
+										// horiz line(s)
+										if valid {
+											let start_x = /*(sample_i_f32+DIAGONAL_HALF_WIDTH*2.0)*wavelength;*/match diags_to_this_segment {
+												true => (sample_i_f32+DIAGONAL_HALF_WIDTH*2.0)*wavelength,
+												false => sample_i_f32*wavelength
+											};
+											painter.line_segment(
+												[
+													graph_pos_to_canvas_pos(start_x, y_high, group_i),
+													graph_pos_to_canvas_pos((sample_i_f32+1.0)*wavelength, y_high, group_i)
+												],
+												stroke_normal
+											);
+											painter.line_segment(
+												[
+													graph_pos_to_canvas_pos(start_x, y_low, group_i),
+													graph_pos_to_canvas_pos((sample_i_f32+1.0)*wavelength, y_low, group_i)
+												],
+												stroke_normal
+											);
+											prev_n_opt = Some(curr_n);
+										}
+										else {
+											let start_x = match diags_from_prev_segment {
+												true => (sample_i_f32+DIAGONAL_HALF_WIDTH)*wavelength,
+												false => sample_i_f32*wavelength
+											};
+											let (y_mid, _) = logic_state_to_graph_y_and_color(LogicState::Floating);
+											painter.line_segment(
+												[
+													graph_pos_to_canvas_pos(start_x, y_mid, group_i),
+													graph_pos_to_canvas_pos((sample_i_f32+1.0)*wavelength, y_mid, group_i)
+												],
+												stroke_normal
+											);
+											prev_n_opt = None;
+										}
 									}
 									prev_sample = current_sample;
 								}
