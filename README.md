@@ -2,6 +2,8 @@
 
 I was inspired to create this program after making a crude logic simulator/animator in TS for MotionCanvas for my DIY computer presentation. There are also features inspired by CircuitVerse and KiCad.
 
+<img src="example_scrot.png" />
+
 ## How it works
 
 This is a program that simulates digital logic circuits made from components, wires, and splitters.
