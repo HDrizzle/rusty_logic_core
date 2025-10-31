@@ -4,6 +4,7 @@ use eframe::egui::Ui;
 use common_macros::hash_map;
 use std::{collections::HashMap, cell::RefCell, rc::Rc};
 use serde::{Deserialize, Serialize};
+use web_time::{Duration, Instant};
 
 /// For the component search popup
 pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
@@ -23,7 +24,8 @@ pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
 		Adder::new().save().unwrap(),
 		DLatch::new().save().unwrap(),
 		Counter::new().save().unwrap(),
-		SRLatch::new().save().unwrap()
+		SRLatch::new().save().unwrap(),
+		VectorCRT::new().save().unwrap()
 	]
 }
 
@@ -278,6 +280,33 @@ impl BlockLayoutHelper {
 	}
 	pub fn get_logic_pin_id_panic(&self, group_name: &str, bit_i: u16) -> u64 {
 		*self.group_logical_pins.get(&(group_name.to_owned(), bit_i)).unwrap()
+	}
+	/// Gets binary number from group of pins, panics if the group name doesn't exist
+	pub fn get_bus_value_panic(&self, bus_name: &str, logic_pins: &Rc<RefCell<HashMap<u64, RefCell<LogicConnectionPin>>>>) -> (u128, u128) {
+		let mut lower: u128 = 0;
+		let mut upper: u128 = 0;
+		let mut bus_size: u16 = 0;
+		let mut group_found = false;
+		for group in &self.pin_groups {
+			if group.3 == bus_name {
+				group_found = true;
+				bus_size = group.2;
+			}
+		}
+		if !group_found {
+			panic!("Pin group/bus \"{}\" does not exist", bus_name);
+		}
+		for i in 0..bus_size {
+			if logic_pins.borrow().get(&self.get_logic_pin_id_panic(bus_name, i)).unwrap().borrow().state().to_bool() {
+				if i < 128 {
+					lower += 1 << i;
+				}
+				else {
+					upper += 1 << (i - 128);
+				}
+			}
+		}
+		(lower, upper)
 	}
 }
 
@@ -1730,5 +1759,156 @@ impl LogicDevice for Counter {
 		}
 		self.layout.set_property(property);
 		*self = Self::from_save(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe)
+	}
+}
+
+/// Vector graphics CRT simulator made specifically to test a part of my DIY computer that I am expanding
+#[derive(Debug)]
+pub struct VectorCRT {
+	generic: LogicDeviceGeneric,
+	layout: BlockLayoutHelper,
+	/// 0 to 1, for lerping
+	line_start_time: Instant,
+	prev_clock_state: bool,
+	/// Vec<(Start, End which will be updated until the LERP is over)>
+	lines: Vec<(IntV2, IntV2)>,
+	line_done_pulse_state: bool,
+	line_speed: f32,
+	v0: IntV2,
+	v1: IntV2,
+	curr_line_time: f32,
+	/// From V0
+	curr_line_diff: IntV2
+}
+
+impl VectorCRT {
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default(), BusLayoutSave::default())
+	}
+	pub fn from_save(save: LogicDeviceSave, layout_save: BusLayoutSave) -> Self {
+		let pin_groups = vec![
+			(FourWayDir::W, 2, 10, "X0".to_owned()),
+			(FourWayDir::W, 2, 10, "Y0".to_owned()),
+			(FourWayDir::W, 2, 10, "X1".to_owned()),
+			(FourWayDir::W, 2, 10, "Y1".to_owned()),
+			(FourWayDir::W, 1, 1, "Clear".to_owned()),
+			(FourWayDir::W, 1, 1, "Line Done".to_owned()),
+			(FourWayDir::W, 1, 1, "Beam Enable".to_owned())
+		];
+		let layout = BlockLayoutHelper::load(
+			layout_save,
+			pin_groups,
+			IntV2(280, 260)// Not actually correct, just to get it to put the pins in the right place
+		);
+		let mut out = Self {
+			generic: LogicDeviceGeneric::load(
+				save,
+				layout.pin_config(),
+				(V2::new(-140.0, -130.0), V2::new(129.0, 129.0)),
+				false,
+				false
+			),
+			layout,
+			line_start_time: Instant::now(),
+			prev_clock_state: false,
+			lines: Vec::new(),
+			line_done_pulse_state: false,
+			line_speed: 100.0,
+			v0: IntV2(0, 0),
+			v1: IntV2(0, 0),
+			curr_line_time: 0.0,
+			curr_line_diff: IntV2(0, 0)
+		};
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Clear", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Beam Enable", 0), LogicState::Floating);
+		for bit_i in 0..10 {
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("X0", bit_i), LogicState::Floating);
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("X1", bit_i), LogicState::Floating);
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Y0", bit_i), LogicState::Floating);
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Y1", bit_i), LogicState::Floating);
+		}
+		out
+	}
+	fn save_current_line(&mut self) {
+		self.lines.push((self.v0, self.v0 + self.curr_line_diff));
+	}
+	fn update_input_vectors(&self) -> Option<(IntV2, IntV2)> {
+		let logic_pins_rc = Rc::clone(&self.generic.logic_pins);
+		let new_v0 = IntV2(self.layout.get_bus_value_panic("X0", &logic_pins_rc).0 as i32, self.layout.get_bus_value_panic("Y0", &logic_pins_rc).0 as i32);
+		let new_v1 = IntV2(self.layout.get_bus_value_panic("X1", &logic_pins_rc).0 as i32, self.layout.get_bus_value_panic("Y1", &logic_pins_rc).0 as i32);
+		if new_v0 != self.v0 || new_v1 != self.v1 {
+			Some((new_v0, new_v1))
+		}
+		else {
+			None
+		}
+	}
+}
+
+impl LogicDevice for VectorCRT {
+	fn get_generic(&self) -> &LogicDeviceGeneric {
+		&self.generic
+	}
+	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
+		&mut self.generic
+	}
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _self_component_id: u64, _clock_state: bool, _first_propagation_step: bool) {
+		// Check clear
+		if self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("Clear", 0)).to_bool() {
+			self.lines = Vec::new();
+		}
+		// Get lerp distance
+		let diff: V2 = (self.v1 - self.v0).to_v2();
+		// Avoid dividing by zero
+		let curr_line_distance: f32 = if diff.magnitude() == 0.0 {
+			1.0
+		}
+		else {
+			diff.magnitude()
+		};
+		self.curr_line_time = (Instant::now() - self.line_start_time).as_secs_f32();
+		self.curr_line_diff = round_v2_to_intv2(diff * self.curr_line_time * self.line_speed / curr_line_distance);// TODO: Contant speed
+		if self.curr_line_time * self.line_speed >= curr_line_distance {// Line end
+			self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Line Done", 0), LogicState::Driven(true));
+			self.save_current_line();
+			self.line_start_time = Instant::now();
+		}
+		else {
+			self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Line Done", 0), LogicState::Driven(false));
+		}
+		if let Some((new_v0, new_v1)) = self.update_input_vectors() {
+			self.save_current_line();
+			self.line_start_time = Instant::now();
+			self.v0 = new_v0;
+			self.v1 = new_v1;
+		}
+	}
+	fn save(&self) -> Result<EnumAllLogicDevices, String> {
+		Ok(EnumAllLogicDevices::VectorCRT(self.generic.save(), self.layout.save()))
+	}
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
+		/*
+		BB size: (269, 259), BB from (-140, -130) to (129, 129)
+		Connections on left (west)
+		CRT View from (-128, -128) to (128, 128)
+		*/
+		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles().color_foreground);
+		draw.draw_rect(V2::new(-128.0, -128.0), V2::new(128.0, 128.0), [0,0,0,0], draw.styles().color_foreground);
+		let to_display_offset = IntV2(512, 512);
+		for line in self.lines.iter().chain(vec![(self.v0, self.v0 + self.curr_line_diff)].iter()).map(|(v0, v1)| (*v0 - to_display_offset, *v1 - to_display_offset)) {
+			if let Some((start_cliped, end_cliped)) = clip_line_to_rect((line.0.to_v2(), line.1.to_v2()), (V2::new(-128.0, -128.0), V2::new(128.0, 128.0))) {
+				draw.draw_polyline(vec![start_cliped, end_cliped], [0, 255, 0]);
+			}
+		}
+		draw.text(&format!("Pos from: {:?}, current: {:?}, to: {:?}, Current line time: {}", &self.v0, self.v0 + self.curr_line_diff, &self.v1, (Instant::now() - self.line_start_time).as_secs_f32()), V2::new(-128.0, -129.0), GenericAlign2::LEFT_CENTER, draw.styles().text_color, 1.5, false);
+	}
+	#[cfg(feature = "using_egui")]
+	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
+		self.layout.get_properties()
+	}
+	#[cfg(feature = "using_egui")]
+	fn device_set_special_select_property(&mut self, property: SelectProperty) {
+		self.layout.set_property(property);
+		*self = Self::from_save(self.generic.save(), self.layout.save())
 	}
 }

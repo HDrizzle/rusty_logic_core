@@ -782,7 +782,7 @@ impl LogicCircuit {
 													graph_pos_to_canvas_pos(start_x, y_mid, group_i),
 													graph_pos_to_canvas_pos((sample_i_f32+1.0)*wavelength, y_mid, group_i)
 												],
-												stroke_normal
+												Stroke::new(1.0, u8_3_to_color32(styles.color_wire_floating))
 											);
 											prev_n_opt = None;
 										}

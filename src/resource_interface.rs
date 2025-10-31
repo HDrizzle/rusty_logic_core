@@ -187,7 +187,8 @@ pub enum EnumAllLogicDevices {
 	DLatch(LogicDeviceSave, BusLayoutSave, u16, u128, u128, bool, #[serde(default)]bool),
 	Counter(LogicDeviceSave, BusLayoutSave, u16, u128, u128, bool),
 	TriStateBufferNew(LogicDeviceSave, BusLayoutSave, u16),
-	SRLatch(LogicDeviceSave, BusLayoutSave, bool)
+	SRLatch(LogicDeviceSave, BusLayoutSave, bool),
+	VectorCRT(LogicDeviceSave, BusLayoutSave)
 }
 
 impl EnumAllLogicDevices {
@@ -210,7 +211,8 @@ impl EnumAllLogicDevices {
 			Self::DLatch(save, layout, bw, low, high, oe, sr) => Ok(Box::new(builtin_components::DLatch::from_save(save, layout, bw, low, high, oe, sr))),
 			Self::Counter(save, layout, bw, low, high, oe) => Ok(Box::new(builtin_components::Counter::from_save(save, layout, bw, low, high, oe))),
 			Self::TriStateBufferNew(save, layout, bw) => Ok(Box::new(builtin_components::TriStateBuffer::from_save(save, layout, bw))),
-			Self::SRLatch(save, layout, state) => Ok(Box::new(builtin_components::SRLatch::from_save(save, layout, state)))
+			Self::SRLatch(save, layout, state) => Ok(Box::new(builtin_components::SRLatch::from_save(save, layout, state))),
+			Self::VectorCRT(save, layout) => Ok(Box::new(builtin_components::VectorCRT::from_save(save, layout)))
 		}
 	}
 	/// Example: "AND Gate" or "D Latch", for the component search UI
@@ -233,7 +235,8 @@ impl EnumAllLogicDevices {
 			Self::DLatch(_, _, _, _, _, _, _) => "Data Latch".to_owned(),
 			Self::Counter(_, _, _, _, _, _) => "Counter".to_owned(),
 			Self::TriStateBufferNew(_, _, _) => "Tri-State Buffer (new)".to_owned(),
-			Self::SRLatch(_, _, _) => "SR Latch".to_owned()
+			Self::SRLatch(_, _, _) => "SR Latch".to_owned(),
+			Self::VectorCRT(_, _) => "Vector CRT".to_owned()
 		}
 	}
 }

@@ -150,6 +150,91 @@ pub mod prelude {
 			bb.0
 		]
 	}
+	/// From Gemini
+	/// Clips a line segment to an axis-aligned bounding box (AABB).
+	///
+	/// Implements the Liang-Barsky algorithm.
+	///
+	/// # Arguments
+	/// * `line` - A tuple `(p0, p1)` representing the start and end points of the line segment.
+	/// * `rect` - A tuple `(min, max)` representing the minimum (bottom-left) and
+	///            maximum (top-right) corners of the rectangle.
+	///
+	/// # Returns
+	/// * `Some((clip_p0, clip_p1))` - The new start and end points of the clipped segment if it
+	///                               is inside the rectangle.
+	/// * `None` - If the line segment is entirely outside the rectangle.
+	pub fn clip_line_to_rect(line: (V2, V2), rect: (V2, V2)) -> Option<(V2, V2)> {
+		let (p0, p1) = line;
+		let (rect_min, rect_max) = rect;
+
+		// Vector representing the line's direction and length
+		let d = p1 - p0;
+
+		// 't' values for entry (min) and exit (max) of the clip window
+		let mut t_min: f32 = 0.0;
+		let mut t_max: f32 = 1.0;
+
+		// Pre-calculate p and q for all four boundaries (Left, Right, Bottom, Top)
+		// p_k = dot(normal_k, d)
+		// q_k = dot(normal_k, p0 - boundary_point_k)
+		//
+		// For AABB, this simplifies:
+		// Left:   p = -d.x, q = p0.x - rect_min.x
+		// Right:  p =  d.x, q = rect_max.x - p0.x
+		// Bottom: p = -d.y, q = p0.y - rect_min.y
+		// Top:    p =  d.y, q = rect_max.y - p0.y
+		
+		let p = [-d.x, d.x, -d.y, d.y];
+		let q = [
+			p0.x - rect_min.x,  // Left
+			rect_max.x - p0.x,  // Right
+			p0.y - rect_min.y,  // Bottom
+			rect_max.y - p0.y,  // Top
+		];
+
+		// Loop through all four boundaries
+		for i in 0..4 {
+			let p_k = p[i];
+			let q_k = q[i];
+
+			// Use a small epsilon for floating point comparison
+			if p_k.abs() < 1e-9 {
+				// Case 1: Line is parallel to the boundary (p_k ≈ 0)
+				if q_k < 0.0 {
+					// Line is outside this boundary and parallel, so it's outside the box
+					return None;
+				}
+				// If q_k >= 0, line is inside this parallel boundary, so we continue
+			} else {
+				// Case 2: Line is not parallel, calculate intersection 't'
+				let t = q_k / p_k;
+
+				if p_k < 0.0 {
+					// Line is "entering" from outside this boundary
+					// This is a potential new t_min
+					t_min = t_min.max(t);
+				} else { // p_k > 0.0
+					// Line is "exiting" from inside this boundary
+					// This is a potential new t_max
+					t_max = t_max.min(t);
+				}
+
+				// Check if the 't' window has become invalid
+				if t_min > t_max {
+					// The "entry" point is after the "exit" point, so the line misses
+					return None;
+				}
+			}
+		}
+
+		// If we get here, the line (or a part of it) is inside
+		// Calculate the new clipped endpoints using the final t_min and t_max
+		let clip_p0 = p0 + t_min * d;
+		let clip_p1 = p0 + t_max * d;
+
+		Some((clip_p0, clip_p1))
+	}
 	pub fn lowest_unused_key<V>(map: &HashMap<u64, V>) -> u64 {
 		let mut i: u64 = 0;
 		while map.contains_key(&i) {
