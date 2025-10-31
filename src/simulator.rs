@@ -2951,6 +2951,7 @@ impl LogicCircuit {
 	pub fn compute_immutable(&self, ancestors_above: &AncestryStack, self_component_id: u64, first_propagation_step: bool) -> bool {
 		let mut changed = false;
 		// Update clock
+		// TODO: Only update if propagation is done
 		if first_propagation_step {
 			self.clock.borrow_mut().update();
 		}

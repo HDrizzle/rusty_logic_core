@@ -966,7 +966,7 @@ impl Memory {
 			],
 			IntV2(10, 4)
 		);
-		Self {
+		let mut out = Self {
 			generic: LogicDeviceGeneric::load(
 				save,
 				layout.pin_config(),
@@ -980,7 +980,17 @@ impl Memory {
 			ui_csv_paste_string: Rc::new(RefCell::new(String::new())),
 			ui_error_opt: None,
 			layout
+		};
+		for a in 0..out.addr_size {
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("A", a as u16), LogicState::Floating);
 		}
+		for i in 0..8 {
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("D", i as u16), LogicState::Floating);
+		}
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("CE", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("WE", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("RE", 0), LogicState::Floating);
+		out
 	}
 	fn get_address(&self) -> u16 {
 		let mut out: u16 = 0;
@@ -1001,9 +1011,9 @@ impl LogicDevice for Memory {
 		&mut self.generic
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
-		let ce: bool = self.get_pin_state_panic(0).to_bool();
-		let we: bool = self.get_pin_state_panic(1).to_bool();
-		let re: bool = self.get_pin_state_panic(2).to_bool();
+		let ce: bool = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("CE", 0)).to_bool();
+		let we: bool = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("WE", 0)).to_bool();
+		let re: bool = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("RE", 0)).to_bool();
 		let address = self.get_address() as usize;
 		if !re || !ce {// Set all data lines floating
 			for bit_i in 0..8_u16 {
