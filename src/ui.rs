@@ -1315,14 +1315,8 @@ impl LogicCircuitToplevelView {
 	/// Runs `compute_step()` repeatedly on the circuit until there are no changes, there must be a limit because there are circuits (ex. NOT gate connected to itself) where this would otherwise never end
 	pub fn propagate_until_stable(&mut self, propagation_limit: usize) -> bool {
 		let mut count: usize = 0;
-		//let clock_initial_state = self.circuit.clock.borrow().state;
 		while count < propagation_limit {
 			if !self.circuit.compute_immutable(&AncestryStack::new(), 0, count == 0) {
-				// Only if clock changes
-				// TODO
-				if count > 0 {// && (self.circuit.clock.borrow().state != clock_initial_state) {
-					self.circuit.update_timing_diagram();
-				}
 				self.frame_compute_cycles = count;
 				return false;
 			}

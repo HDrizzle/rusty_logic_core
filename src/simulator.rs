@@ -1919,7 +1919,10 @@ pub struct LogicCircuit {
 	pub probes: RefCell<HashMap<u64, Probe>>,
 	pub timing: RefCell<TimingDiagram>,
 	pub bit_width_errors: Vec<BitWidthError>,
-	pub highlighted_net_opt: Option<u64>
+	pub highlighted_net_opt: Option<u64>,
+	/// Prevents clock changes when circuit propagation from something else (such as previous clock edge) isn't complete yet
+	/// (Any change, specifically clock edges, last clock state when timing diagram was updated)
+	pub propagation_done: RefCell<(bool, bool, bool)>
 }
 
 impl LogicCircuit {
@@ -1967,7 +1970,8 @@ impl LogicCircuit {
 			probes: RefCell::new(HashMap::new()),
 			timing: RefCell::new(TimingDiagram::from_probe_id_list(Vec::new())),
 			bit_width_errors: Vec::new(),
-			highlighted_net_opt: None
+			highlighted_net_opt: None,
+			propagation_done: RefCell::new((true, true, true))
 		};
 		new.setup_external_connection_sources();
 		new.recompute_default_layout();
@@ -2040,7 +2044,8 @@ impl LogicCircuit {
 			probes: RefCell::new(probes),
 			timing: RefCell::new(timing),
 			bit_width_errors: Vec::new(),
-			highlighted_net_opt: None
+			highlighted_net_opt: None,
+			propagation_done: RefCell::new((true, true, true))
 		};
 		out.setup_external_connection_sources();
 		out.check_wire_geometry_and_connections();
@@ -2949,11 +2954,11 @@ impl LogicCircuit {
 	}
 	/// Returns: Whether anything changed
 	pub fn compute_immutable(&self, ancestors_above: &AncestryStack, self_component_id: u64, first_propagation_step: bool) -> bool {
+		let mut propagation_states = self.propagation_done.borrow_mut();
 		let mut changed = false;
-		// Update clock
-		// TODO: Only update if propagation is done
-		if first_propagation_step {
-			self.clock.borrow_mut().update();
+		// Update clock, only if propagation is done
+		if first_propagation_step && (*propagation_states).0 {
+			propagation_states.1 |= self.clock.borrow_mut().update();
 		}
 		let clock_state: bool = self.clock.borrow().state;
 		let ancestors = ancestors_above.push((&self, self_component_id));
@@ -3021,14 +3026,29 @@ impl LogicCircuit {
 				comp_cell.borrow_mut().compute(&ancestors, *comp_id, clock_state, first_propagation_step);
 			}
 		}
+		// Update propagation states
+		(*propagation_states).0 = !changed;
+		if !changed {
+			(*propagation_states).1 = true;
+			if self.is_toplevel {
+				self.update_timing_diagram(&mut propagation_states);
+			}
+		}
 		// Done
 		changed
 	}
-	pub fn update_timing_diagram(&self) {
-		let mut timing = self.timing.borrow_mut();
+	/// Adds one time increment to the timing diagram data
+	pub fn update_timing_diagram(&self, propagation_states: &mut RefMut<'_, (bool, bool, bool)>) {
+		let clock = self.clock.borrow();
+		// Ony if clock changed
+		if clock.state == propagation_states.2 {
+			return;
+		}
+		propagation_states.2 = clock.state;
+		let mut timing: RefMut<'_, TimingDiagram> = self.timing.borrow_mut();
 		let probes = self.probes.borrow();
 		let nets = self.nets.borrow();
-		timing.signal_groups[0].1[0].push(self.clock.borrow().state.into());
+		timing.signal_groups[0].1[0].push(clock.state.into());
 		for (group_i, (probe_id, group)) in &mut timing.signal_groups.iter_mut().enumerate() {
 			if group_i == 0 {// Clock signal
 				continue;

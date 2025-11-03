@@ -4,7 +4,7 @@ use eframe::egui::Ui;
 use common_macros::hash_map;
 use std::{collections::HashMap, cell::RefCell, rc::Rc};
 use serde::{Deserialize, Serialize};
-use web_time::{Duration, Instant};
+use web_time::Instant;
 
 /// For the component search popup
 pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
@@ -1779,10 +1779,8 @@ pub struct VectorCRT {
 	layout: BlockLayoutHelper,
 	/// 0 to 1, for lerping
 	line_start_time: Instant,
-	prev_clock_state: bool,
 	/// Vec<(Start, End which will be updated until the LERP is over)>
 	lines: Vec<(IntV2, IntV2)>,
-	line_done_pulse_state: bool,
 	line_speed: f32,
 	v0: IntV2,
 	v1: IntV2,
@@ -1820,9 +1818,7 @@ impl VectorCRT {
 			),
 			layout,
 			line_start_time: Instant::now(),
-			prev_clock_state: false,
 			lines: Vec::new(),
-			line_done_pulse_state: false,
 			line_speed: 100.0,
 			v0: IntV2(0, 0),
 			v1: IntV2(0, 0),
