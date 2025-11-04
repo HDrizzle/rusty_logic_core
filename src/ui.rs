@@ -1317,6 +1317,9 @@ impl LogicCircuitToplevelView {
 		let mut count: usize = 0;
 		while count < propagation_limit {
 			if !self.circuit.compute_immutable(&AncestryStack::new(), 0, count == 0) {
+				if count > 0 {
+					self.circuit.update_timing_diagram(&mut self.circuit.propagation_done.borrow_mut());
+				}
 				self.frame_compute_cycles = count;
 				return false;
 			}

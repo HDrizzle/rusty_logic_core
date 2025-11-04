@@ -1921,8 +1921,8 @@ pub struct LogicCircuit {
 	pub bit_width_errors: Vec<BitWidthError>,
 	pub highlighted_net_opt: Option<u64>,
 	/// Prevents clock changes when circuit propagation from something else (such as previous clock edge) isn't complete yet
-	/// (Any change, specifically clock edges, last clock state when timing diagram was updated)
-	pub propagation_done: RefCell<(bool, bool, bool)>
+	/// (Any change (propagation in progress), last clock state when timing diagram was updated)
+	pub propagation_done: RefCell<(bool, bool)>
 }
 
 impl LogicCircuit {
@@ -1971,7 +1971,7 @@ impl LogicCircuit {
 			timing: RefCell::new(TimingDiagram::from_probe_id_list(Vec::new())),
 			bit_width_errors: Vec::new(),
 			highlighted_net_opt: None,
-			propagation_done: RefCell::new((true, true, true))
+			propagation_done: RefCell::new((false, false))
 		};
 		new.setup_external_connection_sources();
 		new.recompute_default_layout();
@@ -2045,7 +2045,7 @@ impl LogicCircuit {
 			timing: RefCell::new(timing),
 			bit_width_errors: Vec::new(),
 			highlighted_net_opt: None,
-			propagation_done: RefCell::new((true, true, true))
+			propagation_done: RefCell::new((false, false))
 		};
 		out.setup_external_connection_sources();
 		out.check_wire_geometry_and_connections();
@@ -2957,8 +2957,8 @@ impl LogicCircuit {
 		let mut propagation_states = self.propagation_done.borrow_mut();
 		let mut changed = false;
 		// Update clock, only if propagation is done
-		if first_propagation_step && (*propagation_states).0 {
-			propagation_states.1 |= self.clock.borrow_mut().update();
+		if first_propagation_step && !(*propagation_states).0 {
+			changed |= self.clock.borrow_mut().update();
 		}
 		let clock_state: bool = self.clock.borrow().state;
 		let ancestors = ancestors_above.push((&self, self_component_id));
@@ -3027,24 +3027,18 @@ impl LogicCircuit {
 			}
 		}
 		// Update propagation states
-		(*propagation_states).0 = !changed;
-		if !changed {
-			(*propagation_states).1 = true;
-			if self.is_toplevel {
-				self.update_timing_diagram(&mut propagation_states);
-			}
-		}
+		(*propagation_states).0 = changed;
 		// Done
 		changed
 	}
 	/// Adds one time increment to the timing diagram data
-	pub fn update_timing_diagram(&self, propagation_states: &mut RefMut<'_, (bool, bool, bool)>) {
+	pub fn update_timing_diagram(&self, propagation_states: &mut RefMut<'_, (bool, bool)>) {
 		let clock = self.clock.borrow();
 		// Ony if clock changed
-		if clock.state == propagation_states.2 {
+		if clock.state == propagation_states.1 {
 			return;
 		}
-		propagation_states.2 = clock.state;
+		propagation_states.1 = clock.state;
 		let mut timing: RefMut<'_, TimingDiagram> = self.timing.borrow_mut();
 		let probes = self.probes.borrow();
 		let nets = self.nets.borrow();
