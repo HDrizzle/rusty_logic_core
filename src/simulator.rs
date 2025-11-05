@@ -1809,9 +1809,9 @@ pub struct TimingDiagram {
 }
 
 impl TimingDiagram {
-	pub fn from_probe_id_list(probes: Vec<u64>) -> Self {
+	pub fn from_probe_id_list(probes: &Vec<u64>) -> Self {
 		Self {
-			signal_groups: vec![0_u64].into_iter().chain(probes.into_iter()).map(|probe_id| (probe_id, vec![vec![]])).collect(),
+			signal_groups: vec![0_u64].iter().chain(probes.iter()).map(|probe_id| (*probe_id, vec![vec![]])).collect(),
 			n_samples: 0,
 			running: TimingTiagramRunningState::Clk
 		}
@@ -1819,12 +1819,25 @@ impl TimingDiagram {
 }
 
 /// Manual control or whenever the clock is running
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum TimingTiagramRunningState {
-	Play,
-	Pause,
+	/// Never updates
+	Off,
+	/// Only on clock edges
 	#[default]
-	Clk
+	Clk,
+	/// Whenever anything changes
+	AnyChange
+}
+
+impl TimingTiagramRunningState {
+	pub fn to_str(&self) -> &'static str {
+		match &self {
+			Self::Off => "Off",
+			Self::Clk => "CLK Only",
+			Self::AnyChange => "Any Change"
+		}
+	}
 }
 
 #[derive(Debug, Default, Clone)]
@@ -1917,7 +1930,8 @@ pub struct LogicCircuit {
 	pub clock: RefCell<Clock>,
 	/// Timing diagram probes
 	pub probes: RefCell<HashMap<u64, Probe>>,
-	pub timing: RefCell<TimingDiagram>,
+	/// What order are the timing probes displayed
+	pub timing_probe_order: Vec<u64>,
 	pub bit_width_errors: Vec<BitWidthError>,
 	pub highlighted_net_opt: Option<u64>,
 	/// Prevents clock changes when circuit propagation from something else (such as previous clock edge) isn't complete yet
@@ -1968,14 +1982,14 @@ impl LogicCircuit {
 			self_reload_err_opt: None,
 			clock: RefCell::new(Clock::default()),
 			probes: RefCell::new(HashMap::new()),
-			timing: RefCell::new(TimingDiagram::from_probe_id_list(Vec::new())),
+			timing_probe_order: Vec::new(),
 			bit_width_errors: Vec::new(),
 			highlighted_net_opt: None,
 			propagation_done: RefCell::new((false, false))
 		};
 		new.setup_external_connection_sources();
 		new.recompute_default_layout();
-		new.check_wire_geometry_and_connections();
+		new.check_wire_geometry_and_connections(None);
 		Ok(new)
 	}
 	pub fn new_mostly_default(
@@ -2023,7 +2037,6 @@ impl LogicCircuit {
 			true
 		);
 		let probes = HashMap::from_iter(save.probes.into_iter().map(|(id, save)| (id, Probe::load(save))));
-		let timing: TimingDiagram = TimingDiagram::from_probe_id_list(save.timing_probe_order);
 		let mut out = Self {
 			generic_device: generic_device,
 			components: RefCell::new(components),
@@ -2042,13 +2055,13 @@ impl LogicCircuit {
 			self_reload_err_opt: None,
 			clock: RefCell::new(Clock::load(save.clock_enabled, save.clock_freq, save.clock_state)),
 			probes: RefCell::new(probes),
-			timing: RefCell::new(timing),
+			timing_probe_order: save.timing_probe_order,
 			bit_width_errors: Vec::new(),
 			highlighted_net_opt: None,
 			propagation_done: RefCell::new((false, false))
 		};
 		out.setup_external_connection_sources();
-		out.check_wire_geometry_and_connections();
+		out.check_wire_geometry_and_connections(None);
 		out.update_pin_block_positions();
 		Ok(out)
 	}
@@ -2251,7 +2264,7 @@ impl LogicCircuit {
 		new_wire_ids
 	}
 	/// Fixes everything, should be run when a new circuit is created or when anything is moved, deleted, or placed
-	pub fn check_wire_geometry_and_connections(&mut self) {
+	pub fn check_wire_geometry_and_connections(&mut self, timing_opt: Option<&mut TimingDiagram>) {
 		// Find overlapping wires and correct them, connections can be ignored
 		self.merge_overlapping_wires();
 		// Remove all wire connections except to themselves
@@ -2269,7 +2282,9 @@ impl LogicCircuit {
 		// Compute nets, has to be done after all geometry and connection fixes
 		self.bit_width_errors = self.recompute_nets();
 		// Logic probes
-		self.update_probe_net_connections_and_timing();
+		if let Some(timing) = timing_opt {
+			self.update_probe_net_connections_and_timing(timing);
+		}
 		// Last net computation setep
 		self.update_logical_pin_to_wire_connections();
 		// Recompute BB for circuit internals
@@ -2479,13 +2494,12 @@ impl LogicCircuit {
 			}
 		}
 	}
-	fn update_probe_net_connections_and_timing(&self) {
+	pub fn update_probe_net_connections_and_timing(&self, timing: &mut TimingDiagram) {
 		let mut probes = self.probes.borrow_mut();
 		for probe in probes.values_mut() {
 			probe.nets_opt = self.is_connection_point(probe.ui_data.position).1;
 		}
 		// Now update timing diagram to match
-		let mut timing = self.timing.borrow_mut();
 		let n_samples = timing.n_samples;
 		// Check clock
 		if timing.signal_groups.len() == 0 {
@@ -3032,14 +3046,16 @@ impl LogicCircuit {
 		changed
 	}
 	/// Adds one time increment to the timing diagram data
-	pub fn update_timing_diagram(&self, propagation_states: &mut RefMut<'_, (bool, bool)>) {
+	pub fn update_timing_diagram(&self, propagation_states: &mut RefMut<'_, (bool, bool)>, timing: &mut TimingDiagram) {
+		if timing.running == TimingTiagramRunningState::Off {
+			return;
+		}
 		let clock = self.clock.borrow();
 		// Ony if clock changed
-		if clock.state == propagation_states.1 {
+		if clock.state == propagation_states.1 && timing.running == TimingTiagramRunningState::Clk {
 			return;
 		}
 		propagation_states.1 = clock.state;
-		let mut timing: RefMut<'_, TimingDiagram> = self.timing.borrow_mut();
 		let probes = self.probes.borrow();
 		let nets = self.nets.borrow();
 		timing.signal_groups[0].1[0].push(clock.state.into());
@@ -3096,7 +3112,7 @@ impl LogicCircuit {
 			clock_freq: clock.freq,
 			clock_state: clock.state,
 			probes: HashMap::from_iter(self.probes.borrow().iter().map(|(id, probe)| (*id, probe.save()))),
-			timing_probe_order: self.timing.borrow().signal_groups.iter().enumerate().filter(|(i, _)| *i > 0).map(|(_, (probe_id, _))| *probe_id).collect(),
+			timing_probe_order: self.timing_probe_order.clone(),//self.timing.borrow().signal_groups.iter().enumerate().filter(|(i, _)| *i > 0).map(|(_, (probe_id, _))| *probe_id).collect(),
 			block_bb: (round_v2_to_intv2(self.generic_device.ui_data.local_bb.0), round_v2_to_intv2(self.generic_device.ui_data.local_bb.1))
 		})
 	}

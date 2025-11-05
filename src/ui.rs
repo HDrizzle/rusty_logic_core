@@ -1,6 +1,6 @@
 //! Only UI stuff
 
-use crate::{builtin_components, prelude::*, resource_interface, simulator::{AncestryStack, GraphicSelectableItemRef, SelectionState, Tool}};
+use crate::{builtin_components, prelude::*, resource_interface, simulator::{AncestryStack, GraphicSelectableItemRef, SelectionState, Tool, TimingDiagram, TimingTiagramRunningState}};
 use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, Color32, DragValue, FontFamily, FontId, Frame, Galley, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2, Window, response::Response, Key, KeyboardShortcut, Modifiers, PointerButton}, emath, epaint::{PathStroke, TextShape}};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use nalgebra::ComplexField;
@@ -602,17 +602,26 @@ impl LogicCircuit {
 		return_recompute_connections
 	}
 	/// Inspired by Wavedrom.com/editor.html
-	pub fn show_timing_diagram_ui(&self, ui: &mut Ui, styles: Rc<Styles>) {
+	pub fn show_timing_diagram_ui(&self, ui: &mut Ui, styles: Rc<Styles>, timing: &mut TimingDiagram) {
 		ui.horizontal(|ui| {
-			let mut timing = self.timing.borrow_mut();
 			if ui.button("Clear").clicked() {
 				timing.n_samples = 0;
 				for (_, ref mut signal_group) in &mut timing.signal_groups {
 					*signal_group = (0..signal_group.len()).map(|_| vec![]).collect();
 				}
 			}
+			Popup::menu(&ui.button(format!("Mode: {}", timing.running.to_str()))).show(|ui| {
+				if ui.button(TimingTiagramRunningState::Off.to_str()).clicked() {
+					timing.running = TimingTiagramRunningState::Off;
+				}
+				if ui.button(TimingTiagramRunningState::Clk.to_str()).clicked() {
+					timing.running = TimingTiagramRunningState::Clk;
+				}
+				if ui.button(TimingTiagramRunningState::AnyChange.to_str()).clicked() {
+					timing.running = TimingTiagramRunningState::AnyChange;
+				}
+			});
 		});
-		let timing = self.timing.borrow();
 		ScrollArea::vertical().show(ui, |ui| {
 			ui.horizontal(|ui| {
 				let mut amplitude: f32 = 10.0;
@@ -1001,12 +1010,14 @@ pub struct LogicCircuitToplevelView {
 	/// 1 Less than actual number of times the compute function was called because the last call doesn't change anything and ends the loop
 	frame_compute_cycles: usize,
 	showing_flatten_opoup: bool,
-	flatten_error: Option<String>
+	flatten_error: Option<String>,
+	timing: TimingDiagram,
 }
 
 impl LogicCircuitToplevelView {
 	pub fn new(circuit: LogicCircuit, saved: bool, styles: &Styles) -> Self {
-		Self {
+		let timing_probe_order = circuit.timing_probe_order.clone();
+		let mut out = Self {
 			circuit,
 			screen_center_wrt_grid: V2::zeros(),
 			grid_size: styles.default_grid_size,
@@ -1020,8 +1031,12 @@ impl LogicCircuitToplevelView {
 			recompute_conns_next_frame: false,
 			frame_compute_cycles: 0,
 			showing_flatten_opoup: false,
-			flatten_error: None
-		}
+			flatten_error: None,
+			timing: TimingDiagram::from_probe_id_list(&timing_probe_order)
+		};
+		out.circuit.update_probe_net_connections_and_timing(&mut out.timing);
+		// Done
+		out
 	}
 	/// Returns: (Optional position to set the mouse to, Optional new circuit tab to open)
 	pub fn draw(&mut self, ui: &mut Ui, styles: Rc<Styles>, #[allow(unused)]screen_top_left: Pos2) -> (Option<Pos2>, Option<String>) {
@@ -1098,7 +1113,7 @@ impl LogicCircuitToplevelView {
 			// Reconnect wires and thingies if anything was changed
 			if self.recompute_conns_next_frame {
 				self.saved = false;
-				self.circuit.check_wire_geometry_and_connections();
+				self.circuit.check_wire_geometry_and_connections(Some(&mut self.timing));
 			}
 			// Update
 			if self.recompute_conns_next_frame || propagate {
@@ -1308,7 +1323,7 @@ impl LogicCircuitToplevelView {
 			/*Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
 				ScrollArea::both().show(ui, self.)
 			});*/
-			Window::new("Timing Diagram").anchor(Align2::RIGHT_TOP, Vec2::new(0.0, inner_response.response.rect.top())).collapsible(true).resizable(true).show(ui.ctx(), |ui| self.circuit.show_timing_diagram_ui(ui, styles));
+			Window::new("Timing Diagram").anchor(Align2::RIGHT_TOP, Vec2::new(0.0, inner_response.response.rect.top())).collapsible(true).resizable(true).show(ui.ctx(), |ui| self.circuit.show_timing_diagram_ui(ui, styles, &mut self.timing));
 		}
 		(return_new_mouse_pos, return_new_circuit_tab)
 	}
@@ -1318,7 +1333,7 @@ impl LogicCircuitToplevelView {
 		while count < propagation_limit {
 			if !self.circuit.compute_immutable(&AncestryStack::new(), 0, count == 0) {
 				if count > 0 {
-					self.circuit.update_timing_diagram(&mut self.circuit.propagation_done.borrow_mut());
+					self.circuit.update_timing_diagram(&mut self.circuit.propagation_done.borrow_mut(), &mut self.timing);
 				}
 				self.frame_compute_cycles = count;
 				return false;
@@ -1441,6 +1456,7 @@ impl App {
 	fn load_circuit_tab(&mut self, file_path: &str) {
 		match resource_interface::load_circuit(file_path, false, true, IntV2(0, 0), FourWayDir::default(), String::new()) {
 			Ok(circuit) => {
+				// RIP Joe Sullivan, You did a lot for Haley
 				self.circuit_tabs.push(LogicCircuitToplevelView::new(circuit, true, &self.styles));
 				self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
 			},
