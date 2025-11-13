@@ -650,7 +650,7 @@ impl LogicCircuit {
 				if timing.n_samples > 0 {
 					ScrollArea::horizontal().stick_to_right(true).show(ui, |ui| {
 						Frame::canvas(ui.style()).show::<()>(ui, |ui| {
-							let canvas_size = Vec2::new(timing.convert_timestamp_to_x_value(&*styles, timing.current_timestamp) + 4.0, timing.signal_groups.len() as f32 * vert_spacing);
+							let canvas_size = Vec2::new(timing.convert_timestamp_to_x_value(&*styles, timing.current_timestamp.timing_diagram_end()) + 4.0, timing.signal_groups.len() as f32 * vert_spacing);
 							let (response, painter) = ui.allocate_painter(canvas_size, Sense::empty());
 							let logic_state_to_graph_y_and_color = |state: LogicState| -> (f32, [u8; 3]) {
 								match state {
@@ -705,9 +705,9 @@ impl LogicCircuit {
 										painter.line_segment([graph_pos_to_canvas_pos(prev_x, prev_y, group_i), graph_pos_to_canvas_pos(x, prev_y, group_i)], prev_stroke);
 										// TODO
 										if *timestamp < timing.current_timestamp && i + 1 == bit_line.len() {
-											let last_x: f32 = timing.convert_timestamp_to_x_value(&*styles, timing.current_timestamp);
+											let last_x: f32 = timing.convert_timestamp_to_x_value(&*styles, timing.current_timestamp.timing_diagram_end());
 											let (last_y, last_color) = logic_state_to_graph_y_and_color(*state);
-											let last_stroke = Stroke::new(1.0, u8_3_to_color32(last_color));
+											let last_stroke = Stroke::new(1.0, u8_3_to_color32([0, 255, 0]));
 											// Vertical
 											painter.line_segment([graph_pos_to_canvas_pos(x, prev_y, group_i), graph_pos_to_canvas_pos(x, last_y, group_i)], last_stroke);
 											// Horizontal

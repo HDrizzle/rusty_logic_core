@@ -1896,9 +1896,15 @@ impl TimingDiagram {
 			},
 			TimingDiagramTimestamp::PropagationAndSimStep(_, _) => {
 				if let TimingDiagramTimestamp::PropagationAndSimStep(other_prop, other_sim_step) = other_timestamp {
-					let mut out = other_prop as f32 * styles.timing_diagram_event_resolution_px;
+					let mut out = (other_prop as f32 - 1.0) * styles.timing_diagram_event_resolution_px;
 					if self.show_sim_steps {
-						out += (self.propagation_steps[other_prop as usize] + (other_sim_step as u64)) as f32 * styles.timing_diagram_prop_step_resolution_px;
+						let event_index: usize = if other_prop as usize >= self.propagation_steps.len() {
+							self.propagation_steps.len() - 1
+						}
+						else {
+							other_prop as usize
+						};
+						out += (self.propagation_steps[event_index] + (other_sim_step as u64)) as f32 * styles.timing_diagram_prop_step_resolution_px;
 					}
 					out
 				}
@@ -1929,6 +1935,15 @@ pub enum TimingDiagramTimestamp {
 	Real(Instant),
 	/// (Event count, sim step)
 	PropagationAndSimStep(u32, u32)
+}
+
+impl TimingDiagramTimestamp {
+	pub fn timing_diagram_end(&self) -> Self {
+		match self {
+			Self::Real(_) => self.clone(),
+			Self::PropagationAndSimStep(event_count, _) => Self::PropagationAndSimStep(*event_count + 1, 0)
+		}
+	}
 }
 
 impl Default for TimingDiagramTimestamp {
@@ -3241,8 +3256,8 @@ impl LogicCircuit {
 			}
 		}
 		propagation_states.1 = clock.state;
-		// Update timing diagram timestamp
-		timing.update_timestamp(first_propagation_step);
+		// Update timing diagram timestamp, last step for first step of timing so incremental timing diagram looks better
+		timing.update_timestamp(first_propagation_step);// !propagation_states.0);
 		// Update net states
 		let probes = self.probes.borrow();
 		let nets = self.nets.borrow();
