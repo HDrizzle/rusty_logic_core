@@ -32,7 +32,11 @@ pub struct Styles {
 	pub text_size_grid: f32,
 	pub text_color: [u8; 3],
 	pub wire_start_point_outline_color: [u8; 3],
-	pub timing_diagram_resolution_px: usize
+	pub timing_diagram_event_resolution_px: f32,
+	pub timing_diagram_prop_step_resolution_px: f32,
+	/// Pixels/Second
+	pub timing_diagram_real_time_resolution_px: f32,
+	pub timing_diagram_bus_half_change_px: f32
 }
 
 impl Styles {
@@ -102,7 +106,10 @@ impl Default for Styles {
 			text_size_grid: 0.9,
 			text_color: [243, 118, 252],
 			wire_start_point_outline_color: [93, 252, 167],
-			timing_diagram_resolution_px: 30
+			timing_diagram_event_resolution_px: 30.0,
+			timing_diagram_prop_step_resolution_px: 10.0,
+			timing_diagram_real_time_resolution_px: 30.0,
+			timing_diagram_bus_half_change_px: 30.0
 		}
 	}
 }

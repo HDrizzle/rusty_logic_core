@@ -1,6 +1,6 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, rc::Rc};
+use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, cmp::{PartialOrd, Ordering}, rc::Rc};
 use serde::{Deserialize, Serialize};
 use crate::{circuit_net_computation::NotAWire, prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
@@ -1803,9 +1803,16 @@ impl Default for Clock {
 #[derive(Debug, Clone)]
 pub struct TimingDiagram {
 	/// List of signal groups and corresponding probe IDs (CLK probe ID is ignored and set to 0), each signal group contains list of signals (one signal per bit width of probe), each signal contains list of samples
-	pub signal_groups: Vec<(u64, Vec<Vec<LogicState>>)>,
+	pub signal_groups: Vec<(u64, Vec<Vec<(TimingDiagramTimestamp, LogicState)>>)>,
 	pub n_samples: usize,
-	pub running: TimingTiagramRunningState
+	pub running: TimingTiagramRunningState,
+	pub current_timestamp: TimingDiagramTimestamp,
+	pub real_start_time: Instant,
+	/// Cumulative Number of steps BEFORE each propagation event (clk edges, etc)
+	/// Should always have at least one element, first one is zero
+	pub propagation_steps: Vec<u64>,
+	pub show_sim_steps: bool,
+	pub current_event_started_by_clock: bool
 }
 
 impl TimingDiagram {
@@ -1813,13 +1820,156 @@ impl TimingDiagram {
 		Self {
 			signal_groups: vec![0_u64].iter().chain(probes.iter()).map(|probe_id| (*probe_id, vec![vec![]])).collect(),
 			n_samples: 0,
-			running: TimingTiagramRunningState::Clk
+			running: TimingTiagramRunningState::Off,
+			current_timestamp: TimingDiagramTimestamp::default(),
+			real_start_time: Instant::now(),
+			propagation_steps: vec![0],
+			show_sim_steps: false,
+			current_event_started_by_clock: false
+		}
+	}
+	pub fn update_timestamp(&mut self, first_propagation_step: bool) {
+		match &mut self.current_timestamp {
+			TimingDiagramTimestamp::Real(ts) => {
+				*ts = Instant::now();// TS is PMO
+			},
+			TimingDiagramTimestamp::PropagationAndSimStep(event_count, sim_step) => {
+				if first_propagation_step {
+					self.propagation_steps.push((*sim_step as u64) + self.propagation_steps.last().unwrap());
+					*event_count += 1;
+					*sim_step = 0;
+				}
+				else {
+					*sim_step += 1;
+				}
+			}
+		}
+	}
+	pub fn timestamp_zero(&self) -> TimingDiagramTimestamp {
+		match &self.current_timestamp {
+			&TimingDiagramTimestamp::Real(_) => TimingDiagramTimestamp::Real(self.real_start_time),
+			&TimingDiagramTimestamp::PropagationAndSimStep(_, _) => TimingDiagramTimestamp::PropagationAndSimStep(0, 0)
+		}
+	}
+	pub fn push_state_if_different(&mut self, signal_group_i: usize, bit_i: usize, state: LogicState) {
+		let bit_line = &mut self.signal_groups[signal_group_i].1[bit_i];
+		if bit_line.len() == 0 {
+			bit_line.push((self.current_timestamp, state));
+		}
+		else if bit_line[bit_line.len() - 1].1 != state {
+			bit_line.push((self.current_timestamp, state));
+		}
+	}
+	pub fn clear(&mut self) {
+		// Signal recordings
+		for group in self.signal_groups.iter_mut() {
+			for bit_line in group.1.iter_mut() {
+				bit_line.clear();
+			}
+		}
+		// Counts & timing
+		self.n_samples = 0;
+		self.real_start_time = Instant::now();
+		match &mut self.current_timestamp {
+			TimingDiagramTimestamp::Real(ts) => {
+				*ts = Instant::now();// TS is PMO
+			},
+			TimingDiagramTimestamp::PropagationAndSimStep(event_count, sim_step) => {
+				*event_count = 0;
+				*sim_step = 0;
+			}
+		}
+		self.propagation_steps.clear();
+		// Number of simulation steps BEFORE current event step
+		self.propagation_steps.push(0);
+	}
+	pub fn convert_timestamp_to_x_value(&self, styles: &Styles, other_timestamp: TimingDiagramTimestamp) -> f32 {
+		const ERROR: &str = "convert_timestamp_to_x_value called on wrong variant of `TimingDiagramTimestamp`";
+		match self.current_timestamp {
+			TimingDiagramTimestamp::Real(_) => {
+				if let TimingDiagramTimestamp::Real(other_instant) = other_timestamp {
+					styles.timing_diagram_real_time_resolution_px * (other_instant - self.real_start_time).as_secs_f32()
+				}
+				else {
+					panic!("{}", ERROR);
+				}
+			},
+			TimingDiagramTimestamp::PropagationAndSimStep(_, _) => {
+				if let TimingDiagramTimestamp::PropagationAndSimStep(other_prop, other_sim_step) = other_timestamp {
+					let mut out = other_prop as f32 * styles.timing_diagram_event_resolution_px;
+					if self.show_sim_steps {
+						out += (self.propagation_steps[other_prop as usize] + (other_sim_step as u64)) as f32 * styles.timing_diagram_prop_step_resolution_px;
+					}
+					out
+				}
+				else {
+					panic!("{}", ERROR);
+				}
+			}
+		}
+	}
+	pub fn set_running_state(&mut self, new_state: TimingTiagramRunningState) {
+		if self.running.uses_real_time() && new_state.uses_incremental_time() {
+			self.current_timestamp = TimingDiagramTimestamp::PropagationAndSimStep(0, 0);
+			self.running = new_state;
+			self.clear();
+		}
+		if self.running.uses_incremental_time() && new_state.uses_real_time() {
+			self.current_timestamp = TimingDiagramTimestamp::Real(Instant::now());
+			self.running = new_state;
+			self.clear();
+		}
+		self.running = new_state;
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TimingDiagramTimestamp {
+	/// Real time
+	Real(Instant),
+	/// (Event count, sim step)
+	PropagationAndSimStep(u32, u32)
+}
+
+impl Default for TimingDiagramTimestamp {
+	fn default() -> Self {
+		Self::PropagationAndSimStep(0, 0)
+	}
+}
+
+impl PartialOrd for TimingDiagramTimestamp {
+	fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+		match self {
+			Self::Real(this_instant) => {
+				if let Self::Real(other_instant) = other {
+					this_instant.partial_cmp(other_instant)
+				}
+				else {
+					panic!("Comparing different variants of `TimingDiagramTimestamp`");
+				}
+			},
+			Self::PropagationAndSimStep(this_prop, this_sim_step) => {
+				if let Self::PropagationAndSimStep(other_prop, other_sim_step) = other {
+					if this_prop < other_prop {
+						Some(Ordering::Less)
+					}
+					else if this_prop > other_prop {
+						Some(Ordering::Greater)
+					}
+					else {// ==
+						this_sim_step.partial_cmp(other_sim_step)
+					}
+				}
+				else {
+					panic!("Comparing different variants of `TimingDiagramTimestamp`");
+				}
+			}
 		}
 	}
 }
 
 /// Manual control or whenever the clock is running
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum TimingTiagramRunningState {
 	/// Never updates
 	Off,
@@ -1827,7 +1977,9 @@ pub enum TimingTiagramRunningState {
 	#[default]
 	Clk,
 	/// Whenever anything changes
-	AnyChange
+	AnyChange,
+	/// Always, uses TimingDiagramTimestamp::Real
+	RealTime
 }
 
 impl TimingTiagramRunningState {
@@ -1835,7 +1987,26 @@ impl TimingTiagramRunningState {
 		match &self {
 			Self::Off => "Off",
 			Self::Clk => "CLK Only",
-			Self::AnyChange => "Any Change"
+			Self::AnyChange => "Any Change",
+			Self::RealTime => "Real Time"
+		}
+	}
+	/// What variant of `TimingDiagramTimestamp` this uses
+	pub fn uses_real_time(&self) -> bool {
+		match &self {
+			Self::Off => false,
+			Self::Clk => false,
+			Self::AnyChange => false,
+			Self::RealTime => true
+		}
+	}
+	/// What variant of `TimingDiagramTimestamp` this uses
+	pub fn uses_incremental_time(&self) -> bool {
+		match &self {
+			Self::Off => false,
+			Self::Clk => true,
+			Self::AnyChange => true,
+			Self::RealTime => false
 		}
 	}
 }
@@ -2514,7 +2685,7 @@ impl LogicCircuit {
 		}
 		for probe_id in probes.keys() {
 			if !probes_in_use.contains(probe_id) {
-				timing.signal_groups.push((*probe_id, vec![(0..n_samples).into_iter().map(|_| LogicState::Floating).collect()]));
+				timing.signal_groups.push((*probe_id, Vec::new()));
 			}
 		}
 		// Set timing signal group bit widths according to probes and remove them if the probe is gone
@@ -2525,7 +2696,7 @@ impl LogicCircuit {
 				let diff: isize = probe.nets_opt.len() as isize - (signal_group.len() as isize);
 				if diff > 0 {// Probe has more bits than corresponding signal group, make a new one filled with floating states
 					for _ in 0..diff {
-						signal_group.push((0..n_samples).into_iter().map(|_| LogicState::Floating).collect());
+						signal_group.push(Vec::new());
 					}
 				}
 				if diff < 0 {
@@ -3046,29 +3217,47 @@ impl LogicCircuit {
 		changed
 	}
 	/// Adds one time increment to the timing diagram data
-	pub fn update_timing_diagram(&self, propagation_states: &mut RefMut<'_, (bool, bool)>, timing: &mut TimingDiagram) {
+	pub fn update_timing_diagram(&self, propagation_states: &mut RefMut<'_, (bool, bool)>, timing: &mut TimingDiagram, first_propagation_step: bool) {
 		if timing.running == TimingTiagramRunningState::Off {
 			return;
 		}
-		let clock = self.clock.borrow();
-		// Ony if clock changed
-		if clock.state == propagation_states.1 && timing.running == TimingTiagramRunningState::Clk {
+		if (!propagation_states.0) && timing.running == TimingTiagramRunningState::AnyChange {
 			return;
 		}
+		// Ony if clock changed
+		let clock = self.clock.borrow();
+		if timing.running == TimingTiagramRunningState::Clk {
+			// Clock changed, update clock recorded state and set clock flag
+			if clock.state != propagation_states.1 {
+				timing.current_event_started_by_clock = true;
+				propagation_states.1 = clock.state;
+			}
+			if !timing.current_event_started_by_clock {
+				return;
+			}
+			// Propagation is done, cancel flag
+			if !propagation_states.0 {
+				timing.current_event_started_by_clock = false;
+			}
+		}
 		propagation_states.1 = clock.state;
+		// Update timing diagram timestamp
+		timing.update_timestamp(first_propagation_step);
+		// Update net states
 		let probes = self.probes.borrow();
 		let nets = self.nets.borrow();
-		timing.signal_groups[0].1[0].push(clock.state.into());
-		for (group_i, (probe_id, group)) in &mut timing.signal_groups.iter_mut().enumerate() {
+		timing.push_state_if_different(0, 0, clock.state.into());
+		for (group_i, probe_id) in timing.signal_groups.iter().map(|t| t.0).collect::<Vec<u64>>().iter().enumerate() {
 			if group_i == 0 {// Clock signal
 				continue;
 			}
-			let probe_net_ids = &probes.get(probe_id).unwrap().nets_opt;
+			let probe_net_ids = &probes.get(&probe_id).unwrap().nets_opt;
 			for (i, net_opt) in probe_net_ids.iter().enumerate() {
-				group[i].push(match net_opt {
+				let state: LogicState = match net_opt {
 					Some(net_id) => nets.get(net_id).unwrap().borrow().state,
 					None => LogicState::Floating
-				});
+				};
+				timing.push_state_if_different(group_i, i, state);
 			}
 		}
 		timing.n_samples += 1;
