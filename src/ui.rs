@@ -621,6 +621,9 @@ impl LogicCircuit {
 					timing.set_running_state(TimingTiagramRunningState::RealTime);
 				}
 			});
+			if !timing.running.uses_real_time() {
+				ui.checkbox(&mut timing.show_sim_steps, "Show propagation steps");
+			}
 		});
 		ScrollArea::vertical().show(ui, |ui| {
 			ui.horizontal(|ui| {
@@ -650,7 +653,7 @@ impl LogicCircuit {
 				if timing.n_samples > 0 {
 					ScrollArea::horizontal().stick_to_right(true).show(ui, |ui| {
 						Frame::canvas(ui.style()).show::<()>(ui, |ui| {
-							let canvas_size = Vec2::new(timing.convert_timestamp_to_x_value(&*styles, timing.current_timestamp.timing_diagram_end()) + 4.0, timing.signal_groups.len() as f32 * vert_spacing);
+							let canvas_size = Vec2::new(timing.convert_timestamp_to_x_value(&*styles, timing.timing_diagram_end()) + 4.0, timing.signal_groups.len() as f32 * vert_spacing);
 							let (response, painter) = ui.allocate_painter(canvas_size, Sense::empty());
 							let logic_state_to_graph_y_and_color = |state: LogicState| -> (f32, [u8; 3]) {
 								match state {
@@ -665,6 +668,18 @@ impl LogicCircuit {
 							let graph_pos_to_canvas_pos = |graph_x: f32, graph_y: f32, group_i: usize| -> Pos2 {
 								Pos2::new(graph_x + response.rect.left() + 2.0, (-graph_y) + (group_i as f32 + 0.5)*vert_spacing + response.rect.top())
 							};
+							// New propagation event vertical marker lines
+							if !timing.running.uses_real_time() && timing.show_sim_steps && timing.signal_groups.len() > 0 {
+								for i in 0_u32..(timing.propagation_steps.len() as u32) {
+									let x = timing.convert_timestamp_to_x_value(&*styles, TimingDiagramTimestamp::PropagationAndSimStep(i, 0));
+									painter.line_segment(
+										[
+											graph_pos_to_canvas_pos(x, logic_state_to_graph_y_and_color(LogicState::Driven(true)).0, 0),
+											graph_pos_to_canvas_pos(x, logic_state_to_graph_y_and_color(LogicState::Driven(false)).0, timing.signal_groups.len() - 1)],
+										Stroke::new(0.7, u8_3_to_color32([128, 128, 128]))
+									);
+								}
+							}
 							// Iterate signal groups, each line on the timing diagram
 							for (group_i, (_, signal_group)) in timing.signal_groups.iter().enumerate() {
 								let mut prev_timestamp = timing.timestamp_zero();
@@ -705,7 +720,7 @@ impl LogicCircuit {
 										painter.line_segment([graph_pos_to_canvas_pos(prev_x, prev_y, group_i), graph_pos_to_canvas_pos(x, prev_y, group_i)], prev_stroke);
 										// TODO
 										if *timestamp < timing.current_timestamp && i + 1 == bit_line.len() {
-											let last_x: f32 = timing.convert_timestamp_to_x_value(&*styles, timing.current_timestamp.timing_diagram_end());
+											let last_x: f32 = timing.convert_timestamp_to_x_value(&*styles, timing.timing_diagram_end());
 											let (last_y, last_color) = logic_state_to_graph_y_and_color(*state);
 											let last_stroke = Stroke::new(1.0, u8_3_to_color32([0, 255, 0]));
 											// Vertical

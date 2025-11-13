@@ -1927,6 +1927,12 @@ impl TimingDiagram {
 		}
 		self.running = new_state;
 	}
+	pub fn timing_diagram_end(&self) -> TimingDiagramTimestamp {
+		match self.current_timestamp {
+			TimingDiagramTimestamp::Real(_) => self.current_timestamp,
+			TimingDiagramTimestamp::PropagationAndSimStep(event_count, prop_count) => TimingDiagramTimestamp::PropagationAndSimStep(event_count + 1, prop_count)
+		}
+	}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1935,15 +1941,6 @@ pub enum TimingDiagramTimestamp {
 	Real(Instant),
 	/// (Event count, sim step)
 	PropagationAndSimStep(u32, u32)
-}
-
-impl TimingDiagramTimestamp {
-	pub fn timing_diagram_end(&self) -> Self {
-		match self {
-			Self::Real(_) => self.clone(),
-			Self::PropagationAndSimStep(event_count, _) => Self::PropagationAndSimStep(*event_count + 1, 0)
-		}
-	}
 }
 
 impl Default for TimingDiagramTimestamp {
