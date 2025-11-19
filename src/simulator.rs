@@ -1933,6 +1933,37 @@ impl TimingDiagram {
 			TimingDiagramTimestamp::PropagationAndSimStep(event_count, prop_count) => TimingDiagramTimestamp::PropagationAndSimStep(event_count + 1, prop_count)
 		}
 	}
+	/// Very similar to the timestamps own comparison imlementation, EXCEPT when not showing substeps, substeps are ignored and discrete timestamps with the same event count are considered equal
+	pub fn compare_timestamps_for_display(&self, ts0: TimingDiagramTimestamp, other: TimingDiagramTimestamp) -> Ordering {
+		match ts0 {
+			TimingDiagramTimestamp::Real(this_instant) => {
+				if let TimingDiagramTimestamp::Real(other_instant) = &other {
+					this_instant.partial_cmp(other_instant).unwrap()
+				}
+				else {
+					panic!("Comparing different variants of `TimingDiagramTimestamp`");
+				}
+			},
+			TimingDiagramTimestamp::PropagationAndSimStep(this_prop, this_sim_step) => {
+				if let TimingDiagramTimestamp::PropagationAndSimStep(other_prop, other_sim_step) = other {
+					if this_prop < other_prop {
+						Ordering::Less
+					}
+					else if this_prop > other_prop {
+						Ordering::Greater
+					}
+					else if self.show_sim_steps {// ==
+						this_sim_step.partial_cmp(&other_sim_step).unwrap()
+					} else {
+						Ordering::Equal
+					}
+				}
+				else {
+					panic!("Comparing different variants of `TimingDiagramTimestamp`");
+				}
+			}
+		}
+	}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1950,7 +1981,7 @@ impl Default for TimingDiagramTimestamp {
 }
 
 impl PartialOrd for TimingDiagramTimestamp {
-	fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
 		match self {
 			Self::Real(this_instant) => {
 				if let Self::Real(other_instant) = other {
@@ -3229,7 +3260,7 @@ impl LogicCircuit {
 		changed
 	}
 	/// Adds one time increment to the timing diagram data
-	pub fn update_timing_diagram(&self, propagation_states: &mut RefMut<'_, (bool, bool)>, timing: &mut TimingDiagram, first_propagation_step: bool) {
+	pub fn update_timing_diagram(&self, propagation_states: &mut RefMut<'_, (bool, bool)>, timing: &mut TimingDiagram, mut first_propagation_step: bool) {
 		if timing.running == TimingTiagramRunningState::Off {
 			return;
 		}
@@ -3245,7 +3276,13 @@ impl LogicCircuit {
 				propagation_states.1 = clock.state;
 			}
 			if !timing.current_event_started_by_clock {
-				return;
+				// TODO
+				if propagation_states.0 {
+					first_propagation_step = false;// Instead of returning, still record changes but no new events
+				}
+				else {
+					return;
+				}
 			}
 			// Propagation is done, cancel flag
 			if !propagation_states.0 {
