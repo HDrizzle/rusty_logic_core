@@ -733,7 +733,6 @@ impl LogicCircuit {
 									}
 								}
 								else {// Multiple bits, complicated
-									// There is a problem here
 									// Current index of each bit line, they won't all be updated the same amount so each needs its own index
 									let mut bit_indices: Vec<usize> = (0..signal_group.len()).map(|_| 0).collect();// Splat 0
 									// Get first recorded state of each bit
@@ -743,115 +742,10 @@ impl LogicCircuit {
 									else {
 										bit_line[0].1
 									}).collect();
-									// (Binary lower, Binary upper)
-									let mut prev_n_opt: Option<(u128, u128)> = None;
-									// I Love you Haley
-									// ((Binary lower, Binary upper), X pos of center)
-									let mut bus_labels = Vec::<((u128, u128), f32)>::new();
-									let mut latest_bus_label_start: f32 = 0.0;
-									let mut end = false;
-									// Iterate signal samples
-									while !end {
-										// Find first bit to change
-										let mut current_sample: Vec<LogicState> = prev_sample.clone();
-										let mut new_timestamp = timing.current_timestamp;
-										// <Old>
-										/*let next_timestamps: Vec<TimingDiagramTimestamp> = signal_group.iter().enumerate().map(
-											|(bit_line_i, bit_line)| if bit_line.is_empty() {
-												timing.current_timestamp
-											}
-											else {
-												bit_line[match bit_indices[bit_line_i] + 1 >= bit_line.len() {
-													false => bit_indices[bit_line_i],
-													true => bit_line.len() - 1
-												}].0
-											}
-										).collect();*/
-										// </Old>
-										//<New>
-										let next_timestamps: Vec<TimingDiagramTimestamp> = signal_group.iter().enumerate().map(
-											|(bit_line_i, bit_line)| {
-												let current_idx = bit_indices[bit_line_i];
-												if bit_line.is_empty() || current_idx + 1 >= bit_line.len() {
-													// If empty or at the last recorded sample, use the diagram's end time
-													timing.timing_diagram_end() 
-												}
-												else {
-													// Use the timestamp of the NEXT sample
-													bit_line[current_idx + 1].0
-												}
-											}
-										).collect();
-										// </New>
-										// Get time of next bit change, closest next change
-										for timestamp in &next_timestamps {
-											if timing.compare_timestamps_for_display(*timestamp, new_timestamp).is_le() {
-												new_timestamp = *timestamp;
-											}
-										}
-										// <Old>
-										/*
-										// Find bit lines to step forward, ones that changed at `new_timestamp`
-										let mut bit_lines_that_changed = Vec::<usize>::new();
-										for (bit_line_i, timestamp) in next_timestamps.iter().enumerate() {
-											if *timestamp <= new_timestamp {
-												bit_lines_that_changed.push(bit_line_i);
-											}
-										}
-										// Increment bit indices of bit lines that changed only if they stay within bounds
-										// Also update current sample
-										for bit_line_i in bit_lines_that_changed {
-											// Update current sample
-											current_sample[bit_line_i] = signal_group[bit_line_i][bit_indices[bit_line_i]].1;
-											// If bit index is too high or bit line has no samples
-											if bit_indices[bit_line_i] + 1 < signal_group[bit_line_i].len() {
-												bit_indices[bit_line_i] += 1;
-											}
-										}*/
-										// </Old>
-										// <New>
-										// Find bit lines to step forward, ones that changed at `new_timestamp`
-										let mut bit_lines_to_advance = Vec::<usize>::new();
-										for (bit_line_i, timestamp) in next_timestamps.iter().enumerate() {
-											// Check if this bit line's NEXT change time is equal to the earliest change time
-											if *timestamp <= new_timestamp { 
-												bit_lines_to_advance.push(bit_line_i);
-											}
-										}
-										// Update current sample and increment index for the bit lines that advance to the new timestamp
-										for bit_line_i in bit_lines_to_advance {
-											let current_idx = bit_indices[bit_line_i];
-											
-											// We only update the current state if it hasn't already reached the last sample
-											if current_idx + 1 < signal_group[bit_line_i].len() {
-												// Increment the index
-												bit_indices[bit_line_i] += 1;
-												// Update current sample using the newly incremented index
-												current_sample[bit_line_i] = signal_group[bit_line_i][bit_indices[bit_line_i]].1;
-											}
-											// If the index was already at the last sample, current_sample is not updated
-										}
-										// </New>
-										// End condition: Check if all `bit_indices` are endmaxxing
-										let mut bit_idices_endmaxxing: usize = 0;
-										for (bit_line_i, bit_i) in bit_indices.iter().enumerate() {
-											if *bit_i + 1 == signal_group[bit_line_i].len() {
-												bit_idices_endmaxxing += 1;
-											}
-										}
-										end |= bit_idices_endmaxxing == signal_group.len();
-										let x: f32= if end {
-											timing.convert_timestamp_to_x_value(&*styles, timing.timing_diagram_end())
-										}
-										else {
-											timing.convert_timestamp_to_x_value(&*styles, new_timestamp)
-										};
-										assert!(current_sample.len() > 0, "Signal group must have at least one bit");
-										let ((y_low, _), (y_high, _)) = (logic_state_to_graph_y_and_color(LogicState::Driven(false)), logic_state_to_graph_y_and_color(LogicState::Driven(true)));
-										// Compile binary number, quit if any states are floating or contested
+									let get_n_and_whether_valid_from_sample = |sample: &Vec<LogicState>| -> ((u128, u128), bool) {
 										let mut valid = true;
 										let mut curr_n: (u128, u128) = (0, 0);
-										for (i, state) in current_sample.iter().enumerate() {
+										for (i, state) in sample.iter().enumerate() {
 											if state.is_valid() {
 												if state.to_bool() {
 													if i < 128 {
@@ -867,6 +761,18 @@ impl LogicCircuit {
 												break;
 											}
 										}
+										(curr_n, valid)
+									};
+									// (Binary lower, Binary upper)
+									let mut prev_n_opt: Option<(u128, u128)> = None;
+									// I Love you Haley
+									// ((Binary lower, Binary upper), X pos of center)
+									let mut bus_labels = Vec::<((u128, u128), f32)>::new();
+									let mut latest_bus_label_start: f32 = 0.0;
+									let mut end = false;
+									// Draw graphics
+									let mut draw_bus_segment = |curr_n: (u128, u128), valid: bool, x: f32, prev_x: f32| {
+										let ((y_low, _), (y_high, _)) = (logic_state_to_graph_y_and_color(LogicState::Driven(false)), logic_state_to_graph_y_and_color(LogicState::Driven(true)));
 										let center_pt = graph_pos_to_canvas_pos(prev_x + styles.timing_diagram_bus_half_change_px, (y_high+y_low)/2.0, group_i);
 										let stroke_normal = Stroke::new(1.0, u8_3_to_color32(styles.color_foreground));
 										let mut both_valid_diff = false;
@@ -952,13 +858,83 @@ impl LogicCircuit {
 											);
 											prev_n_opt = None;
 										}
+									};
+									// Iterate signal samples
+									while !end {
+										// Find first bit to change
+										let mut current_sample: Vec<LogicState> = prev_sample.clone();
+										let mut new_timestamp = timing.current_timestamp;
+										// Fixed by Gemini
+										let next_timestamps: Vec<TimingDiagramTimestamp> = signal_group.iter().enumerate().map(
+											|(bit_line_i, bit_line)| {
+												let current_idx = bit_indices[bit_line_i];
+												if bit_line.is_empty() || current_idx + 1 >= bit_line.len() {
+													// If empty or at the last recorded sample, use the diagram's end time
+													timing.timing_diagram_end() 
+												}
+												else {
+													// Use the timestamp of the NEXT sample
+													bit_line[current_idx + 1].0
+												}
+											}
+										).collect();
+										// Get time of next bit change, closest next change
+										for timestamp in &next_timestamps {
+											if timing.compare_timestamps_for_display(*timestamp, new_timestamp).is_le() {
+												new_timestamp = *timestamp;
+											}
+										}
+										// Fixed by Gemini
+										// Find bit lines to step forward, ones that changed at `new_timestamp`
+										let mut bit_lines_to_advance = Vec::<usize>::new();
+										for (bit_line_i, timestamp) in next_timestamps.iter().enumerate() {
+											// Check if this bit line's NEXT change time is equal to the earliest change time
+											if *timestamp <= new_timestamp { 
+												bit_lines_to_advance.push(bit_line_i);
+											}
+										}
+										// Update current sample and increment index for the bit lines that advance to the new timestamp
+										for bit_line_i in bit_lines_to_advance {
+											let current_idx = bit_indices[bit_line_i];
+											
+											// We only update the current state if it hasn't already reached the last sample
+											if current_idx + 1 < signal_group[bit_line_i].len() {
+												// Increment the index
+												bit_indices[bit_line_i] += 1;
+												// Update current sample using the newly incremented index
+												current_sample[bit_line_i] = signal_group[bit_line_i][bit_indices[bit_line_i]].1;
+											}
+											// If the index was already at the last sample, current_sample is not updated
+										}
+										// End condition: Check if all `bit_indices` are endmaxxing
+										let mut bit_idices_endmaxxing: usize = 0;
+										for (bit_line_i, bit_i) in bit_indices.iter().enumerate() {
+											if *bit_i + 1 == signal_group[bit_line_i].len() {
+												bit_idices_endmaxxing += 1;
+											}
+										}
+										end |= bit_idices_endmaxxing == signal_group.len();
+										let x: f32 = timing.convert_timestamp_to_x_value(&*styles, new_timestamp);
+										assert!(current_sample.len() > 0, "Signal group must have at least one bit");
+										// Compile binary number, quit if any states are floating or contested
+										let (curr_n, valid): ((u128, u128), bool) = get_n_and_whether_valid_from_sample(&current_sample);
+										draw_bus_segment(curr_n, valid, x, prev_x);
+										if end {
+											let last_x = timing.convert_timestamp_to_x_value(&*styles, timing.timing_diagram_end());
+											let last_sample: Vec<LogicState> = signal_group.iter().map(|bit_line| match bit_line.last() {
+												Some(t) => t.1,
+												None => LogicState::Floating
+											}).collect();
+											let (last_n, last_valid): ((u128, u128), bool) = get_n_and_whether_valid_from_sample(&last_sample);
+											draw_bus_segment(last_n, last_valid, last_x, x);
+											/*if let Some(last_n) = prev_n_opt {
+												// TODO
+												bus_labels.push((last_n, (latest_bus_label_start as f32 + last_x)/2.0));
+											}*/
+										}
 										prev_sample = current_sample;
 										prev_timestamp = new_timestamp;
 										prev_x = x;
-									}
-									if let Some(last_n) = prev_n_opt {
-										// TODO
-										bus_labels.push((last_n, (latest_bus_label_start as f32 + (timing.n_samples as f32))/2.0));
 									}
 									// Bus labels
 									for (n_256, label_center_x) in bus_labels {
