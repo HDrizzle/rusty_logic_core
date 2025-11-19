@@ -17,6 +17,12 @@ It is also possible for a single graphical wire to to represent more than one ac
 
 The simulator has a variety of built-in logic gates as well as some more complicated components like encoders, decoders, memory, flip flops, etc. When a component is placed down (left click) or moved, its connections to wires are automatically updated.
 
+### The Clock
+
+Every circuit has its own clock which can be setup under the "Circuit Settings" menu. To access the clock in the circuit add the "Clock Source" component. All Clock source components use the simulation's clock state and will therefore always be the same. To prevent timing issues, the clock will be prevented from transitioning until all previous changes have been propagated. This means that even if the clock is set arbitrarily fast, it will only go so fast as to not timing issues.
+
+A sub-circuit will have a different internal clock than the the parent circuit which is usually not ideal. In this situation, just have a normal connection pin called "Clock" or whatever on the sub-circuit so it can be clock by the outside circuit correctly.
+
 ### Splitters & Buses
 
 Often when building computers and other such complicated circuits, there will be a bunch of wires all connected similarly to corresponding pins. This is called a bus and can be annoying to work with when all the individual wires are seperate, which is why I added Splitters (inspired by CircuitVerse). Spltters can merge a bunch of individual wires into one graphical wire to make a bus more compact yet still keep corresponding wires connected normally. They are only a graphical feature and do not affect the performance of the simulation.

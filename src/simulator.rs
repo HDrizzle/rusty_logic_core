@@ -2714,7 +2714,6 @@ impl LogicCircuit {
 			probe.nets_opt = self.is_connection_point(probe.ui_data.position).1;
 		}
 		// Now update timing diagram to match
-		let n_samples = timing.n_samples;
 		// Check clock
 		if timing.signal_groups.len() == 0 {
 			timing.signal_groups = vec![(0, vec![vec![]])];

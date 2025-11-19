@@ -6,7 +6,7 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
 use serde_json;
-use std::{collections::HashSet, f32::consts::TAU, ops::{AddAssign, RangeInclusive, SubAssign}, sync::Arc, ops::DerefMut, rc::Rc, cmp::Ordering};
+use std::{collections::HashSet, f32::consts::TAU, ops::{AddAssign, RangeInclusive, SubAssign}, sync::Arc, ops::DerefMut, rc::Rc};
 #[cfg(feature = "kicad_scrolling")]
 use mouse_rs;
 
@@ -682,7 +682,6 @@ impl LogicCircuit {
 							}
 							// Iterate signal groups, each line on the timing diagram
 							for (group_i, (_, signal_group)) in timing.signal_groups.iter().enumerate() {
-								let mut prev_timestamp = timing.timestamp_zero();
 								let mut prev_x: f32 = 0.0;
 								let (mut prev_y, color) = logic_state_to_graph_y_and_color(LogicState::Floating);
 								let mut prev_stroke = Stroke::new(1.0, u8_3_to_color32(color));
@@ -702,14 +701,13 @@ impl LogicCircuit {
 										let stroke = Stroke::new(1.0, u8_3_to_color32(color));
 										if i == 0 {
 											// Save numbers
-											prev_sample = *state;
 											prev_y = y;
 											prev_stroke = stroke;
 										}
 										else {
 											// Vertical connection line if states are different
 											if *state != prev_sample {
-												painter.line_segment([graph_pos_to_canvas_pos(prev_x, prev_y, group_i), graph_pos_to_canvas_pos(prev_x, y, group_i)], stroke);
+												painter.line_segment([graph_pos_to_canvas_pos(x, prev_y, group_i), graph_pos_to_canvas_pos(x, y, group_i)], stroke);
 											}
 										}
 										// Horizontal line
@@ -726,7 +724,6 @@ impl LogicCircuit {
 										}
 										// Save numbers
 										prev_sample = *state;
-										prev_timestamp = *timestamp;
 										prev_x = x;
 										prev_y = y;
 										prev_stroke = stroke;
@@ -742,8 +739,11 @@ impl LogicCircuit {
 									else {
 										bit_line[0].1
 									}).collect();
-									let get_n_and_whether_valid_from_sample = |sample: &Vec<LogicState>| -> ((u128, u128), bool) {
+									let mut prev_sample_contested = false;
+									// Returns: ((N lower, N upper), valid, is contested)
+									let get_n_and_whether_valid_from_sample = |sample: &Vec<LogicState>| -> ((u128, u128), bool, bool) {
 										let mut valid = true;
+										let mut contested = false;
 										let mut curr_n: (u128, u128) = (0, 0);
 										for (i, state) in sample.iter().enumerate() {
 											if state.is_valid() {
@@ -758,10 +758,10 @@ impl LogicCircuit {
 											}
 											else {
 												valid = false;
-												break;
+												contested |= state.is_contested();
 											}
 										}
-										(curr_n, valid)
+										(curr_n, valid, contested)
 									};
 									// (Binary lower, Binary upper)
 									let mut prev_n_opt: Option<(u128, u128)> = None;
@@ -771,9 +771,9 @@ impl LogicCircuit {
 									let mut latest_bus_label_start: f32 = 0.0;
 									let mut end = false;
 									// Draw graphics
-									let mut draw_bus_segment = |curr_n: (u128, u128), valid: bool, x: f32, prev_x: f32| {
+									let mut draw_bus_segment = |curr_n: (u128, u128), valid: bool, contested: bool, x: f32, prev_x: f32, end: bool| {
 										let ((y_low, _), (y_high, _)) = (logic_state_to_graph_y_and_color(LogicState::Driven(false)), logic_state_to_graph_y_and_color(LogicState::Driven(true)));
-										let center_pt = graph_pos_to_canvas_pos(prev_x + styles.timing_diagram_bus_half_change_px, (y_high+y_low)/2.0, group_i);
+										let center_pt = graph_pos_to_canvas_pos(x + styles.timing_diagram_bus_half_change_px, (y_high+y_low)/2.0, group_i);
 										let stroke_normal = Stroke::new(1.0, u8_3_to_color32(styles.color_foreground));
 										let mut both_valid_diff = false;
 										let mut diags_from_prev_segment = false;
@@ -784,7 +784,7 @@ impl LogicCircuit {
 												diags_from_prev_segment = true;
 												painter.line_segment(
 													[
-														graph_pos_to_canvas_pos(prev_x, y_high, group_i),
+														graph_pos_to_canvas_pos(x, y_high, group_i),
 														center_pt
 													],
 													stroke_normal
@@ -792,13 +792,15 @@ impl LogicCircuit {
 												painter.line_segment(
 													[
 														center_pt,
-														graph_pos_to_canvas_pos(prev_x, y_low, group_i),
+														graph_pos_to_canvas_pos(x, y_low, group_i),
 													],
 													stroke_normal
 												);
+												// Is it weird for guys to name their dicks?
+											}
+											if diags_from_prev_segment || end {
 												// End current bus
 												bus_labels.push((prev_n, (latest_bus_label_start + x)/2.0));
-												// Is it weird for guys to name their dicks?
 											}
 										}
 										// Campus is looking really pretty in the fall
@@ -807,7 +809,7 @@ impl LogicCircuit {
 										if diags_to_this_segment {
 											painter.line_segment(
 												[
-													graph_pos_to_canvas_pos(prev_x + styles.timing_diagram_bus_half_change_px*2.0, y_high, group_i),
+													graph_pos_to_canvas_pos(x + styles.timing_diagram_bus_half_change_px*2.0, y_high, group_i),
 													center_pt
 												],
 												stroke_normal
@@ -815,14 +817,14 @@ impl LogicCircuit {
 											painter.line_segment(
 												[
 													center_pt,
-													graph_pos_to_canvas_pos(prev_x + styles.timing_diagram_bus_half_change_px*2.0, y_low, group_i),
+													graph_pos_to_canvas_pos(x + styles.timing_diagram_bus_half_change_px*2.0, y_low, group_i),
 												],
 												stroke_normal
 											);
 											latest_bus_label_start = x;
 										}
 										// horiz line(s)
-										if valid {
+										if prev_n_opt.is_some() {
 											let start_x = /*(sample_i_f32+DIAGONAL_HALF_WIDTH*2.0)*wavelength;*/match diags_to_this_segment {
 												true => prev_x + styles.timing_diagram_bus_half_change_px*2.0,
 												false => prev_x
@@ -841,12 +843,18 @@ impl LogicCircuit {
 												],
 												stroke_normal
 											);
-											prev_n_opt = Some(curr_n);
 										}
 										else {
 											let start_x = match diags_from_prev_segment {
 												true => prev_x + styles.timing_diagram_bus_half_change_px,
 												false => prev_x
+											};
+											// TODO: Fix
+											let color: [u8; 3] = if prev_sample_contested {
+												styles.color_wire_contested
+											}
+											else {
+												styles.color_wire_floating
 											};
 											let (y_mid, _) = logic_state_to_graph_y_and_color(LogicState::Floating);
 											painter.line_segment(
@@ -854,10 +862,16 @@ impl LogicCircuit {
 													graph_pos_to_canvas_pos(start_x, y_mid, group_i),
 													graph_pos_to_canvas_pos(x, y_mid, group_i)
 												],
-												Stroke::new(1.0, u8_3_to_color32(styles.color_wire_floating))
+												Stroke::new(1.0, u8_3_to_color32(color))
 											);
+										}
+										if valid {
+											prev_n_opt = Some(curr_n);
+										}
+										else {
 											prev_n_opt = None;
 										}
+										prev_sample_contested = contested;
 									};
 									// Iterate signal samples
 									while !end {
@@ -917,23 +931,22 @@ impl LogicCircuit {
 										let x: f32 = timing.convert_timestamp_to_x_value(&*styles, new_timestamp);
 										assert!(current_sample.len() > 0, "Signal group must have at least one bit");
 										// Compile binary number, quit if any states are floating or contested
-										let (curr_n, valid): ((u128, u128), bool) = get_n_and_whether_valid_from_sample(&current_sample);
-										draw_bus_segment(curr_n, valid, x, prev_x);
+										let (curr_n, valid, contested): ((u128, u128), bool, bool) = get_n_and_whether_valid_from_sample(&current_sample);
+										draw_bus_segment(curr_n, valid, contested, x, prev_x, false);
 										if end {
 											let last_x = timing.convert_timestamp_to_x_value(&*styles, timing.timing_diagram_end());
 											let last_sample: Vec<LogicState> = signal_group.iter().map(|bit_line| match bit_line.last() {
 												Some(t) => t.1,
 												None => LogicState::Floating
 											}).collect();
-											let (last_n, last_valid): ((u128, u128), bool) = get_n_and_whether_valid_from_sample(&last_sample);
-											draw_bus_segment(last_n, last_valid, last_x, x);
+											let (last_n, last_valid, last_contested): ((u128, u128), bool, bool) = get_n_and_whether_valid_from_sample(&last_sample);
+											draw_bus_segment(last_n, last_valid, last_contested, last_x, x, true);
 											/*if let Some(last_n) = prev_n_opt {
 												// TODO
 												bus_labels.push((last_n, (latest_bus_label_start as f32 + last_x)/2.0));
 											}*/
 										}
 										prev_sample = current_sample;
-										prev_timestamp = new_timestamp;
 										prev_x = x;
 									}
 									// Bus labels
