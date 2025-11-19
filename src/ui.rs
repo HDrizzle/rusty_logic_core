@@ -739,7 +739,6 @@ impl LogicCircuit {
 									else {
 										bit_line[0].1
 									}).collect();
-									let mut prev_sample_contested = false;
 									// Returns: ((N lower, N upper), valid, is contested)
 									let get_n_and_whether_valid_from_sample = |sample: &Vec<LogicState>| -> ((u128, u128), bool, bool) {
 										let mut valid = true;
@@ -764,7 +763,16 @@ impl LogicCircuit {
 										(curr_n, valid, contested)
 									};
 									// (Binary lower, Binary upper)
-									let mut prev_n_opt: Option<(u128, u128)> = None;
+									let (mut prev_n_opt, mut prev_sample_contested): (Option<(u128, u128)>, bool) = {
+										let (n, valid, contested) = get_n_and_whether_valid_from_sample(&prev_sample);
+										(
+											match valid {
+												true => Some(n),
+												false => None
+											},
+											contested
+										)
+									};
 									// I Love you Haley
 									// ((Binary lower, Binary upper), X pos of center)
 									let mut bus_labels = Vec::<((u128, u128), f32)>::new();
@@ -910,7 +918,6 @@ impl LogicCircuit {
 										// Update current sample and increment index for the bit lines that advance to the new timestamp
 										for bit_line_i in bit_lines_to_advance {
 											let current_idx = bit_indices[bit_line_i];
-											
 											// We only update the current state if it hasn't already reached the last sample
 											if current_idx + 1 < signal_group[bit_line_i].len() {
 												// Increment the index
