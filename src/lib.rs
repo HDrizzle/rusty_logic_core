@@ -28,6 +28,7 @@ pub mod prelude {
 	pub const CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH: usize = 10;
 	/// Square box shown around wire ends and unconnected pins to start a wire from
 	pub const WIRE_START_POINT_HALF_WIDTH: f32 = 0.25;
+	pub const UI_MAX_FRAME_SIMULATION_TIME: f32 = 0.033;
 	pub type V2 = Vector2<f32>;
 	#[cfg(feature = "using_egui")]
 	use eframe::egui::{Align2, Align, Color32, CornerRadius};
@@ -399,6 +400,15 @@ pub mod prelude {
 				Self::N => GenericAlign2::CENTER_TOP,
 				Self::W => GenericAlign2::LEFT_CENTER,
 				Self::S => GenericAlign2::CENTER_BOTTOM
+			}
+		}
+		/// To put text either vertically or horizontally but not upside down
+		pub fn rectify(&self) -> Self {
+			match &self {
+				Self::E => Self::E,
+				Self::N => Self::N,
+				Self::W => Self::E,
+				Self::S => Self::N
 			}
 		}
 		/// 2D rotation matrix multiplication

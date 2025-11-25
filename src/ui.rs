@@ -6,7 +6,7 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
 use serde_json;
-use std::{collections::HashSet, f32::consts::TAU, ops::{AddAssign, RangeInclusive, SubAssign}, sync::Arc, ops::DerefMut, rc::Rc};
+use std::{collections::HashSet, f32::consts::TAU, ops::{AddAssign, DerefMut, RangeInclusive, SubAssign}, rc::Rc, sync::Arc, time::Instant};
 #[cfg(feature = "kicad_scrolling")]
 use mouse_rs;
 
@@ -627,7 +627,7 @@ impl LogicCircuit {
 		});
 		ScrollArea::vertical().show(ui, |ui| {
 			ui.horizontal(|ui| {
-				let mut amplitude: f32 = 10.0;
+				let mut amplitude: f32 = 8.5;
 				let mut vert_spacing: f32 = 25.0;
 				// Labels
 				let vert_widget_extra_spacing = ui.style().spacing.item_spacing.y;
@@ -1485,20 +1485,27 @@ impl LogicCircuitToplevelView {
 	}
 	/// Runs `compute_step()` repeatedly on the circuit until there are no changes, there must be a limit because there are circuits (ex. NOT gate connected to itself) where this would otherwise never end
 	pub fn propagate_until_stable(&mut self, propagation_limit: usize) -> bool {
-		let mut count: usize = 0;
-		while count < propagation_limit {
-			if !self.circuit.compute_immutable(&AncestryStack::new(), 0, count == 0) {
-				/*if count > 0 {
+		let start_t = Instant::now();
+		loop {
+			let mut count: usize = 0;
+			while count < propagation_limit {
+				if !self.circuit.compute_immutable(&AncestryStack::new(), 0, count == 0) {
+					/*if count > 0 {
+						self.circuit.update_timing_diagram(&mut self.circuit.propagation_done.borrow_mut(), &mut self.timing, count == 0);
+					}*/
 					self.circuit.update_timing_diagram(&mut self.circuit.propagation_done.borrow_mut(), &mut self.timing, count == 0);
-				}*/
+					self.frame_compute_cycles = count;
+					return false;
+				}
 				self.circuit.update_timing_diagram(&mut self.circuit.propagation_done.borrow_mut(), &mut self.timing, count == 0);
-				self.frame_compute_cycles = count;
-				return false;
+				count += 1;
 			}
-			self.circuit.update_timing_diagram(&mut self.circuit.propagation_done.borrow_mut(), &mut self.timing, count == 0);
-			count += 1;
+			self.frame_compute_cycles = count;
+			// Keep going unless the clock isn't gonna change or the UI frame time limit is reached
+			if (count < propagation_limit && self.circuit.clock.borrow().would_update().is_none()) || (Instant::now() - start_t).as_secs_f32() >= UI_MAX_FRAME_SIMULATION_TIME {
+				break;
+			}
 		}
-		self.frame_compute_cycles = count;
 		return true;
 	}
 	fn edit_block_layout(&mut self, ui: &mut Ui, styles: Rc<Styles>, maine_frame_size: Vec2) {

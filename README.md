@@ -58,13 +58,13 @@ Place a Wire: Press "w", Click anywhere to start the wire and keep clicking to "
 
 Navigation: Scroll to zoom in/out. Whenever there is scrolling motion, the mouse position will be moved to the center of the screen and the grid will be moved along with it. This behaviour was inspired by KiCad which can do the same thing.
 
-### Sub-ciruit block layout
+### Sub-circuit block layout
 
 Under "Circuit Settings" there is a button that says "Edit block layout...". This is a feature inspired by CircuitVerse to easily customize sub-circuits when they are used inside of a larger circuit. To change a sub-circuit to/from block display mode, check the "Display as block" checkbox under "Properties" when it is selected.
 
 ### Circuit flattening
 
-Also under Circuit Settings there is a feature to extract the components of all sub-circuits in the circuit and build a new "flattened" circuit. Flattened circuits are faster to simulate yet can be very slow and annoying to edit, similar to Phtoshop.
+Also under Circuit Settings there is a feature to extract the components of all sub-circuits in the circuit and build a new "flattened" circuit. Flattened circuits are faster to simulate yet can be very slow and annoying to edit, similar to Photoshop.
 
 ### Fixed sub-cycles
 

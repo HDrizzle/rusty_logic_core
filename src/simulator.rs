@@ -1766,22 +1766,29 @@ impl Clock {
 			state
 		}
 	}
-	/// Returns: Whether it changed
-	pub fn update(&mut self) -> bool {
+	/// If the clock is able to update, returns Some(new last_change time)
+	pub fn would_update(&self) -> Option<Instant> {
 		if self.enabled {
 			if self.freq == 0.0 {
-				self.state = !self.state;
-				self.last_change = Instant::now();
-				true
+				Some(Instant::now())
 			}
 			else if self.last_change.elapsed() > Duration::from_secs_f32(0.5 / self.freq) {// The frequency is based on a whole period, it must change twice per period, so 0.5/f not 1/f
-				self.state = !self.state;
-				self.last_change = Instant::now();
-				true
+				Some(Instant::now())
 			}
 			else {
-				false
+				None
 			}
+		}
+		else {
+			None
+		}
+	}
+	/// Returns: Whether it changed
+	pub fn update(&mut self) -> bool {
+		if let Some(new_last_change) = self.would_update() {
+			self.last_change = new_last_change;
+			self.state = !self.state;
+			true
 		}
 		else {
 			false
@@ -3361,6 +3368,7 @@ impl LogicCircuit {
 		Ok(())
 	}
 	pub fn draw_as_block<'a>(&self, draw: &Box<dyn DrawInterface>, for_block_layout_edit: bool) {
+		let draw_data = draw.get_draw_data();
 		let styles = &draw.get_draw_data().styles;
 		// Rectangle
 		draw.draw_polyline(
@@ -3391,24 +3399,27 @@ impl LogicCircuit {
 				draw.draw_circle_filled(pin_alternate_config.0.to_v2(), styles.connection_dot_grid_size, styles.color_wire_floating);
 			}
 			// Pin name
-			/*if pin_alternate_config.2 {
+			if pin.show_name {
 				draw.text(
-					pin.name.clone(),
+					&pin.name,
 					pin_alternate_config.0.to_v2() - (pin_alternate_config.1.to_unit()*1.2),
-					pin_alternate_config.1.rotate_intv2(draw.direction.to_unit_int()).is_along_axis().unwrap().to_egui_align2(),
+					pin_alternate_config.1.rotate_intv2(draw_data.direction.to_unit_int()).is_along_axis().unwrap().to_align2(),
 					draw.styles().text_color,
-					draw.styles().text_size_grid
+					draw.styles().text_size_grid,
+					!draw_data.direction.is_horizontal()
 				);
-			}*/
+			}
 		}
 		// Name
+		// TODO: Fix alignment
+		let direction = draw.get_draw_data().direction;
 		draw.text(
 			&self.type_name,
-			V2::zeros(),// Relative
-			GenericAlign2::CENTER_CENTER,
+			direction.rotate_v2(V2::new(0.0, -draw.text_size(&self.type_name, styles.text_size_grid).x/2.0)),// Relative
+			direction.to_align2(),//GenericAlign2::CENTER_CENTER,
 			styles.text_color,
 			styles.text_size_grid,
-			false
+			!direction.is_horizontal()
 		);
 	}
 }
