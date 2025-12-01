@@ -108,7 +108,7 @@ impl Default for Styles {
 			wire_start_point_outline_color: [93, 252, 167],
 			timing_diagram_event_resolution_px: 30.0,
 			timing_diagram_prop_step_resolution_px: 7.0,
-			timing_diagram_real_time_resolution_px: 30.0,
+			timing_diagram_real_time_resolution_px: 90.0,
 			timing_diagram_bus_half_change_px: 2.0
 		}
 	}

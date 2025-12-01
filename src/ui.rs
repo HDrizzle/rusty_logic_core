@@ -503,7 +503,7 @@ impl LogicCircuit {
 					recompute_pin_block_positions = true;
 				}
 				// Delete
-				if input_state.consume_key(Modifiers::NONE, Key::Backspace) {
+				if input_state.consume_key(Modifiers::NONE, Key::Backspace) || input_state.consume_key(Modifiers::NONE, Key::Delete) {
 					for item_ref in selected_graphics.iter() {
 						self.remove_graphic_item(item_ref);
 					}
@@ -857,7 +857,6 @@ impl LogicCircuit {
 												true => prev_x + styles.timing_diagram_bus_half_change_px,
 												false => prev_x
 											};
-											// TODO: Fix
 											let color: [u8; 3] = if prev_sample_contested {
 												styles.color_wire_contested
 											}
@@ -948,10 +947,6 @@ impl LogicCircuit {
 											}).collect();
 											let (last_n, last_valid, last_contested): ((u128, u128), bool, bool) = get_n_and_whether_valid_from_sample(&last_sample);
 											draw_bus_segment(last_n, last_valid, last_contested, last_x, x, true);
-											/*if let Some(last_n) = prev_n_opt {
-												// TODO
-												bus_labels.push((last_n, (latest_bus_label_start as f32 + last_x)/2.0));
-											}*/
 										}
 										prev_sample = current_sample;
 										prev_x = x;
@@ -1161,7 +1156,6 @@ pub struct LogicCircuitToplevelView {
 	component_search_text: String,
 	all_logic_devices_search: Vec<EnumAllLogicDevices>,
 	saved: bool,
-	new_sub_cycles_entry: String,
 	recompute_conns_next_frame: bool,
 	/// 1 Less than actual number of times the compute function was called because the last call doesn't change anything and ends the loop
 	frame_compute_cycles: usize,
@@ -1183,7 +1177,6 @@ impl LogicCircuitToplevelView {
 			component_search_text: String::new(),
 			all_logic_devices_search: Vec::new(),
 			saved,
-			new_sub_cycles_entry: String::new(),
 			recompute_conns_next_frame: false,
 			frame_compute_cycles: 0,
 			showing_flatten_opoup: false,
@@ -1202,7 +1195,6 @@ impl LogicCircuitToplevelView {
 		let canvas_size: Vec2 = ui.available_size_before_wrap();
 		let anything_in_focus: bool = ui.memory(|memory| memory.focused().is_some());
 		let inner_response = Frame::canvas(ui.style()).show::<(Vec2, V2)>(ui, |ui| {
-			let propagate = true;// TODO: Change to false when rest of logic is implemented
 			// First, detect user unput
 			let input_state = ui.ctx().input(|i| i.clone());
 			let (response, painter) = ui.allocate_painter(canvas_size, Sense::all());
@@ -1272,10 +1264,8 @@ impl LogicCircuitToplevelView {
 				self.circuit.check_wire_geometry_and_connections(Some(&mut self.timing));
 			}
 			// Update
-			if self.recompute_conns_next_frame || propagate {
-				self.logic_loop_error = self.propagate_until_stable(CIRCUIT_MAX_COMPUTE_CYCLES);
-				self.recompute_conns_next_frame = false;
-			}
+			self.logic_loop_error = self.propagate_until_stable(CIRCUIT_MAX_COMPUTE_CYCLES);
+			self.recompute_conns_next_frame = false;
 			// graphics help from https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/painting.rs
 			// Right side toolbar
 			self.circuit.tool.borrow().tool_select_ui(&draw_info);
@@ -1329,19 +1319,21 @@ impl LogicCircuitToplevelView {
 					ui.label("Name");
 					ui.add(TextEdit::singleline(&mut self.circuit.type_name).desired_width(100.0));
 				});
-				ui.horizontal(|ui| {// TODO: fix UI to make it optional
-					ui.label("Fixed sub cycles");
-					ui.add(TextEdit::singleline(&mut self.new_sub_cycles_entry).desired_width(50.0));
-					let button = Button::new("Update");
-					match self.new_sub_cycles_entry.parse::<usize>() {
-						Ok(sub_cycles) => {
-							if ui.add(button).clicked() {
-								self.circuit.fixed_sub_cycles_opt = Some(sub_cycles);
-							}
-						},
-						Err(_) => {
-							ui.add_enabled(false, button);
+				ui.horizontal(|ui| {
+					let mut fixed_cycles_enabled = self.circuit.fixed_sub_cycles_opt.is_some();
+					ui.checkbox(&mut fixed_cycles_enabled, "Fixed sub cycles");
+					if fixed_cycles_enabled {
+						if let Some(cycles) = &mut self.circuit.fixed_sub_cycles_opt {
+							let mut cycles_i32 = *cycles as i32;
+							ui_drag_value_with_arrows(ui, &mut cycles_i32, Some((1, 1000)));
+							*cycles = cycles_i32 as usize;
 						}
+						else {
+							self.circuit.fixed_sub_cycles_opt = Some(1);
+						}
+					}
+					else {
+						self.circuit.fixed_sub_cycles_opt = None;
 					}
 				});
 				// Clock

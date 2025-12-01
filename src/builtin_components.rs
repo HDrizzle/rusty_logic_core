@@ -1881,7 +1881,7 @@ impl LogicDevice for VectorCRT {
 			diff.magnitude()
 		};
 		self.curr_line_time = (Instant::now() - self.line_start_time).as_secs_f32();
-		self.curr_line_diff = round_v2_to_intv2(diff * self.curr_line_time * self.line_speed / curr_line_distance);// TODO: Contant speed
+		self.curr_line_diff = round_v2_to_intv2(diff * self.curr_line_time * self.line_speed / curr_line_distance);
 		if self.curr_line_time * self.line_speed >= curr_line_distance {// Line end
 			self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Line Done", 0), LogicState::Driven(true));
 			self.save_current_line();
@@ -1924,7 +1924,6 @@ impl LogicDevice for VectorCRT {
 				diff.magnitude()
 			};
 			self.curr_line_time = (Instant::now() - self.line_start_time).as_secs_f32();
-			// TODO: Constant speed. The existing logic is correct for this.
 			self.curr_line_diff = round_v2_to_intv2(diff * self.curr_line_time * self.line_speed / curr_line_distance);
 
 			// Check for line end

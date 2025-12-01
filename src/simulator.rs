@@ -1922,12 +1922,13 @@ impl TimingDiagram {
 		}
 	}
 	pub fn set_running_state(&mut self, new_state: TimingTiagramRunningState) {
-		if self.running.uses_real_time() && new_state.uses_incremental_time() {
+		let current_ts_real = self.current_timestamp.is_real_time();
+		if current_ts_real && new_state.uses_incremental_time() {
 			self.current_timestamp = TimingDiagramTimestamp::PropagationAndSimStep(0, 0);
 			self.running = new_state;
 			self.clear();
 		}
-		if self.running.uses_incremental_time() && new_state.uses_real_time() {
+		if (!current_ts_real) && new_state.uses_real_time() {
 			self.current_timestamp = TimingDiagramTimestamp::Real(Instant::now());
 			self.running = new_state;
 			self.clear();
@@ -1979,6 +1980,15 @@ pub enum TimingDiagramTimestamp {
 	Real(Instant),
 	/// (Event count, sim step)
 	PropagationAndSimStep(u32, u32)
+}
+
+impl TimingDiagramTimestamp {
+	fn is_real_time(&self) -> bool {
+		match self {
+			Self::Real(_) => true,
+			Self::PropagationAndSimStep(_, _) => false
+		}
+	}
 }
 
 impl Default for TimingDiagramTimestamp {
@@ -3282,7 +3292,6 @@ impl LogicCircuit {
 				propagation_states.1 = clock.state;
 			}
 			if !timing.current_event_started_by_clock {
-				// TODO
 				if propagation_states.0 {
 					first_propagation_step = false;// Instead of returning, still record changes but no new events
 				}
@@ -3412,14 +3421,14 @@ impl LogicCircuit {
 		}
 		// Name
 		// TODO: Fix alignment
-		let direction = draw.get_draw_data().direction;
+		//let direction = draw.get_draw_data().direction;
 		draw.text(
 			&self.type_name,
-			direction.rotate_v2(V2::new(0.0, -draw.text_size(&self.type_name, styles.text_size_grid).x/2.0)),// Relative
-			direction.to_align2(),//GenericAlign2::CENTER_CENTER,
+			V2::zeros(),//direction.rotate_v2(V2::new(0.0, -draw.text_size(&self.type_name, styles.text_size_grid).x/2.0)),// Relative
+			GenericAlign2::CENTER_CENTER,//direction.to_align2(),//,
 			styles.text_color,
 			styles.text_size_grid,
-			!direction.is_horizontal()
+			false// !direction.is_horizontal()
 		);
 	}
 }
