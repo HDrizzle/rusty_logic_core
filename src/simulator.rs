@@ -2786,6 +2786,7 @@ impl LogicCircuit {
 						let conns = conns_cell.borrow();
 						for conn in conns.iter() {
 							if let WireConnection::Wire(wire_id) = conn {
+								// TODO: FIX: When a wire is drawn with an elbow connecting to a pin, then back on itself to the pin, the wire ID is invalid
 								let new_net_ids: &Vec<u64> = &wires.get(wire_id).expect(&format!("self.is_point_on_wire() returned invalid wire ID {}", wire_id)).borrow().nets;
 								// Even if bit widths don't match, wires are created to have the highest of all encountered bit widths so we need to iterate over the pin's owned logic pins and NOT the wire
 								for (bit_i, comp_logic_pin_id) in pin.owned_pins.iter().enumerate() {

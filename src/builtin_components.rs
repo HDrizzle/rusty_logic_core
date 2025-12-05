@@ -11,7 +11,7 @@ pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
 	vec![
 		GateAnd::new().save().unwrap(),
 		GateNand::new().save().unwrap(),
-		GateNot::new().save().unwrap(),
+		GateNotNew::new().save().unwrap(),
 		GateOr::new().save().unwrap(),
 		GateNor::new().save().unwrap(),
 		GateXor::new().save().unwrap(),
@@ -409,6 +409,7 @@ impl LogicDevice for GateNand {
 	}
 }
 
+/// Original one, kinda big
 #[derive(Debug, Clone)]
 pub struct GateNot(LogicDeviceGeneric);
 
@@ -451,6 +452,52 @@ impl LogicDevice for GateNot {
 			V2::new(2.0, 0.0)
 		], draw.styles().color_foreground);
 		draw.draw_circle(V2::new(2.5, 0.0), 0.5, draw.styles().color_foreground);
+	}
+}
+
+/// Newer NOT gate, smaller
+#[derive(Debug, Clone)]
+pub struct GateNotNew(LogicDeviceGeneric);
+
+impl GateNotNew {
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default())
+	}
+	pub fn from_save(save: LogicDeviceSave) -> Self {
+		Self(LogicDeviceGeneric::load(
+			save,
+			hash_map!(
+				0 => (IntV2(-3, 0), FourWayDir::W, 1.0, "a".to_owned(), false, vec![0]),
+				1 => (IntV2(3, 0), FourWayDir::E, 1.0, "q".to_owned(), false, vec![1]),
+			),
+			(V2::new(-2.0, -1.5), V2::new(1.0, 1.5)),
+			false,
+			false
+		))
+	}
+}
+
+impl LogicDevice for GateNotNew {
+	fn get_generic(&self) -> &LogicDeviceGeneric {
+		&self.0
+	}
+	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
+		&mut self.0
+	}
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
+		self.set_pin_internal_state_panic(1, (!self.get_pin_state_panic(0).to_bool()).into());
+	}
+	fn save(&self) -> Result<EnumAllLogicDevices, String> {
+		Ok(EnumAllLogicDevices::GateNotNew(self.0.save()))
+	}
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
+		draw.draw_polyline(vec![
+			V2::new(1.0, 0.0),
+			V2::new(-2.0, -1.5),
+			V2::new(-2.0, 1.5),
+			V2::new(1.0, 0.0)
+		], draw.styles().color_foreground);
+		draw.draw_circle(V2::new(1.5, 0.0), 0.5, draw.styles().color_foreground);
 	}
 }
 
@@ -768,8 +815,8 @@ impl LogicDevice for FixedSource {
 			},
 			false => {
 				draw.draw_polyline(vec![V2::new(1.0, -1.0), V2::new(-1.0, -1.0)], draw.styles().color_foreground);
-				draw.draw_polyline(vec![V2::new(0.75, -1.5), V2::new(-0.75, -1.5)], draw.styles().color_foreground);
-				draw.draw_polyline(vec![V2::new(0.5, -2.0), V2::new(-0.5, -2.0)], draw.styles().color_foreground);
+				draw.draw_polyline(vec![V2::new(0.625, -1.5), V2::new(-0.625, -1.5)], draw.styles().color_foreground);
+				draw.draw_polyline(vec![V2::new(0.25, -2.0), V2::new(-0.25, -2.0)], draw.styles().color_foreground);
 			}
 		}
 	}
@@ -781,6 +828,7 @@ impl LogicDevice for FixedSource {
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		if let SelectProperty::FixedSourceState(state) = property {
 			self.state = state;
+			*self = Self::from_save(self.generic.save(), state);
 		}
 	}
 }
