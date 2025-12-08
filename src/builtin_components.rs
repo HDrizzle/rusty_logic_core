@@ -1821,6 +1821,7 @@ impl LogicDevice for Counter {
 }
 
 /// Vector graphics CRT simulator made specifically to test a part of my DIY computer that I am expanding
+/// TODO: Make line time constant, change speed instead
 #[derive(Debug)]
 pub struct VectorCRT {
 	generic: LogicDeviceGeneric,
@@ -1871,7 +1872,7 @@ impl VectorCRT {
 			line_start_time: Instant::now(),
 			lines: Vec::new(),
 			points: Vec::new(),
-			line_speed: 100.0,
+			line_speed: 50.0,
 			v0: IntV2(0, 0),
 			v1: IntV2(0, 0),
 			curr_line_time: 0.0,
