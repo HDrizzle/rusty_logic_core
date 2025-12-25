@@ -1821,23 +1821,24 @@ impl LogicDevice for Counter {
 }
 
 /// Vector graphics CRT simulator made specifically to test a part of my DIY computer that I am expanding
-/// TODO: Make line time constant, change speed instead
+/// Line/Point time is constant, LERPing controlled by triangle wave
 #[derive(Debug)]
 pub struct VectorCRT {
 	generic: LogicDeviceGeneric,
 	layout: BlockLayoutHelper,
 	/// 0 to 1, for lerping
-	line_start_time: Instant,
+	start_time: Instant,
+	/// Is the LERP triangle wave going up or down?
+	lerp_rising: bool,
 	/// Vec<(Start, End which will be updated until the LERP is over)>
 	lines: Vec<(IntV2, IntV2)>,
 	points: Vec<IntV2>,
-	line_speed: f32,
-	v0: IntV2,
-	v1: IntV2,
-	curr_line_time: f32,
-	/// From V0
-	curr_line_diff: IntV2,
-	point_time: f32
+	/// Time taken per line, or time spent per point
+	period: f32,
+	v0: V2,
+	v1: V2,
+	curr_lerp_value: f32,
+	start_lerp_pos: f32
 }
 
 impl VectorCRT {
@@ -1853,7 +1854,9 @@ impl VectorCRT {
 			(FourWayDir::W, 1, 1, "Clear".to_owned()),
 			(FourWayDir::W, 1, 1, "Line Done".to_owned()),
 			(FourWayDir::W, 1, 1, "Beam Enable".to_owned()),
-			(FourWayDir::W, 1, 1, "Point (0) / Line (1) select".to_owned())
+			(FourWayDir::W, 1, 1, "Point (0) / Line (1) select".to_owned()),
+			(FourWayDir::W, 1, 1, "Update V0".to_owned()),
+			(FourWayDir::W, 1, 1, "Update V1".to_owned())
 		];
 		let layout = BlockLayoutHelper::load(
 			layout_save,
@@ -1869,18 +1872,21 @@ impl VectorCRT {
 				false
 			),
 			layout,
-			line_start_time: Instant::now(),
+			start_time: Instant::now(),
+			lerp_rising: true,
 			lines: Vec::new(),
 			points: Vec::new(),
-			line_speed: 50.0,
-			v0: IntV2(0, 0),
-			v1: IntV2(0, 0),
-			curr_line_time: 0.0,
-			curr_line_diff: IntV2(0, 0),
-			point_time: 0.2
+			period: 2.0,
+			v0: V2::zeros(),
+			v1: V2::zeros(),
+			curr_lerp_value: 0.0,
+			start_lerp_pos: 0.0
 		};
 		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Clear", 0), LogicState::Floating);
 		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Beam Enable", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Point (0) / Line (1) select", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Update V0", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Update V1", 0), LogicState::Floating);
 		for bit_i in 0..10 {
 			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("X0", bit_i), LogicState::Floating);
 			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("X1", bit_i), LogicState::Floating);
@@ -1890,18 +1896,34 @@ impl VectorCRT {
 		out
 	}
 	fn save_current_line(&mut self) {
-		self.lines.push((self.v0, self.v0 + self.curr_line_diff));
+		self.lines.push((round_v2_to_intv2(self.get_lerp_start_pos()), round_v2_to_intv2(self.get_lerp_pos())));
 	}
-	fn update_input_vectors(&self) -> Option<(IntV2, IntV2)> {
+	fn get_line_start(&self) -> V2 {
+		match self.lerp_rising {
+			true => self.v0,
+			false => self.v1
+		}
+	}
+	fn get_line_end(&self) -> V2 {
+		match self.lerp_rising {
+			true => self.v1,
+			false => self.v0
+		}
+	}
+	fn get_lerp_pos(&self) -> V2 {
+		self.v0 + (self.v1 - self.v0)*self.curr_lerp_value
+	}
+	fn get_lerp_start_pos(&self) -> V2 {
+		self.v0 + (self.v1 - self.v0)*self.start_lerp_pos
+	}
+	fn update_input_vectors(&self) -> ((V2, V2), bool) {
 		let logic_pins_rc = Rc::clone(&self.generic.logic_pins);
 		let new_v0 = IntV2(self.layout.get_bus_value_panic("X0", &logic_pins_rc).0 as i32, self.layout.get_bus_value_panic("Y0", &logic_pins_rc).0 as i32);
 		let new_v1 = IntV2(self.layout.get_bus_value_panic("X1", &logic_pins_rc).0 as i32, self.layout.get_bus_value_panic("Y1", &logic_pins_rc).0 as i32);
-		if new_v0 != self.v0 || new_v1 != self.v1 {
-			Some((new_v0, new_v1))
-		}
-		else {
-			None
-		}
+		(
+			(new_v0.to_v2(), new_v1.to_v2()),
+			new_v0 != round_v2_to_intv2(self.v0) || new_v1 != round_v2_to_intv2(self.v1)
+		)
 	}
 }
 
@@ -1912,108 +1934,47 @@ impl LogicDevice for VectorCRT {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	// Old
-	/*
 	fn compute_step(&mut self, _ancestors: &AncestryStack, _self_component_id: u64, _clock_state: bool, _first_propagation_step: bool) {
+		// Set quick signals back to 0
+		self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Line Done", 0), LogicState::Driven(false));
+		self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Update V0", 0), LogicState::Driven(false));
+		self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Update V1", 0), LogicState::Driven(false));
 		// Check clear
 		if self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("Clear", 0)).to_bool() {
 			self.lines = Vec::new();
 			self.points = Vec::new();
 		}
-		// Get lerp distance
-		let diff: V2 = (self.v1 - self.v0).to_v2();
-		// Avoid dividing by zero
-		let curr_line_distance: f32 = if diff.magnitude() == 0.0 {
-			1.0
+		// Timing
+		let now = Instant::now();
+		let dt = (now - self.start_time).as_secs_f32();
+		self.curr_lerp_value = if self.lerp_rising {
+			dt / self.period
 		}
 		else {
-			diff.magnitude()
+			1.0 - (dt / self.period)
 		};
-		self.curr_line_time = (Instant::now() - self.line_start_time).as_secs_f32();
-		self.curr_line_diff = round_v2_to_intv2(diff * self.curr_line_time * self.line_speed / curr_line_distance);
-		if self.curr_line_time * self.line_speed >= curr_line_distance {// Line end
+		// Check if line is done
+		if dt >= self.period {// Line end
 			self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Line Done", 0), LogicState::Driven(true));
 			self.save_current_line();
-			self.line_start_time = Instant::now();
-		}
-		else {
-			self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Line Done", 0), LogicState::Driven(false));
-		}
-		if let Some((new_v0, new_v1)) = self.update_input_vectors() {
-			self.save_current_line();
-			self.line_start_time = Instant::now();
+			self.start_lerp_pos = self.curr_lerp_value;
+			let ((new_v0, new_v1), _) = self.update_input_vectors();
 			self.v0 = new_v0;
 			self.v1 = new_v1;
-		}
-	}
-	*/
-	/// From Gemini
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _self_component_id: u64, _clock_state: bool, _first_propagation_step: bool) {
-		// Check clear
-		if self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("Clear", 0)).to_bool() {
-			self.lines = Vec::new();
-			self.points = Vec::new();
-		}
-
-		// Read the mode select pin: 0 for Point, 1 for Line
-		let is_line_mode = self.get_pin_state_panic(
-			self.layout.get_logic_pin_id_panic("Point (0) / Line (1) select", 0)
-		).to_bool();
-
-		let diff: V2 = (self.v1 - self.v0).to_v2();
-
-		if is_line_mode {
-			// --- LINE MODE LOGIC (Mostly existing, with a slight change for the V0/V1 update) ---
-			// Get lerp distance
-			// Avoid dividing by zero
-			let curr_line_distance: f32 = if diff.magnitude() == 0.0 {
-				1.0
+			self.start_time = now;
+			self.lerp_rising = !self.lerp_rising;
+			if self.lerp_rising {
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Update V1", 0), LogicState::Driven(true));
 			}
 			else {
-				diff.magnitude()
-			};
-			self.curr_line_time = (Instant::now() - self.line_start_time).as_secs_f32();
-			self.curr_line_diff = round_v2_to_intv2(diff * self.curr_line_time * self.line_speed / curr_line_distance);
-
-			// Check for line end
-			if self.curr_line_time * self.line_speed >= curr_line_distance {
-				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Line Done", 0), LogicState::Driven(true));
-				self.save_current_line();
-				self.line_start_time = Instant::now();
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Update V0", 0), LogicState::Driven(true));
 			}
-			else {
-				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Line Done", 0), LogicState::Driven(false));
-			}
-		} else {
-			// --- POINT MODE LOGIC ---
-			// In point mode, we draw the point defined by V0.
-			// The Line Done pin will be used to signal when the point "draw" (time delay) is complete.
-			
-			let point_elapsed_time = (Instant::now() - self.line_start_time).as_secs_f32();
-
-			if point_elapsed_time >= self.point_time {
-				// Point "draw" is complete
-				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Line Done", 0), LogicState::Driven(true));
-				// Save the point at V0
-				if !self.points.contains(&self.v0) { // Optional: Avoid duplicates if inputs don't change
-					self.points.push(self.v0);
-				}
-				self.line_start_time = Instant::now(); // Reset the timer
-			} else {
-				// Point is "drawing" (waiting for time)
-				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Line Done", 0), LogicState::Driven(false));
-			}
-			// In point mode, curr_line_diff is conceptually zero, but we'll leave it as whatever the line was, or explicitly set it
-			self.curr_line_diff = IntV2(0, 0); 
 		}
-
-		// --- INPUT VECTOR UPDATE (Handle V0/V1 changes) ---
-		if let Some((new_v0, new_v1)) = self.update_input_vectors() {
-			if is_line_mode {
-				self.save_current_line(); // Only save the line if we were drawing a line
-			}
-			// Reset the timer and update vectors for both line and point mode.
-			self.line_start_time = Instant::now();
+		// If vectors change even when line isn't done, save and start a new line
+		let ((new_v0, new_v1), are_vecs_new) = self.update_input_vectors();
+		if are_vecs_new {
+			self.save_current_line();
+			self.start_lerp_pos = self.curr_lerp_value;
 			self.v0 = new_v0;
 			self.v1 = new_v1;
 		}
@@ -2021,8 +1982,6 @@ impl LogicDevice for VectorCRT {
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::VectorCRT(self.generic.save(), self.layout.save()))
 	}
-	// Old
-	/*
 	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		/*
 		BB size: (269, 259), BB from (-140, -130) to (129, 129)
@@ -2032,54 +1991,24 @@ impl LogicDevice for VectorCRT {
 		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles().color_foreground);
 		draw.draw_rect(V2::new(-128.0, -128.0), V2::new(128.0, 128.0), [0,0,0,0], draw.styles().color_foreground);
 		let to_display_offset = IntV2(512, 512);
-		for line in self.lines.iter().chain(vec![(self.v0, self.v0 + self.curr_line_diff)].iter()).map(|(v0, v1)| (*v0 - to_display_offset, *v1 - to_display_offset)) {
+		for line in self.lines.iter().chain(vec![(round_v2_to_intv2(self.get_lerp_start_pos()), round_v2_to_intv2(self.get_lerp_pos()))].iter()).map(|(v0, v1)| (*v0 - to_display_offset, *v1 - to_display_offset)) {
 			if let Some((start_cliped, end_cliped)) = clip_line_to_rect((line.0.to_v2(), line.1.to_v2()), (V2::new(-128.0, -128.0), V2::new(128.0, 128.0))) {
 				draw.draw_polyline(vec![start_cliped, end_cliped], [0, 255, 0]);
 			}
 		}
-		draw.text(&format!("Pos from: {:?}, current: {:?}, to: {:?}, Current line time: {}", &self.v0, self.v0 + self.curr_line_diff, &self.v1, (Instant::now() - self.line_start_time).as_secs_f32()), V2::new(-128.0, -129.0), GenericAlign2::LEFT_CENTER, draw.styles().text_color, 1.5, false);
-	}*/
-	/// From Gemini
-	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
-		/*
-		BB size: (269, 259), BB from (-140, -130) to (129, 129)
-		Connections on left (west)
-		CRT View from (-128, -128) to (128, 128)
-		*/
-		let crt_min = V2::new(-128.0, -128.0);
-		let crt_max = V2::new(128.0, 128.0);
-		
-		// Draw the main bounding box and the CRT display area
-		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles().color_foreground);
-		draw.draw_rect(crt_min, crt_max, [0,0,0,0], draw.styles().color_foreground);
-
-		// Coordinate offset for display centering
-		let to_display_offset = IntV2(512, 512);
-
-		// 1. Draw all saved and current LINES
-		let current_line = (self.v0, self.v0 + self.curr_line_diff);
-		for line in self.lines.iter().chain(vec![current_line].iter()).map(|(v0, v1)| (*v0 - to_display_offset, *v1 - to_display_offset)) {
-			if let Some((start_cliped, end_cliped)) = clip_line_to_rect((line.0.to_v2(), line.1.to_v2()), (crt_min, crt_max)) {
+		// Just current line test
+		/*for line in vec![(self.get_line_start(), self.get_line_end())].iter().map(|(v0, v1)| (*v0 - to_display_offset, *v1 - to_display_offset)) {
+			if let Some((start_cliped, end_cliped)) = clip_line_to_rect((line.0.to_v2(), line.1.to_v2()), (V2::new(-128.0, -128.0), V2::new(128.0, 128.0))) {
 				draw.draw_polyline(vec![start_cliped, end_cliped], [0, 255, 0]);
 			}
-		}
-		
-		// 2. Draw all saved POINTS
-		let point_radius = 1.5; // Radius for the drawn point
-		for point in self.points.iter() {
-			let display_point = (*point - to_display_offset).to_v2();
-			
-			// Only draw the point if it is within the CRT bounds
-			if display_point.x >= crt_min.x && display_point.x <= crt_max.x &&
-			display_point.y >= crt_min.y && display_point.y <= crt_max.y 
-			{
-				// Assuming draw.draw_circle is available for points
-				draw.draw_circle(display_point, point_radius, [255, 0, 0]); // Use a different color for points
+		}*/
+		// Without current line test
+		/*for line in self.lines.iter().map(|(v0, v1)| (*v0 - to_display_offset, *v1 - to_display_offset)) {
+			if let Some((start_cliped, end_cliped)) = clip_line_to_rect((line.0.to_v2(), line.1.to_v2()), (V2::new(-128.0, -128.0), V2::new(128.0, 128.0))) {
+				draw.draw_polyline(vec![start_cliped, end_cliped], [0, 255, 0]);
 			}
-		}
-
-		// Draw the debug text
-		draw.text(&format!("Pos from: {:?}, current: {:?}, to: {:?}, Current line time: {}", &self.v0, self.v0 + self.curr_line_diff, &self.v1, (Instant::now() - self.line_start_time).as_secs_f32()), V2::new(-128.0, -129.0), GenericAlign2::LEFT_CENTER, draw.styles().text_color, 1.5, false);
+		}*/
+		draw.text(&format!("Pos from: {:?}, current: {:?}, to: {:?}, Current line time: {}", self.get_line_start(), round_v2_to_intv2(self.get_lerp_pos()), self.get_line_end(), (Instant::now() - self.start_time).as_secs_f32()), V2::new(-128.0, -129.0), GenericAlign2::LEFT_CENTER, draw.styles().text_color, 1.5, false);
 	}
 	#[cfg(feature = "using_egui")]
 	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
