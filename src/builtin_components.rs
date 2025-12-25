@@ -1295,6 +1295,8 @@ impl LogicDevice for TriStateBuffer {
 		for bit_i in 0..self.2 {
 			let state: LogicState = if enable {
 				self.get_pin_state_panic(self.1.get_logic_pin_id_panic("D", bit_i))
+					.to_bool()// Even if input is floating the output has to have a defined state
+					.into()
 			}
 			else {
 				LogicState::Floating
@@ -1990,7 +1992,7 @@ impl LogicDevice for VectorCRT {
 		*/
 		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles().color_foreground);
 		draw.draw_rect(V2::new(-128.0, -128.0), V2::new(128.0, 128.0), [0,0,0,0], draw.styles().color_foreground);
-		let to_display_offset = IntV2(512, 512);
+		let to_display_offset = IntV2(256+128, 256+128);
 		for line in self.lines.iter().chain(vec![(round_v2_to_intv2(self.get_lerp_start_pos()), round_v2_to_intv2(self.get_lerp_pos()))].iter()).map(|(v0, v1)| (*v0 - to_display_offset, *v1 - to_display_offset)) {
 			if let Some((start_cliped, end_cliped)) = clip_line_to_rect((line.0.to_v2(), line.1.to_v2()), (V2::new(-128.0, -128.0), V2::new(128.0, 128.0))) {
 				draw.draw_polyline(vec![start_cliped, end_cliped], [0, 255, 0]);
