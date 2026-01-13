@@ -26,6 +26,8 @@ pub mod prelude {
 	pub const APP_NAME: &str = "Rusty Logic";
 	pub const CIRCUIT_MAX_COMPUTE_CYCLES: usize = 100;
 	pub const CIRCUIT_LAYOUT_DEFAULT_HALF_WIDTH: usize = 10;
+	pub const DEFAULT_CIRCUIT_LIB: &str = "Default";
+	pub const REASONABLE_FILENAME_CHARS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789~_-+={}[];:<>,.?";
 	/// Square box shown around wire ends and unconnected pins to start a wire from
 	pub const WIRE_START_POINT_HALF_WIDTH: f32 = 0.25;
 	pub const UI_MAX_FRAME_SIMULATION_TIME: f32 = 0.033;
@@ -574,7 +576,8 @@ pub mod prelude {
 			]),
 			"test".to_string(),
 			true,
-			true
+			true,
+			DEFAULT_CIRCUIT_LIB.to_owned()
 		).unwrap()
 	}
 }

@@ -13,18 +13,21 @@ use serde_json;
 #[cfg(feature = "using_filesystem")]
 pub static RESOURCES_DIR: &str = "resources/";
 #[cfg(feature = "using_filesystem")]
-pub static CIRCUITS_DIR: &str = "resources/circuits/";
+pub static CIRCUIT_LIBS_FILE: &str = "resources/circuit_libraries.json";
 #[cfg(feature = "using_filesystem")]
 pub static STYLES_FILE: &str = "resources/styles.json";
 
 /// Loads circuit, path is relative to `CIRCUITS_DIR` and does not include .json extension
 /// Example: File is located at `resources/circuits/sequential/d_latch.json` -> circuit path is `sequential/d_latch`
-pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String) -> Result<LogicCircuit, String> {
+pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String, mut lib_name: String) -> Result<LogicCircuit, String> {
+	if lib_name.is_empty() {
+		lib_name = DEFAULT_CIRCUIT_LIB.to_owned();
+	}
 	#[allow(unused)]
 	let mut save_opt: Option<LogicCircuitSave> = None;
 	#[cfg(feature = "using_filesystem")]
 	{
-		let path = get_circuit_file_path(circuit_rel_path);
+		let path = get_circuit_file_path(circuit_rel_path, &lib_name)?;
 		let string_raw = load_file_with_better_error(&path)?;
 		save_opt = Some(match to_string_err(serde_json::from_str::<LogicCircuitSave>(&string_raw)) {
 			Ok(circuit) => Ok(circuit),
@@ -46,7 +49,7 @@ pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: 
 		};
 	}
 	match save_opt {
-		Some(save) => LogicCircuit::from_save(save, circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir, name.clone()),
+		Some(save) => LogicCircuit::from_save(save, circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir, name.clone(), lib_name.clone()),
 		None => Err("Both `using_filesystem` and `using_wasm` features are disabled, therefore there is no mechanism for loading sub-circuits".to_owned())
 	}
 }
@@ -153,7 +156,7 @@ mod restore_old_files {
 		}
 	}
 	pub fn attempt_restore_file(circuit_rel_path: &str) -> Result<LogicCircuitSave, String> {
-		let path = get_circuit_file_path(circuit_rel_path);
+		let path = get_circuit_file_path(circuit_rel_path, DEFAULT_CIRCUIT_LIB)?;
 		let string_raw = load_file_with_better_error(&path)?;
 		Ok(to_string_err(serde_json::from_str::<LogicCircuitSaveOld>(&string_raw))?.into())
 	}
@@ -162,8 +165,8 @@ mod restore_old_files {
 /// Not great but I can't think of anything else
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EnumAllLogicDevices {
-	/// (Relative path of circuit, Whether to use block diagram, Position, Orientation, Name)
-	SubCircuit(String, bool, IntV2, FourWayDir, #[serde(default)]String),
+	/// (Relative path of circuit, Whether to use block diagram, Position, Orientation, Name, Library name)
+	SubCircuit(String, bool, IntV2, FourWayDir, #[serde(default)]String, #[serde(default)]String),
 	GateAnd(LogicDeviceSave),
 	GateNand(LogicDeviceSave),
 	GateNot(LogicDeviceSave),
@@ -194,7 +197,7 @@ pub enum EnumAllLogicDevices {
 impl EnumAllLogicDevices {
 	pub fn to_dynamic(self_instance: Self) -> Result<Box<dyn LogicDevice>, String> {
 		match self_instance {
-			Self::SubCircuit(circuit_rel_path, displayed_as_block, pos, dir, name) => Ok(Box::new(load_circuit(&circuit_rel_path, displayed_as_block, false, pos, dir, name)?)),
+			Self::SubCircuit(circuit_rel_path, displayed_as_block, pos, dir, name, lib_name) => Ok(Box::new(load_circuit(&circuit_rel_path, displayed_as_block, false, pos, dir, name, lib_name)?)),
 			Self::GateAnd(gate) => Ok(Box::new(builtin_components::GateAnd::from_save(gate))),
 			Self::GateNand(gate) => Ok(Box::new(builtin_components::GateNand::from_save(gate))),
 			Self::GateNot(gate) => Ok(Box::new(builtin_components::GateNot::from_save(gate))),
@@ -219,7 +222,7 @@ impl EnumAllLogicDevices {
 	/// Example: "AND Gate" or "D Latch", for the component search UI
 	pub fn type_name(&self) -> String {
 		match self {
-			Self::SubCircuit(circuit_rel_path, _, _, _, _) => circuit_rel_path.clone(),
+			Self::SubCircuit(circuit_rel_path, _, _, _, _, _) => circuit_rel_path.clone(),
 			Self::GateAnd(_) => "AND Gate".to_owned(),
 			Self::GateNand(_) => "NAND Gate".to_owned(),
 			Self::GateNot(_) => "NOT Gate (OLD)".to_owned(),
@@ -243,23 +246,38 @@ impl EnumAllLogicDevices {
 	}
 }
 
+/// Lists all circuits from all libraries
+/// Returns: Vec<(Lib name, Circuit name)>
 #[cfg(feature = "using_filesystem")]
-pub fn list_all_circuit_files() -> Result<Vec<String>, String> {
-	let mut out = Vec::<String>::new();
-	for dir_entry_result in fs::read_dir(CIRCUITS_DIR).expect("Cannot find circuits directory") {
-		let dir_entry = to_string_err(dir_entry_result)?;
-		if to_string_err(dir_entry.metadata())?.is_file() {
-			let mut with_extention = dir_entry.file_name().into_string().unwrap();
-			with_extention.truncate(with_extention.len() - 5);
-			out.push(with_extention);
+pub fn list_all_circuit_files() -> Result<Vec<(String, String)>, String> {
+	let (libs, ordered_keys) = load_circuit_libraries()?;
+	let mut out = Vec::<(String, String)>::new();
+	for lib_name in &ordered_keys {
+		let dir_ = libs.get(lib_name).unwrap();
+		let mut this_dir_ordered = Vec::<String>::new();
+		for dir_entry_result in fs::read_dir(dir_).unwrap() {
+			let dir_entry = to_string_err(dir_entry_result)?;
+			if to_string_err(dir_entry.metadata())?.is_file() {
+				let mut with_extention = dir_entry.file_name().into_string().unwrap();
+				with_extention.truncate(with_extention.len() - 5);
+				this_dir_ordered.push(with_extention);
+			}
+		}
+		this_dir_ordered.sort_by(|a, b| a.partial_cmp(b).unwrap());
+		for file_name in this_dir_ordered {
+			out.push((lib_name.clone(), file_name));
 		}
 	}
 	Ok(out)
 }
 
 #[cfg(feature = "using_filesystem")]
-pub fn get_circuit_file_path(circuit_rel_path: &str) -> String {
-	CIRCUITS_DIR.to_owned() + circuit_rel_path + ".json"
+pub fn get_circuit_file_path(circuit_rel_path: &str, lib_name: &str) -> Result<String, String> {
+	let libs = load_circuit_libraries()?.0;
+	match libs.get(lib_name) {
+		Some(lib_dir) => Ok(lib_dir.to_owned() + circuit_rel_path + ".json"),
+		None => Err(format!("Circuit library \"{}\" doesn't exist", lib_name))
+	}
 }
 
 #[cfg(feature = "using_filesystem")]
@@ -271,4 +289,24 @@ pub fn load_file_with_better_error(path: &str) -> Result<String, String> {// Wit
 			Err(format!("Error reading file '{}': {}", path, err))
 		}
 	}
+}
+
+#[cfg(feature = "using_filesystem")]
+pub fn load_circuit_libraries() -> Result<(HashMap<String, String>, Vec<String>), String> {
+	let raw = load_file_with_better_error(CIRCUIT_LIBS_FILE)?;
+	let libs = to_string_err(serde_json::from_str::<HashMap<String, String>>(&raw))?;
+	// Check that they are valid directories
+	for (lib_name, dir_) in &libs {
+		if !(to_string_err_with_message(fs::metadata(dir_), &format!("Could not read metadata for \"{}\"", dir_))?.is_dir()) {
+			return Err(format!("\"{dir_}\" for circuit library \"{lib_name}\" is not a directory"));
+		}
+	}
+	// Check that the default library exists
+	if !libs.contains_key(DEFAULT_CIRCUIT_LIB) {
+		return Err(format!("There is no circuit library with the name \"{}\", which is required", DEFAULT_CIRCUIT_LIB));
+	}
+	// Get ordered key list
+	let mut ordered_keys: Vec<String> = libs.keys().map(|s| s.clone()).collect::<Vec<String>>();
+	ordered_keys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+	Ok((libs, ordered_keys))
 }

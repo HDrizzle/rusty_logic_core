@@ -2142,7 +2142,7 @@ pub struct LogicCircuit {
 	pub wires: RefCell<HashMap<u64, RefCell<Wire>>>,
 	pub splitters: RefCell<HashMap<u64, Splitter>>,
 	pub labels: RefCell<HashMap<u64, GraphicLabel>>,
-	pub save_path: String,
+	pub save_name: String,
 	/// Inspired by CircuitVerse, block-diagram version of circuit
 	/// {pin ID: (relative position (ending), direction, whether to show name)}
 	pub block_pin_positions: HashMap<u64, (IntV2, FourWayDir, bool)>,
@@ -2167,7 +2167,8 @@ pub struct LogicCircuit {
 	pub highlighted_net_opt: Option<u64>,
 	/// Prevents clock changes when circuit propagation from something else (such as previous clock edge) isn't complete yet
 	/// (Any change (propagation in progress), last clock state when timing diagram was updated)
-	pub propagation_done: RefCell<(bool, bool)>
+	pub propagation_done: RefCell<(bool, bool)>,
+	lib_name: String
 }
 
 impl LogicCircuit {
@@ -2177,9 +2178,10 @@ impl LogicCircuit {
 		type_name: String,
 		fixed_sub_cycles_opt: Option<usize>,
 		wires: HashMap<u64, Wire>,
-		save_path: String,
+		save_name: String,
 		displayed_as_block: bool,
-		is_toplevel: bool
+		is_toplevel: bool,
+		lib_name: String
 	) -> Result<Self, String> {
 		let mut components = HashMap::<u64, RefCell<Box<dyn LogicDevice>>>::new();
 		for (ref_, comp) in components_not_celled.into_iter() {
@@ -2202,7 +2204,7 @@ impl LogicCircuit {
 			wires: RefCell::new(hashmap_into_refcells(wires)),
 			splitters: RefCell::new(HashMap::new()),
 			labels: RefCell::new(HashMap::new()),
-			save_path,
+			save_name,
 			block_pin_positions: HashMap::new(),
 			displayed_as_block,
 			tool: RefCell::new(Tool::default()),
@@ -2216,7 +2218,8 @@ impl LogicCircuit {
 			timing_probe_order: Vec::new(),
 			bit_width_errors: Vec::new(),
 			highlighted_net_opt: None,
-			propagation_done: RefCell::new((false, false))
+			propagation_done: RefCell::new((false, false)),
+			lib_name: lib_name
 		};
 		new.setup_external_connection_sources();
 		new.recompute_default_layout();
@@ -2225,8 +2228,9 @@ impl LogicCircuit {
 	}
 	pub fn new_mostly_default(
 		type_name: String,
-		save_path: String,
-		toplevel: bool
+		save_name: String,
+		toplevel: bool,
+		lib_name: String
 	) -> Self {
 		Self::new(
 			HashMap::new(),
@@ -2234,12 +2238,13 @@ impl LogicCircuit {
 			type_name,
 			None,
 			HashMap::new(),
-			save_path,
+			save_name,
 			false,
-			toplevel
+			toplevel,
+			lib_name
 		).unwrap()
 	}
-	pub fn from_save(save: LogicCircuitSave, save_path: String, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String) -> Result<Self, String> {
+	pub fn from_save(save: LogicCircuitSave, save_name: String, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String, lib_name: String) -> Result<Self, String> {
 		// Init compnents
 		let mut components = HashMap::<u64, RefCell<Box<dyn LogicDevice>>>::new();
 		for (ref_, save_comp) in save.components.into_iter() {
@@ -2275,7 +2280,7 @@ impl LogicCircuit {
 			wires: RefCell::new(reconstructed_wires),
 			splitters: RefCell::new(HashMap::from_iter(save.splitters.into_iter().map(|t| -> (u64, Splitter) {(t.0, Splitter::load(t.1))}))),
 			labels: RefCell::new(HashMap::from_iter(save.labels.into_iter().map(|t| -> (u64, GraphicLabel) {(t.0, GraphicLabel::load(t.1))}))),
-			save_path,
+			save_name,
 			block_pin_positions: save.block_pin_positions,
 			displayed_as_block,
 			tool: RefCell::new(Tool::default()),
@@ -2289,7 +2294,8 @@ impl LogicCircuit {
 			timing_probe_order: save.timing_probe_order,
 			bit_width_errors: Vec::new(),
 			highlighted_net_opt: None,
-			propagation_done: RefCell::new((false, false))
+			propagation_done: RefCell::new((false, false)),
+			lib_name
 		};
 		out.setup_external_connection_sources();
 		out.check_wire_geometry_and_connections(None);
@@ -3144,11 +3150,11 @@ impl LogicCircuit {
 		let (wires, comps) = self.flatten_recursive(apply_transform)?;
 		save.wires = vec_to_u64_keyed_hashmap(wires);
 		save.components = vec_to_u64_keyed_hashmap(comps);
-		let save_path = format!("{}_flattened", self.save_path);
+		let save_path = format!("{}_flattened", self.save_name);
 		save.type_name = format!("{} (flattened)", save.type_name);
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
-		to_string_err(fs::write(resource_interface::get_circuit_file_path(&save_path), &raw_string))?;
-		Ok(EnumAllLogicDevices::SubCircuit(save_path, self.displayed_as_block, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone()))
+		to_string_err(fs::write(resource_interface::get_circuit_file_path(&save_path, &self.lib_name)?, &raw_string))?;
+		Ok(EnumAllLogicDevices::SubCircuit(save_path, self.displayed_as_block, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone(), self.lib_name.clone()))
 	}
 	/// Recursively extracts all sub-circuits that don't have a fixed sub-cycle count
 	#[cfg(feature = "using_filesystem")]
@@ -3374,7 +3380,7 @@ impl LogicCircuit {
 	pub fn save_circuit(&self) -> Result<(), String> {
 		let save = self.create_save_circuit()?;
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
-		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_path), &raw_string))?;
+		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_name, &self.lib_name)?, &raw_string))?;
 		Ok(())
 	}
 	pub fn draw_as_block<'a>(&self, draw: &Box<dyn DrawInterface>, for_block_layout_edit: bool) {
@@ -3448,7 +3454,7 @@ impl LogicDevice for LogicCircuit {
 	/// The actual save is done with `LogicCircuit::save_circuit()`
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		// Path to save file
-		Ok(EnumAllLogicDevices::SubCircuit(self.save_path.clone(), self.displayed_as_block, self.get_ui_data().position, self.get_ui_data().direction, self.generic_device.name.clone()))
+		Ok(EnumAllLogicDevices::SubCircuit(self.save_name.clone(), self.displayed_as_block, self.get_ui_data().position, self.get_ui_data().direction, self.generic_device.name.clone(), self.lib_name.clone()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		if self.displayed_as_block {
@@ -3616,7 +3622,7 @@ impl LogicDevice for LogicCircuit {
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		if let SelectProperty::ReloadCircuit(reload, _) = property {
 			if reload {
-				match resource_interface::load_circuit(&self.save_path, self.displayed_as_block, false, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone()) {
+				match resource_interface::load_circuit(&self.save_name, self.displayed_as_block, false, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone(), self.lib_name.clone()) {
 					Ok(new) => {
 						*self = new;
 					},

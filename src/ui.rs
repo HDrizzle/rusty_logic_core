@@ -1,7 +1,7 @@
 //! Only UI stuff
 
 use crate::{builtin_components, prelude::*, resource_interface, simulator::{AncestryStack, GraphicSelectableItemRef, SelectionState, TimingDiagram, TimingTiagramRunningState, TimingDiagramTimestamp, Tool}};
-use eframe::{egui::{self, containers::Popup, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, Color32, DragValue, FontFamily, FontId, Frame, Galley, Painter, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2, Window, response::Response, Key, KeyboardShortcut, Modifiers, PointerButton}, emath, epaint::{PathStroke, TextShape}};
+use eframe::{egui::{self, containers::Popup, response::Response, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, Color32, DragValue, FontFamily, FontId, Frame, Galley, Key, KeyboardShortcut, Modifiers, Painter, PointerButton, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2, Window}, emath, epaint::{PathStroke, TextShape}};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
@@ -1188,10 +1188,10 @@ impl LogicCircuitToplevelView {
 		out
 	}
 	/// Returns: (Optional position to set the mouse to, Optional new circuit tab to open)
-	pub fn draw(&mut self, ui: &mut Ui, styles: Rc<Styles>, #[allow(unused)]screen_top_left: Pos2) -> (Option<Pos2>, Option<String>) {
+	pub fn draw(&mut self, ui: &mut Ui, styles: Rc<Styles>, #[allow(unused)]screen_top_left: Pos2) -> (Option<Pos2>, Option<(String, String)>, Response) {
 		#[allow(unused_mut)]
 		let mut return_new_mouse_pos = Option::<Pos2>::None;
-		let mut return_new_circuit_tab = Option::<String>::None;
+		let mut return_new_circuit_tab = Option::<(String, String)>::None;
 		let canvas_size: Vec2 = ui.available_size_before_wrap();
 		let anything_in_focus: bool = ui.memory(|memory| memory.focused().is_some());
 		let inner_response = Frame::canvas(ui.style()).show::<(Vec2, V2)>(ui, |ui| {
@@ -1283,8 +1283,8 @@ impl LogicCircuitToplevelView {
 				if ui.button("+ Component / Subcircuit").clicked() {
 					// Update component search list
 					self.all_logic_devices_search = builtin_components::list_all_basic_components();
-					for file_path in resource_interface::list_all_circuit_files().unwrap() {
-						self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(file_path, false, IntV2(0, 0), FourWayDir::default(), String::new()));
+					for (lib_name, file_name) in resource_interface::list_all_circuit_files().unwrap() {
+						self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(file_name, false, IntV2(0, 0), FourWayDir::default(), String::new(), lib_name));
 					}
 					self.showing_component_popup = true;
 				}
@@ -1442,12 +1442,12 @@ impl LogicCircuitToplevelView {
 			Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
 				ui.label("Recursively flatten sub circuits");
 				ui.separator();
-				ui.label(format!("This feature will create a copy of this circuit but all the wires and components of sub-circuits extracted into the \"top layer\". Sub-circuits with fixed compute cycles will not be extracted but flattened versions of them will still be created. The intended use-case of this is to make a circuit faster to simulate. The flattened copy file size will be approximately the sum of all sub-circuits plus the toplevel wires and components. Running this function might create large files in the {} directory.", resource_interface::CIRCUITS_DIR));
+				ui.label(format!("This feature will create a copy of this circuit but with all the wires and components of sub-circuits extracted into the \"top layer\". Sub-circuits with fixed compute cycles will not be extracted but flattened versions of them will still be created. The intended use-case of this is to make a circuit faster to simulate. The flattened copy file size will be approximately the sum of all sub-circuits plus the toplevel wires and components. Running this function might create large files."));
 				ui.horizontal(|ui| {
 					if ui.button("Flatten Circuit").clicked() {
 						match self.circuit.flatten(true) {
-							Ok(device_save) => if let EnumAllLogicDevices::SubCircuit(save_path, _, _, _, _) = device_save {
-								return_new_circuit_tab = Some(save_path);
+							Ok(device_save) => if let EnumAllLogicDevices::SubCircuit(save_path, _, _, _, _, lib_name) = device_save {
+								return_new_circuit_tab = Some((save_path, lib_name));
 								self.showing_flatten_opoup = false;
 							}
 							else {
@@ -1473,7 +1473,7 @@ impl LogicCircuitToplevelView {
 			});*/
 			Window::new("Timing Diagram").anchor(Align2::RIGHT_TOP, Vec2::new(0.0, inner_response.response.rect.top())).collapsible(true).resizable(true).show(ui.ctx(), |ui| self.circuit.show_timing_diagram_ui(ui, styles, &mut self.timing));
 		}
-		(return_new_mouse_pos, return_new_circuit_tab)
+		(return_new_mouse_pos, return_new_circuit_tab, inner_response.response)
 	}
 	/// Runs `compute_step()` repeatedly on the circuit until there are no changes, there must be a limit because there are circuits (ex. NOT gate connected to itself) where this would otherwise never end
 	pub fn propagate_until_stable(&mut self, propagation_limit: usize) -> bool {
@@ -1579,15 +1579,79 @@ impl LogicCircuitToplevelView {
 	}
 }
 
+#[cfg(feature = "using_filesystem")]
+struct NewCircuitWindow {
+	lib_name: String,
+	name: String,
+	file_name: String
+}
+
+#[cfg(feature = "using_filesystem")]
+impl NewCircuitWindow {
+	pub fn new() -> Self {
+		Self {
+			lib_name: DEFAULT_CIRCUIT_LIB.to_owned(),
+			name: String::new(),
+			file_name: String::new()
+		}
+	}
+	pub fn clear(&mut self) {
+		self.lib_name = DEFAULT_CIRCUIT_LIB.to_owned();
+		self.name = String::new();
+		self.file_name = String::new();
+	}
+	/// Returns: Option<New circuit>
+	pub fn show(&mut self, ui: &mut Ui, circuit_libs_ordered: &Vec<String>) -> Option<LogicCircuit> {
+		let mut error_opt: Option<String> = None;
+		ui.horizontal(|ui| {
+			ui.label("Name: ");
+			ui.text_edit_singleline(&mut self.name);
+		});
+		ui.horizontal(|ui| {
+			ui.label("Save file name: ");
+			ui.text_edit_singleline(&mut self.file_name);
+			ui.label(".json");
+		});
+		// Check
+		for char in self.file_name.chars() {
+			if !REASONABLE_FILENAME_CHARS.contains(char) {
+				error_opt = Some(format!("File name contains disallowed char \"{}\"", char));
+			}
+		}
+		ui.horizontal(|ui| {
+			ui.label("Circuit library: ");
+			egui::ComboBox::new("New circuit library select", "")
+				.selected_text(&self.lib_name)
+				.show_ui(ui, |ui| {
+					for lib_option in circuit_libs_ordered {
+						ui.selectable_value(&mut self.lib_name, lib_option.clone(), lib_option);
+					}
+				});
+		});
+		let create_button = Button::new("Create Circuit");
+		if ui.add_enabled(error_opt.is_none(), create_button).clicked() {
+			return Some(LogicCircuit::new_mostly_default(self.name.clone(), self.file_name.clone(), true, self.lib_name.clone()));
+		}
+		if let Some(error) = error_opt {
+			ui.colored_label(u8_3_to_color32([255, 0, 0]), error);
+		}
+		None
+	}
+}
 
 pub struct App {
 	styles: Rc<Styles>,
 	circuit_tabs: Vec<LogicCircuitToplevelView>,
 	current_tab_index: usize,
-	new_circuit_name: String,
-	new_circuit_path: String,
 	load_circuit_err_opt: Option<String>,
-	readme_file: String
+	readme_file: String,
+	/// Vec<(Library, File)>
+	circuits_ordered: Vec<(String, String)>,
+	circuit_libs_ordered: Vec<String>,
+	#[cfg(feature = "using_filesystem")]
+	new_circuit_window: NewCircuitWindow,
+	#[cfg(feature = "using_filesystem")]
+	showing_new_circuit_popup: bool
 }
 
 impl App {
@@ -1600,18 +1664,28 @@ impl App {
 				Styles::default()
 			}
 		};
-		Self {
+		let mut out = Self {
 			styles: Rc::new(styles),
 			circuit_tabs: Vec::new(),//vec![LogicCircuitToplevelView::new(create_simple_circuit(), false)],
 			current_tab_index: 0,
-			new_circuit_name: String::new(),
-			new_circuit_path: String::new(),
 			load_circuit_err_opt: None,
-			readme_file: resource_interface::load_file_with_better_error("README.md").unwrap()
-		}
+			readme_file: resource_interface::load_file_with_better_error("README.md").unwrap(),
+			circuits_ordered: Vec::new(),
+			circuit_libs_ordered: Vec::new(),
+			#[cfg(feature = "using_filesystem")]
+			new_circuit_window: NewCircuitWindow::new(),
+			showing_new_circuit_popup: false
+		};
+		out.load_circuit_names_and_libs().unwrap();
+		out
 	}
-	fn load_circuit_tab(&mut self, file_path: &str) {
-		match resource_interface::load_circuit(file_path, false, true, IntV2(0, 0), FourWayDir::default(), String::new()) {
+	fn load_circuit_names_and_libs(&mut self) -> Result<(), String> {
+		self.circuits_ordered = resource_interface::list_all_circuit_files()?;
+		self.circuit_libs_ordered = resource_interface::load_circuit_libraries()?.1;
+		Ok(())
+	}
+	fn load_circuit_tab(&mut self, file_name: &str, lib_name: &str) {
+		match resource_interface::load_circuit(file_name, false, true, IntV2(0, 0), FourWayDir::default(), String::new(), lib_name.to_owned()) {
 			Ok(circuit) => {
 				// RIP Joe Sullivan, You did a lot for Haley
 				self.circuit_tabs.push(LogicCircuitToplevelView::new(circuit, true, &self.styles));
@@ -1650,36 +1724,27 @@ impl eframe::App for App {
 					}
 					let new_button_response = ui.button("+");
 					if new_button_response.clicked() {
-						self.new_circuit_name = String::new();
-						self.new_circuit_path = String::new();
 						self.load_circuit_err_opt = None;
+						self.load_circuit_names_and_libs().unwrap();
 					}
 					Popup::menu(&new_button_response).close_behavior(PopupCloseBehavior::CloseOnClickOutside).align(RectAlign::RIGHT_START).align_alternatives(&[RectAlign::LEFT_START]).show(|ui| {
-						ui.menu_button("New Circuit", |ui| {
-							ui.horizontal(|ui| {
-								ui.label("Name: ");
-								ui.text_edit_singleline(&mut self.new_circuit_name);
-							});
-							ui.horizontal(|ui| {
-								ui.label("Save file path: ");
-								ui.text_edit_singleline(&mut self.new_circuit_path);
-								ui.label(".json");
-							});
-							if ui.button("Create Circuit").clicked() {
-								self.circuit_tabs.push(LogicCircuitToplevelView::new(LogicCircuit::new_mostly_default(self.new_circuit_name.clone(), self.new_circuit_path.clone(), true), false, &self.styles));
-								self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
-							}
-						});
+						if ui.button("New Circuit...").clicked() {
+							self.showing_new_circuit_popup = true;
+							self.new_circuit_window.clear();
+						}
 						ui.menu_button("Load Circuit", |ui| {
-							let files_list = resource_interface::list_all_circuit_files().unwrap();
-							if files_list.len() == 0 {
-								ui.label(format!("No circuit files found in {}", resource_interface::CIRCUITS_DIR));
+							if self.circuits_ordered.len() == 0 {
+								ui.label(format!("No circuit files found across all libraries"));
 							}
 							ScrollArea::vertical().show(ui, |ui| {
-								for file_path in files_list {
-									if ui.selectable_label(false, &file_path).clicked() {
-										self.load_circuit_tab(&file_path);
+								let mut load_info_opt: Option<(String, String)> = None;
+								for (lib_name, file_name) in &self.circuits_ordered {
+									if ui.selectable_label(false, &format!("{}/{}", lib_name, file_name)).clicked() {
+										load_info_opt = Some((lib_name.clone(), file_name.clone()));
 									}
+								}
+								if let Some(load_info) = load_info_opt {
+									self.load_circuit_tab(&load_info.1, &load_info.0);
 								}
 							});
 							if let Some(load_error) = &self.load_circuit_err_opt {
@@ -1689,25 +1754,35 @@ impl eframe::App for App {
 					});
 				});
 			});
-			if self.current_tab_index == 0 {// Home tab
+			let response_for_popups: Response = if self.current_tab_index == 0 {// Home tab
 				ui.vertical(|ui| {
 					ScrollArea::vertical().show(ui, |ui| {
 						CommonMarkViewer::new().show(ui, &mut CommonMarkCache::default(), &self.readme_file);
 					});
-				});
+				}).response
 			}
 			else {
 				let circuit_toplevel: &mut LogicCircuitToplevelView = &mut self.circuit_tabs[self.current_tab_index - 1];
 				#[allow(unused)]
-				let (new_mouse_pos_opt, new_circuit_tab_opt): (Option<Pos2>, Option<String>) = circuit_toplevel.draw(ui, Rc::clone(&self.styles), ctx.screen_rect().min);// TODO: Get actual window top-left position
+				let (new_mouse_pos_opt, new_circuit_tab_opt, response): (Option<Pos2>, Option<(String, String)>, Response) = circuit_toplevel.draw(ui, Rc::clone(&self.styles), ctx.screen_rect().min);// TODO: Get actual window top-left position
 				#[cfg(feature = "kicad_scrolling")]
 				if let Some(new_pos) = new_mouse_pos_opt {
 					let mouse = mouse_rs::Mouse::new();
 					mouse.move_to(new_pos.x as i32, new_pos.y as i32).unwrap();
 				}
 				if let Some(new_circuit_tab) = new_circuit_tab_opt {
-					self.load_circuit_tab(&new_circuit_tab);
+					self.load_circuit_tab(&new_circuit_tab.0, &new_circuit_tab.1);
 				}
+				response
+			};
+			if self.showing_new_circuit_popup {
+				Popup::from_response(&response_for_popups).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
+					if let Some(new_circuit) = self.new_circuit_window.show(ui, &self.circuit_libs_ordered) {
+						self.circuit_tabs.push(LogicCircuitToplevelView::new(new_circuit, false, &self.styles));
+						self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
+						self.showing_new_circuit_popup = false;
+					}
+				});
 			}
 		});
 	}
