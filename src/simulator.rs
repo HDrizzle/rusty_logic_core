@@ -2168,7 +2168,7 @@ pub struct LogicCircuit {
 	/// Prevents clock changes when circuit propagation from something else (such as previous clock edge) isn't complete yet
 	/// (Any change (propagation in progress), last clock state when timing diagram was updated)
 	pub propagation_done: RefCell<(bool, bool)>,
-	lib_name: String
+	pub lib_name: String
 }
 
 impl LogicCircuit {

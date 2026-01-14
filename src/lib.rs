@@ -31,6 +31,7 @@ pub mod prelude {
 	/// Square box shown around wire ends and unconnected pins to start a wire from
 	pub const WIRE_START_POINT_HALF_WIDTH: f32 = 0.25;
 	pub const UI_MAX_FRAME_SIMULATION_TIME: f32 = 0.033;
+	pub const MAC_DS_STORE: &str = ".DS_Store";
 	pub type V2 = Vector2<f32>;
 	#[cfg(feature = "using_egui")]
 	use eframe::egui::{Align2, Align, Color32, CornerRadius};
@@ -450,7 +451,7 @@ pub mod prelude {
 	pub fn to_string_err_with_message<T, E: ToString>(result: Result<T, E>, message: &str) -> Result<T, String> {
 		match result {
 			Ok(t) => Ok(t),
-			Err(e) => Err(format!("Message: {}, Error: {}", message, e.to_string()))
+			Err(e) => Err(format!("{}: {}", message, e.to_string()))
 		}
 	}
 

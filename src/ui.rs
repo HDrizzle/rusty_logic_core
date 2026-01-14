@@ -1143,6 +1143,88 @@ impl LogicCircuit {
 	}
 }
 
+struct MoveCircuitPopup {
+	old_file_name: String,
+	old_lib: String,
+	new_file_name: String,
+	new_lib: String,
+	circuit_libs_ordered: Vec<String>,
+	move_error_opt: Option<String>
+}
+
+impl MoveCircuitPopup {
+	pub fn new(new_file_name: String, new_lib: String) -> Self {
+		Self {
+			old_file_name: new_file_name.clone(),
+			old_lib: new_lib.clone(),
+			new_file_name,
+			new_lib,
+			circuit_libs_ordered: resource_interface::load_circuit_libraries().unwrap().1,
+			move_error_opt: None
+		}
+	}
+	/// Shows UI, meant to be in a popup
+	/// Returns: (Whether to close the popup, Whether to save the circuit, Whether to reload the circuit)
+	pub fn show(&mut self, ui: &mut Ui, saved: bool) -> (bool, bool, bool) {
+		let mut out = (false, false, false);
+		let mut transient_error_opt: Option<String> = None;
+		ui.label("Move circuit");
+		ui.separator();
+		ui.label("WARNING: This feature will edit any circuits in which this circuit is used as a subcircuit, so if there are any tabs open for those circuits then saving them afterwards will corrupt them.");
+		if !saved {
+			transient_error_opt = Some("The circuit must be saved first".to_owned());
+		}
+		ui.horizontal(|ui| {
+			ui.label("Save file name: ");
+			ui.text_edit_singleline(&mut self.new_file_name);
+			ui.label(".json");
+		});
+		// Check
+		for char in self.new_file_name.chars() {
+			if !REASONABLE_FILENAME_CHARS.contains(char) {
+				transient_error_opt = Some(format!("File name contains disallowed char \"{}\"", char));
+			}
+		}
+		ui.horizontal(|ui| {
+			ui.label("Circuit library: ");
+			egui::ComboBox::new("New circuit library select", "")
+				.selected_text(&self.new_lib)
+				.show_ui(ui, |ui| {
+					for lib_option in &self.circuit_libs_ordered {
+						ui.selectable_value(&mut self.new_lib, lib_option.clone(), lib_option);
+					}
+				});
+		});
+		if let Some(error) = &transient_error_opt {
+			ui.colored_label(u8_3_to_color32([255, 0, 0]), error);
+		}
+		ui.horizontal(|ui| {
+			if ui.add_enabled(transient_error_opt.is_none(), Button::new("Move")).clicked() {
+				let move_res = resource_interface::move_circuit(&self.old_lib, &self.old_file_name, &self.new_lib, &self.new_file_name);
+				match move_res {
+					Ok(()) => {
+						out.0 = true;
+						out.2 = true;
+					},
+					Err(e) => {
+						self.move_error_opt = Some(e);
+					}
+				}
+			}
+			if ui.add_enabled(!saved, Button::new("Save")).clicked() {
+				out.1 = true;
+			}
+			if ui.button("Cancel").clicked() {
+				out.0 = true;
+			}
+		});
+		if let Some(error) = &self.move_error_opt {
+			ui.colored_label(u8_3_to_color32([255, 0, 0]), error);
+		}
+		out
+	}
+}
+
 pub struct LogicCircuitToplevelView {
 	/// The top-level circuit of this view, its pins are rendered as interactive I/O pins
 	circuit: LogicCircuit,
@@ -1162,6 +1244,7 @@ pub struct LogicCircuitToplevelView {
 	showing_flatten_opoup: bool,
 	flatten_error: Option<String>,
 	timing: TimingDiagram,
+	move_popup_opt: Option<MoveCircuitPopup>
 }
 
 impl LogicCircuitToplevelView {
@@ -1181,17 +1264,19 @@ impl LogicCircuitToplevelView {
 			frame_compute_cycles: 0,
 			showing_flatten_opoup: false,
 			flatten_error: None,
-			timing: TimingDiagram::from_probe_id_list(&timing_probe_order)
+			timing: TimingDiagram::from_probe_id_list(&timing_probe_order),
+			move_popup_opt: None
 		};
 		out.circuit.update_probe_net_connections_and_timing(&mut out.timing);
 		// Done
 		out
 	}
-	/// Returns: (Optional position to set the mouse to, Optional new circuit tab to open)
-	pub fn draw(&mut self, ui: &mut Ui, styles: Rc<Styles>, #[allow(unused)]screen_top_left: Pos2) -> (Option<Pos2>, Option<(String, String)>, Response) {
+	/// Returns: (Optional position to set the mouse to, Optional new circuit tab to open, Whether to reload tab)
+	pub fn draw(&mut self, ui: &mut Ui, styles: Rc<Styles>, #[allow(unused)]screen_top_left: Pos2) -> (Option<Pos2>, Option<(String, String)>, Response, bool) {
 		#[allow(unused_mut)]
 		let mut return_new_mouse_pos = Option::<Pos2>::None;
 		let mut return_new_circuit_tab = Option::<(String, String)>::None;
+		let mut return_reload = false;
 		let canvas_size: Vec2 = ui.available_size_before_wrap();
 		let anything_in_focus: bool = ui.memory(|memory| memory.focused().is_some());
 		let inner_response = Frame::canvas(ui.style()).show::<(Vec2, V2)>(ui, |ui| {
@@ -1316,9 +1401,17 @@ impl LogicCircuitToplevelView {
 			// Circuit settings (clock speed, etc)
 			ui.collapsing("Circuit Settings", |ui| {
 				ui.horizontal(|ui| {
-					ui.label("Name");
+					ui.label("Name:");
 					ui.add(TextEdit::singleline(&mut self.circuit.type_name).desired_width(100.0));
 				});
+				ui.horizontal(|ui| {
+					ui.label("File name:");
+					ui.code(format!("{}.json", &self.circuit.save_name))
+				});
+				ui.label(format!("Library: {}", &self.circuit.lib_name));
+				if ui.button("Change library or filename...").clicked() {
+					self.move_popup_opt = Some(MoveCircuitPopup::new(self.circuit.save_name.clone(), self.circuit.lib_name.clone()));
+				}
 				ui.horizontal(|ui| {
 					let mut fixed_cycles_enabled = self.circuit.fixed_sub_cycles_opt.is_some();
 					ui.checkbox(&mut fixed_cycles_enabled, "Fixed sub cycles");
@@ -1467,13 +1560,26 @@ impl LogicCircuitToplevelView {
 				}
 			});
 		}
+		else if self.move_popup_opt.is_some() {
+			Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
+				let (close, save, reload) = self.move_popup_opt.as_mut().unwrap().show(ui, self.saved);
+				if close {
+					self.move_popup_opt = None;
+				}
+				if save {
+					self.circuit.save_circuit().unwrap();
+					self.saved = true;
+				}
+				return_reload |= reload;
+			});
+		}
 		else {
 			/*Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
 				ScrollArea::both().show(ui, self.)
 			});*/
 			Window::new("Timing Diagram").anchor(Align2::RIGHT_TOP, Vec2::new(0.0, inner_response.response.rect.top())).collapsible(true).resizable(true).show(ui.ctx(), |ui| self.circuit.show_timing_diagram_ui(ui, styles, &mut self.timing));
 		}
-		(return_new_mouse_pos, return_new_circuit_tab, inner_response.response)
+		(return_new_mouse_pos, return_new_circuit_tab, inner_response.response, return_reload)
 	}
 	/// Runs `compute_step()` repeatedly on the circuit until there are no changes, there must be a limit because there are circuits (ex. NOT gate connected to itself) where this would otherwise never end
 	pub fn propagate_until_stable(&mut self, propagation_limit: usize) -> bool {
@@ -1650,6 +1756,7 @@ impl NewCircuitWindow {
 pub struct App {
 	styles: Rc<Styles>,
 	circuit_tabs: Vec<LogicCircuitToplevelView>,
+	/// 0 is for the home tab, so indexing for `circuit_tabs` starts at 1
 	current_tab_index: usize,
 	load_circuit_err_opt: Option<String>,
 	readme_file: String,
@@ -1692,12 +1799,27 @@ impl App {
 		self.circuit_libs_ordered = resource_interface::load_circuit_libraries()?.1;
 		Ok(())
 	}
-	fn load_circuit_tab(&mut self, file_name: &str, lib_name: &str) {
-		match resource_interface::load_circuit(file_name, false, true, IntV2(0, 0), FourWayDir::default(), String::new(), lib_name.to_owned()) {
+	fn load_circuit_tab(&mut self, file_name: &str, lib_name: &str) -> Result<LogicCircuit, String> {
+		resource_interface::load_circuit(file_name, false, true, IntV2(0, 0), FourWayDir::default(), String::new(), lib_name.to_owned())
+	}
+	fn new_circuit_tab(&mut self, file_name: &str, lib_name: &str) {
+		match self.load_circuit_tab(file_name, lib_name) {
 			Ok(circuit) => {
 				// RIP Joe Sullivan, You did a lot for Haley
 				self.circuit_tabs.push(LogicCircuitToplevelView::new(circuit, true, &self.styles));
 				self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
+			},
+			Err(e) => {
+				self.load_circuit_err_opt = Some(e);
+			}
+		}
+	}
+	fn reload_tab(&mut self, tab_index: usize) {
+		let actual_tab_index = tab_index - 1;
+		let circuit = &self.circuit_tabs[actual_tab_index].circuit;
+		match self.load_circuit_tab(&circuit.save_name.clone(), &circuit.lib_name.clone()) {
+			Ok(circuit) => {
+				self.circuit_tabs[actual_tab_index] = LogicCircuitToplevelView::new(circuit, true, &self.styles);
 			},
 			Err(e) => {
 				self.load_circuit_err_opt = Some(e);
@@ -1709,6 +1831,7 @@ impl App {
 impl eframe::App for App {
 	fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
 		let circuit_names: Vec<String> = self.circuit_tabs.iter().map(|toplevel| toplevel.circuit.type_name.clone()).collect();
+		let mut i_to_delete_opt: Option<usize> = None;
 		egui::CentralPanel::default().show(ctx, |ui: &mut Ui| {
 			// This function by default is only run upon user interaction, so copied this from https://users.rust-lang.org/t/issues-while-writing-a-clock-with-egui/102752
 			ui.ctx().request_repaint();
@@ -1724,9 +1847,14 @@ impl eframe::App for App {
 							true => circuit_name,
 							false => &format!("{} *", circuit_name)
 						};
-						if ui.add_enabled(self.current_tab_index != i + 1, Button::new(name_for_ui)).clicked() {
-							if i + 1 != self.current_tab_index {
-								self.current_tab_index = i + 1;
+						let is_current_tab: bool = self.current_tab_index == i + 1;
+						if ui.add_enabled(!is_current_tab, Button::new(name_for_ui)).clicked() {
+							self.current_tab_index = i + 1;
+						}
+						// Tab close button
+						if is_current_tab {
+							if ui.button("x").clicked() {
+								i_to_delete_opt = Some(i);
 							}
 						}
 					}
@@ -1752,7 +1880,7 @@ impl eframe::App for App {
 									}
 								}
 								if let Some(load_info) = load_info_opt {
-									self.load_circuit_tab(&load_info.1, &load_info.0);
+									self.new_circuit_tab(&load_info.1, &load_info.0);
 								}
 							});
 							if let Some(load_error) = &self.load_circuit_err_opt {
@@ -1772,14 +1900,17 @@ impl eframe::App for App {
 			else {
 				let circuit_toplevel: &mut LogicCircuitToplevelView = &mut self.circuit_tabs[self.current_tab_index - 1];
 				#[allow(unused)]
-				let (new_mouse_pos_opt, new_circuit_tab_opt, response): (Option<Pos2>, Option<(String, String)>, Response) = circuit_toplevel.draw(ui, Rc::clone(&self.styles), ctx.screen_rect().min);// TODO: Get actual window top-left position
+				let (new_mouse_pos_opt, new_circuit_tab_opt, response, reload_tab): (Option<Pos2>, Option<(String, String)>, Response, bool) = circuit_toplevel.draw(ui, Rc::clone(&self.styles), ctx.screen_rect().min);// TODO: Get actual window top-left position
 				#[cfg(feature = "kicad_scrolling")]
 				if let Some(new_pos) = new_mouse_pos_opt {
 					let mouse = mouse_rs::Mouse::new();
 					mouse.move_to(new_pos.x as i32, new_pos.y as i32).unwrap();
 				}
 				if let Some(new_circuit_tab) = new_circuit_tab_opt {
-					self.load_circuit_tab(&new_circuit_tab.0, &new_circuit_tab.1);
+					self.new_circuit_tab(&new_circuit_tab.0, &new_circuit_tab.1);
+				}
+				if reload_tab {
+					self.reload_tab(self.current_tab_index);
 				}
 				response
 			};
@@ -1796,6 +1927,12 @@ impl eframe::App for App {
 				});
 			}
 		});
+		if let Some(i_to_delete) = i_to_delete_opt {
+			self.circuit_tabs.remove(i_to_delete);
+			if self.current_tab_index >= i_to_delete + 1 {
+				self.current_tab_index -= 1;
+			}
+		}
 	}
 }
 

@@ -28,8 +28,8 @@ pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: 
 	#[cfg(feature = "using_filesystem")]
 	{
 		let path = get_circuit_file_path(circuit_rel_path, &lib_name)?;
-		let string_raw = load_file_with_better_error(&path)?;
-		save_opt = Some(match to_string_err(serde_json::from_str::<LogicCircuitSave>(&string_raw)) {
+		let string_raw = to_string_err_with_message(load_file_with_better_error(&path), &format!("Could not load circuit file (toplevel={})", toplevel))?;
+		save_opt = Some(match to_string_err_with_message(serde_json::from_str::<LogicCircuitSave>(&string_raw), &format!("Could not deserialize circuit file at \"{}\"", path)) {
 			Ok(circuit) => Ok(circuit),
 			Err(err_new_format) => {
 				//println!("Load error: {}, attempting to load old format", &err_new_format);
@@ -197,7 +197,7 @@ pub enum EnumAllLogicDevices {
 impl EnumAllLogicDevices {
 	pub fn to_dynamic(self_instance: Self) -> Result<Box<dyn LogicDevice>, String> {
 		match self_instance {
-			Self::SubCircuit(circuit_rel_path, displayed_as_block, pos, dir, name, lib_name) => Ok(Box::new(load_circuit(&circuit_rel_path, displayed_as_block, false, pos, dir, name, lib_name)?)),
+			Self::SubCircuit(circuit_rel_path, displayed_as_block, pos, dir, name, lib_name) => Ok(Box::new(to_string_err_with_message(load_circuit(&circuit_rel_path, displayed_as_block, false, pos, dir, name, lib_name), "While loading sub circuit")?)),
 			Self::GateAnd(gate) => Ok(Box::new(builtin_components::GateAnd::from_save(gate))),
 			Self::GateNand(gate) => Ok(Box::new(builtin_components::GateNand::from_save(gate))),
 			Self::GateNot(gate) => Ok(Box::new(builtin_components::GateNot::from_save(gate))),
@@ -259,6 +259,9 @@ pub fn list_all_circuit_files() -> Result<Vec<(String, String)>, String> {
 			let dir_entry = to_string_err(dir_entry_result)?;
 			if to_string_err(dir_entry.metadata())?.is_file() {
 				let mut with_extention = dir_entry.file_name().into_string().unwrap();
+				if with_extention == MAC_DS_STORE {
+					continue;
+				}
 				with_extention.truncate(with_extention.len() - 5);
 				this_dir_ordered.push(with_extention);
 			}
@@ -276,7 +279,7 @@ pub fn get_circuit_file_path(circuit_rel_path: &str, lib_name: &str) -> Result<S
 	let libs = load_circuit_libraries()?.0;
 	match libs.get(lib_name) {
 		Some(lib_dir) => Ok(lib_dir.to_owned() + circuit_rel_path + ".json"),
-		None => Err(format!("Circuit library \"{}\" doesn't exist", lib_name))
+		None => Err(format!("Could not get full path because circuit library \"{}\" doesn't exist", lib_name))
 	}
 }
 
@@ -309,4 +312,53 @@ pub fn load_circuit_libraries() -> Result<(HashMap<String, String>, Vec<String>)
 	let mut ordered_keys: Vec<String> = libs.keys().map(|s| s.clone()).collect::<Vec<String>>();
 	ordered_keys.sort_by(|a, b| a.partial_cmp(b).unwrap());
 	Ok((libs, ordered_keys))
+}
+
+/// Moves/Renames a circuit and possibly moves it between libraries, also reads all circuits from all libraries and updates references to the moved circuit
+#[cfg(feature = "using_filesystem")]
+pub fn move_circuit(old_lib: &str, old_name: &str, new_lib: &str, new_name: &str) -> Result<(), String> {
+	let circuit_libs: HashMap<String, String> = load_circuit_libraries()?.0;
+	// Check old and new lib names
+	if !circuit_libs.contains_key(old_lib) {
+		return Err(format!("Existing circuit's library \"{}\" does not exist", old_lib));
+	}
+	if !circuit_libs.contains_key(new_lib) {
+		return Err(format!("Destination library \"{}\" does not exist", new_lib));
+	}
+	// Check that new name won't be a duplicate in the destination library
+	let new_full_path = format!("{}{}.json", circuit_libs.get(new_lib).unwrap(), new_name);
+	if to_string_err(fs::exists(&new_full_path))? {
+		return Err(format!("Destination path \"{}\" already exists", &new_full_path));
+	}
+	let old_full_path = format!("{}{}.json", circuit_libs.get(old_lib).unwrap(), old_name);
+	// Copy for now, because deleting the old file will make some circuits unable to load
+	to_string_err(fs::copy(&old_full_path, new_full_path))?;
+	// Go through all circuits in all files and make sure any reference to this circuit is updated
+	for (lib_name, file_name) in list_all_circuit_files()? {
+		// Check that its not checking the moved circuit
+		if file_name == new_name && lib_name == new_lib {
+			continue;
+		}
+		// Load circuit
+		let circuit = to_string_err_with_message(load_circuit(&file_name, false, false, IntV2(0, 0), FourWayDir::default(), "".to_owned(), lib_name), "Could not load circuit during circuit move")?;
+		// Check components
+		let mut save = false;
+		for (_, component_cell) in circuit.components.borrow_mut().iter() {
+			let mut component = component_cell.borrow_mut();
+			let comp_save = component.save()?;
+			// (Relative path of circuit, Whether to use block diagram, Position, Orientation, Name, Library name)
+			if let EnumAllLogicDevices::SubCircuit(comp_file_name, block, pos, dir, name, comp_lib_name) = comp_save {
+				if comp_file_name == old_name && comp_lib_name == old_lib {
+					save = true;
+					*component = EnumAllLogicDevices::to_dynamic(EnumAllLogicDevices::SubCircuit(new_name.to_owned(), block, pos, dir, name, new_lib.to_owned()))?;
+				}
+			}
+		}
+		if save {
+			to_string_err_with_message(circuit.save_circuit(), "Could not save circuit during circuit move")?;
+		}
+	}
+	// Delete old file
+	to_string_err(fs::remove_file(old_full_path))?;
+	Ok(())
 }
