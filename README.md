@@ -74,6 +74,10 @@ The fixed sub cycles is a feature I implemented after running into a specific pr
 
 The timing diagram in the top-right displays the state of the circuit's clock alongside all the probes with respect to time. There are two main modes for the timing diagram to record the times of signal changes: Real time and Per-Event. Real time is the simplest which records the times of signal changes. However when checking circuit timing in reference to the clock it is better to have the timing diagram also reference the clock. The modes "CLK Only" and "Any Change" update on clock edges and any change in the circuit respectively. For each "event" (clock edge or user input or etc) there will be a time increment for the timing diagram. When the "Show propagation steps" checkbox is enabled the timing diagram will be further broken down to show the individual propagation steps of the simulation during each event. An event is considered over when nothing changes during a propagation step. Keep in mind that this is a simulation using discrete steps where every component has the same propagation delay which is not realistic.
 
+### Circuit Libraries
+
+A "circuit library" is a directory with circuit json files. Rusty Logic uses the file `resources/circuit_libraries.json` to point to all of the circuit libraries. All circuits are referenced by their file name and the name of the library they are in. The purpose of circuit libraries is to be able to save circuit files in a directory anywhere you like, not just in the default directory within Rusty Logic.
+
 ## LLM Usage
 
 Or "AI" as its called was used mostly for debugging my code whenever I couldn't fix a problem myself. I used it to write a few specific functions when I was lazy and I always commented where it was used.

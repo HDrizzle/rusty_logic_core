@@ -1600,9 +1600,11 @@ impl NewCircuitWindow {
 		self.name = String::new();
 		self.file_name = String::new();
 	}
-	/// Returns: Option<New circuit>
-	pub fn show(&mut self, ui: &mut Ui, circuit_libs_ordered: &Vec<String>) -> Option<LogicCircuit> {
+	/// Returns: (Whether to close, Option<New circuit>)
+	pub fn show(&mut self, ui: &mut Ui, circuit_libs_ordered: &Vec<String>) -> (bool, Option<LogicCircuit>) {
 		let mut error_opt: Option<String> = None;
+		let mut out: (bool, Option<LogicCircuit>) = (false, None);
+		ui.label("Create New Circuit");
 		ui.horizontal(|ui| {
 			ui.label("Name: ");
 			ui.text_edit_singleline(&mut self.name);
@@ -1628,14 +1630,20 @@ impl NewCircuitWindow {
 					}
 				});
 		});
-		let create_button = Button::new("Create Circuit");
-		if ui.add_enabled(error_opt.is_none(), create_button).clicked() {
-			return Some(LogicCircuit::new_mostly_default(self.name.clone(), self.file_name.clone(), true, self.lib_name.clone()));
-		}
+		ui.horizontal(|ui| {
+			let create_button = Button::new("Create Circuit");
+			if ui.add_enabled(error_opt.is_none(), create_button).clicked() {
+				out.0 = true;
+				out.1 = Some(LogicCircuit::new_mostly_default(self.name.clone(), self.file_name.clone(), true, self.lib_name.clone()));
+			}
+			if ui.button("Cancel").clicked() {
+				out.0 = true;
+			}
+		});
 		if let Some(error) = error_opt {
 			ui.colored_label(u8_3_to_color32([255, 0, 0]), error);
 		}
-		None
+		out
 	}
 }
 
@@ -1706,7 +1714,7 @@ impl eframe::App for App {
 			ui.ctx().request_repaint();
 			ScrollArea::horizontal().scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
 				ui.horizontal(|ui| {
-					if ui.button("Home").clicked() {
+					if ui.add_enabled(self.current_tab_index != 0, Button::new("Home")).clicked() {
 						if self.current_tab_index != 0 {
 							self.current_tab_index = 0;
 						}
@@ -1716,7 +1724,7 @@ impl eframe::App for App {
 							true => circuit_name,
 							false => &format!("{} *", circuit_name)
 						};
-						if ui.button(name_for_ui).clicked() {
+						if ui.add_enabled(self.current_tab_index != i + 1, Button::new(name_for_ui)).clicked() {
 							if i + 1 != self.current_tab_index {
 								self.current_tab_index = i + 1;
 							}
@@ -1777,10 +1785,13 @@ impl eframe::App for App {
 			};
 			if self.showing_new_circuit_popup {
 				Popup::from_response(&response_for_popups).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
-					if let Some(new_circuit) = self.new_circuit_window.show(ui, &self.circuit_libs_ordered) {
-						self.circuit_tabs.push(LogicCircuitToplevelView::new(new_circuit, false, &self.styles));
-						self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
+					let (close, new_circuit_opt) = self.new_circuit_window.show(ui, &self.circuit_libs_ordered);
+					if close {
 						self.showing_new_circuit_popup = false;
+						if let Some(new_circuit) = new_circuit_opt {
+							self.circuit_tabs.push(LogicCircuitToplevelView::new(new_circuit, false, &self.styles));
+							self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
+						}
 					}
 				});
 			}
