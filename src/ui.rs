@@ -669,7 +669,7 @@ impl LogicCircuit {
 								Pos2::new(graph_x + response.rect.left() + 2.0, (-graph_y) + (group_i as f32 + 0.5)*vert_spacing + response.rect.top())
 							};
 							// New propagation event vertical marker lines
-							if !timing.running.uses_real_time() && timing.show_sim_steps && timing.signal_groups.len() > 0 {
+							if !timing.running.uses_real_time() && timing.signal_groups.len() > 0 {
 								for i in 0_u32..(timing.propagation_steps.len() as u32) {
 									let x = timing.convert_timestamp_to_x_value(&*styles, TimingDiagramTimestamp::PropagationAndSimStep(i, 0));
 									painter.line_segment(
@@ -1164,9 +1164,9 @@ impl MoveCircuitPopup {
 		}
 	}
 	/// Shows UI, meant to be in a popup
-	/// Returns: (Whether to close the popup, Whether to save the circuit, Whether to reload the circuit)
-	pub fn show(&mut self, ui: &mut Ui, saved: bool) -> (bool, bool, bool) {
-		let mut out = (false, false, false);
+	/// Returns: (Whether to close the popup, Whether to save the circuit, Optional<(New lib, New name)>)
+	pub fn show(&mut self, ui: &mut Ui, saved: bool) -> (bool, bool, Option<(String, String)>) {
+		let mut out = (false, false, None);
 		let mut transient_error_opt: Option<String> = None;
 		ui.label("Move circuit");
 		ui.separator();
@@ -1204,7 +1204,7 @@ impl MoveCircuitPopup {
 				match move_res {
 					Ok(()) => {
 						out.0 = true;
-						out.2 = true;
+						out.2 = Some((self.new_lib.clone(), self.new_file_name.clone()));
 					},
 					Err(e) => {
 						self.move_error_opt = Some(e);
@@ -1562,7 +1562,7 @@ impl LogicCircuitToplevelView {
 		}
 		else if self.move_popup_opt.is_some() {
 			Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
-				let (close, save, reload) = self.move_popup_opt.as_mut().unwrap().show(ui, self.saved);
+				let (close, save, reload_opt) = self.move_popup_opt.as_mut().unwrap().show(ui, self.saved);
 				if close {
 					self.move_popup_opt = None;
 				}
@@ -1570,7 +1570,12 @@ impl LogicCircuitToplevelView {
 					self.circuit.save_circuit().unwrap();
 					self.saved = true;
 				}
-				return_reload |= reload;
+				if let Some(reload_data) = reload_opt {
+					return_reload = true;
+					// Set these so when this tab is reloaded it uses the correct info to find the circuit at the new location
+					self.circuit.lib_name = reload_data.0;
+					self.circuit.save_name = reload_data.1;
+				}
 			});
 		}
 		else {
@@ -1818,8 +1823,8 @@ impl App {
 		let actual_tab_index = tab_index - 1;
 		let circuit = &self.circuit_tabs[actual_tab_index].circuit;
 		match self.load_circuit_tab(&circuit.save_name.clone(), &circuit.lib_name.clone()) {
-			Ok(circuit) => {
-				self.circuit_tabs[actual_tab_index] = LogicCircuitToplevelView::new(circuit, true, &self.styles);
+			Ok(new_circuit) => {
+				self.circuit_tabs[actual_tab_index] = LogicCircuitToplevelView::new(new_circuit, true, &self.styles);
 			},
 			Err(e) => {
 				self.load_circuit_err_opt = Some(e);
@@ -1882,10 +1887,10 @@ impl eframe::App for App {
 								if let Some(load_info) = load_info_opt {
 									self.new_circuit_tab(&load_info.1, &load_info.0);
 								}
+								if let Some(load_error) = &self.load_circuit_err_opt {
+									ui.colored_label(u8_3_to_color32([255, 0, 0]), format!("Loading error: {}", load_error));
+								}
 							});
-							if let Some(load_error) = &self.load_circuit_err_opt {
-								ui.label(format!("Loading error: {}", load_error));
-							}
 						});
 					});
 				});

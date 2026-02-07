@@ -852,6 +852,11 @@ impl EncoderOrDecoder {
 	pub fn from_save(save: LogicDeviceSave, addr_size: u8, is_encoder: bool, layout_save: BusLayoutSave) -> Self {
 		assert!(addr_size > 0);
 		assert!(addr_size <= 8);
+		// TODO
+		/*let central_pin: String = match is_encoder {
+			true => "Out",
+			false => "En"
+		}.to_owned();*/
 		let fanout_size = 2_i32.pow(addr_size as u32);
 		let layout = BlockLayoutHelper::load(
 			layout_save,

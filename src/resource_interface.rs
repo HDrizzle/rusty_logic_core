@@ -33,7 +33,7 @@ pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: 
 			Ok(circuit) => Ok(circuit),
 			Err(err_new_format) => {
 				//println!("Load error: {}, attempting to load old format", &err_new_format);
-				match restore_old_files::attempt_restore_file(circuit_rel_path) {
+				match restore_old_files::attempt_restore_file(&path) {
 					Ok(circuit) => Ok(circuit),
 					Err(err_old_format) => Err(format!("New format error: {}. Old format error for circuit \"{}\": {}", err_new_format, circuit_rel_path, err_old_format))
 				}
@@ -155,8 +155,7 @@ mod restore_old_files {
 			}
 		}
 	}
-	pub fn attempt_restore_file(circuit_rel_path: &str) -> Result<LogicCircuitSave, String> {
-		let path = get_circuit_file_path(circuit_rel_path, DEFAULT_CIRCUIT_LIB)?;
+	pub fn attempt_restore_file(path: &str) -> Result<LogicCircuitSave, String> {
 		let string_raw = load_file_with_better_error(&path)?;
 		Ok(to_string_err(serde_json::from_str::<LogicCircuitSaveOld>(&string_raw))?.into())
 	}
