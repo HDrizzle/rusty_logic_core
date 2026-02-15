@@ -33,7 +33,8 @@ pub enum SelectProperty {
 	/// Bus name, Whether to group, Whether to list in forward order
 	BusLayout(String, bool, bool),
 	/// Namee of pin (ex: "Output Enable"), whether it is enabled
-	HasPin(String, bool)
+	HasPin(String, bool),
+	PxGridSize(u8)
 }
 
 impl SelectProperty {
@@ -56,7 +57,8 @@ impl SelectProperty {
 			Self::ReloadCircuit(_, _) => "Reload circuit".to_owned(),
 			Self::SplitterSplits(_) => "Splits".to_owned(),
 			Self::BusLayout(name, _, _) => format!("{} bus config", name),
-			Self::HasPin(name, _) => format!("Has {} pin", name)
+			Self::HasPin(name, _) => format!("Has {} pin", name),
+			Self::PxGridSize(_) => "Px Size Grid".to_owned()
 		}
 	}
 	/// Add this property to a list on the UI
@@ -219,6 +221,9 @@ impl SelectProperty {
 			}
 			Self::HasPin(_, state) => {
 				ui.checkbox(state, "").changed()
+			},
+			Self::PxGridSize(px_size) => {
+				ui_drag_value_with_arrows(ui, px_size, Some((1, 255)))
 			}
 		}
 	}

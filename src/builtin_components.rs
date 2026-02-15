@@ -25,7 +25,8 @@ pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
 		DLatch::new().save().unwrap(),
 		Counter::new().save().unwrap(),
 		SRLatch::new().save().unwrap(),
-		VectorCRT::new().save().unwrap()
+		VectorCRT::new().save().unwrap(),
+		LED32Square::new().save().unwrap()
 	]
 }
 
@@ -962,15 +963,6 @@ impl LogicDevice for EncoderOrDecoder {
 /// Maximum address size is 16 for 65,536 bytes
 /// CE - chip enable - active high, RE - enables outputs, WE - write enable - level triggered
 /// Pin layout: data on top left, controls (CE, WE, RE) on bottom left, address on right
-/// Pin ID assignments:
-///   0 - CE
-///   1 - WE
-///   2 - RE
-///   3 - D0
-///   ...
-///  10 - D7
-///  11 - A0
-/// n+10 - A[n-1]
 #[derive(Debug)]
 pub struct Memory {
 	pub generic: LogicDeviceGeneric,
@@ -2025,5 +2017,123 @@ impl LogicDevice for VectorCRT {
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		self.layout.set_property(property);
 		*self = Self::from_save(self.generic.save(), self.layout.save())
+	}
+}
+
+/// 32 x 32 LED Display
+#[derive(Debug)]
+pub struct LED32Square {
+	generic: LogicDeviceGeneric,
+	layout: BlockLayoutHelper,
+	px: [u8; 128],
+	address_latch: u8,
+	data_latch: u8,
+	address_clk_prev_state: bool,
+	data_clk_prev_state: bool,
+	px_grid_size: u8
+}
+
+impl LED32Square {
+	pub fn new() -> Self {
+		Self::from_save(LogicDeviceSave::default(), BusLayoutSave::default(), 2)
+	}
+	pub fn from_save(save: LogicDeviceSave, layout_save: BusLayoutSave, px_grid_size: u8) -> Self {
+		let pin_groups = vec![
+			(FourWayDir::W, 2, 8, "Address".to_owned()),
+			(FourWayDir::W, 2, 8, "Data".to_owned()),
+			(FourWayDir::W, 1, 1, "Address CLK".to_owned()),
+			(FourWayDir::W, 1, 1, "Data CLK".to_owned())
+		];
+		let layout = BlockLayoutHelper::load(
+			layout_save,
+			pin_groups,
+			IntV2(32 * px_grid_size as i32, 32 * px_grid_size as i32)
+		);
+		let mut out = Self {
+			generic: LogicDeviceGeneric::load(
+				save,
+				layout.pin_config(),
+				layout.get_bb_float(),
+				false,
+				false
+			),
+			layout,
+			px: [0; 128],
+			address_latch: 0,
+			data_latch: 0,
+			address_clk_prev_state: false,
+			data_clk_prev_state: false,
+			px_grid_size
+		};
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Address CLK", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Data CLK", 0), LogicState::Floating);
+		for bit_i in 0..8 {
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Address", bit_i), LogicState::Floating);
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Data", bit_i), LogicState::Floating);
+		}
+		out
+	}
+}
+
+impl LogicDevice for LED32Square {
+	fn get_generic(&self) -> &LogicDeviceGeneric {
+		&self.generic
+	}
+	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
+		&mut self.generic
+	}
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _self_component_id: u64, _clock_state: bool, _first_propagation_step: bool) {
+		// Check input clocks
+		let current_address_clk = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("Address CLK", 0)).to_bool();
+		let current_data_clk = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("Data CLK", 0)).to_bool();
+		if current_address_clk && !self.address_clk_prev_state {
+			self.address_latch = (self.layout.get_bus_value_panic("Address", &self.generic.logic_pins).0 & 0xFF) as u8;
+		}
+		if current_data_clk && !self.data_clk_prev_state {
+			self.data_latch = (self.layout.get_bus_value_panic("Data", &self.generic.logic_pins).0 & 0xFF) as u8;
+			// After data is updated, add to pixel memory
+			self.px[(self.address_latch & 0x7F) as usize] = self.data_latch;
+		}
+		self.address_clk_prev_state = current_address_clk;
+		self.data_clk_prev_state = current_data_clk;
+	}
+	fn save(&self) -> Result<EnumAllLogicDevices, String> {
+		Ok(EnumAllLogicDevices::LED32Square(self.generic.save(), self.layout.save(), self.px_grid_size))
+	}
+	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
+		let px_rect_grid: V2 = V2::new(self.px_grid_size as f32, self.px_grid_size as f32) * 0.9;
+		// Display matrix
+		for y_flipped in 0..32_i32 {
+			let y = 31 - y_flipped;
+			for byte_x in 0..4_i32 {
+				let i = (y*4) + byte_x;
+				let current_byte: u8 = self.px[i as usize];
+				for bit_i in 0..8 {
+					if (current_byte >> bit_i) & 0x01 == 1 {// If LSB (after shifting by `bit_i`) is 1
+						let pixel_upper_left_pos = IntV2((byte_x*8 + bit_i - 16) * (self.px_grid_size as i32), (y - 16) * (self.px_grid_size as i32)).to_v2();
+						draw.draw_rect(pixel_upper_left_pos, pixel_upper_left_pos - px_rect_grid, [255, 255, 255, 255], [255, 255, 255]);
+					}
+				}
+			}
+		}
+		// Border
+		draw.draw_rect(self.generic.ui_data.local_bb.0, self.generic.ui_data.local_bb.1, [0,0,0,0], draw.styles().color_foreground);
+	}
+	#[cfg(feature = "using_egui")]
+	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
+		let mut out = Vec::new();
+		out.append(&mut self.layout.get_properties());
+		out.push(SelectProperty::PxGridSize(self.px_grid_size));
+		out
+	}
+	#[cfg(feature = "using_egui")]
+	fn device_set_special_select_property(&mut self, property: SelectProperty) {
+		if let SelectProperty::PxGridSize(new_grid_size) = &property {
+			self.px_grid_size = *new_grid_size;
+		}
+		else {
+			self.layout.set_property(property);
+		}
+		*self = Self::from_save(self.generic.save(), self.layout.save(), self.px_grid_size)
 	}
 }

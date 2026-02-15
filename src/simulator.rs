@@ -791,7 +791,8 @@ pub struct GraphicLabelSave {
 
 /// Bus splitter with exact same functionality as in CircuitVerse
 /// Not implemented as a component so that both ends can share the same net and make computation faster
-/// Example Geometry
+/// Example Geometry/layout, note that graphical fanout pins can each have any number of logical pins as long as they all add up to the total bit width
+/// Every logical pin on the splitter will be "attatched" to exactly 2 graphical pins: The base pin and one fanout pin (the splits do not overlap)
 ///     |- 4:7
 ///     |- 0:3
 /// 0:7-|
@@ -799,9 +800,11 @@ pub struct GraphicLabelSave {
 #[derive(Debug, Clone)]
 pub struct Splitter {
 	ui_data: UIData,
+	/// Total bit width
 	pub bit_width: u16,
-	/// Each entry represents a graphic pin: Vec<(bit width, Option<(Grahic wire connection set, Vec of nets corresponding to bit width)>)>
+	/// Each entry represents a fanout graphic pin: Vec<(bit width, Option<(Grahic wire connection set, Vec of nets corresponding to bit width)>)>
 	pub splits: Vec<(u16, Option<Rc<RefCell<HashSet<WireConnection>>>>)>,
+	/// Graphical connections option for base pin, base pin is always graphical pin #0
 	pub base_connections_opt: Option<Rc<RefCell<HashSet<WireConnection>>>>
 }
 
@@ -840,7 +843,10 @@ impl Splitter {
 		}
 	}
 	/// gets this splitters bit index (logical) from graphical split and logical bit index of a wire connected to that graphical split
+	/// Returns: Splitter bit index
 	pub fn get_bit_index_from_pin_i_and_wire_bit_index(&self, pin_i: u16, wire_bit_index: u16) -> u16 {
+		assert!(pin_i as usize <= self.splits.len());
+		assert!(wire_bit_index < self.bit_width);
 		if pin_i == 0 {
 			return wire_bit_index;
 		}
@@ -854,6 +860,10 @@ impl Splitter {
 			}
 		}
 		panic!("Splitter::get_bit_index_from_split_and_wire_index() given too large split index")
+		// That one time in summer 2025 when i biked to gardner, along the kennebec, to brunswick (got drinks at the hannies by the train station), along route 1, the co-op in damariscotta (I had the kleen kanteen water bottle with me, so it ended up back to where it was bought over a decade ago), to the DRA (super nostalgic), then my bike broke and
+		// i waited in that random guy's garage and him and his friend were both ultra runners. I then got picked up by my dad. I got just over 100 miles that day.
+		// It was misty and cold that whole day and rained when i was on the bath bridge
+		// I miss that.
 	}
 	/// the bit index of a wire connected to a split connection
 	pub fn get_wire_bit_index_from_pin_i_and_bit_index(&self, pin_i: u16, splitter_bit_index: u16) -> u16 {
@@ -1099,6 +1109,7 @@ impl Resistor {
 pub struct Wire {
 	ui_data: UIData,
 	length: u32,
+	/// Vec<Net ID>, Each logical net/wire that is represented by this graphical wire. Length is equal to this wire's bit width
 	pub nets: Vec<u64>,
 	color: [u8; 3],
 	pub start_connections: Rc<RefCell<HashSet<WireConnection>>>,

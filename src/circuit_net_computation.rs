@@ -97,7 +97,7 @@ impl LogicCircuit {
 		// DFS over each net to connect it properly
 		let mut visited_bits = HashSet::<ConductorBit>::new();
 		for (base_wire_id, wire_cell) in wires.iter() {
-			let wire = wire_cell.borrow_mut();
+			let mut wire = wire_cell.borrow_mut();
 			let mut base_bit_i: u16 = 0;
 			while base_bit_i < wire.nets.len() as u16 {
 				let base_net: u64 = wire.nets[base_bit_i as usize];
@@ -120,9 +120,11 @@ impl LogicCircuit {
 						ConductorBit::Wire(wire_id, bit_index) => {
 							// Set wire net
 							let wire_end_conns: Vec<WireConnection> = if *base_wire_id == wire_id {// Check if same wire to prevent double-borrow
-								//wire.nets[bit_index as usize] = base_net;
+								// 2026-2-15: This net assignment line was commented for reasons I don't remember. I am uncommenting it to fix the wire-to-multiple-splitter-fanout-pins-unconnected problem
+								wire.nets[bit_index as usize] = base_net;
 								wire.start_connections.borrow().iter().chain(wire.end_connections.borrow().iter()).map(|conn| conn.clone()).collect()
 							}
+							// i love my boyfriend sooooooo much!!!!- haley
 							else {
 								let mut other_wire = wires.get(&wire_id).unwrap().borrow_mut();
 								other_wire.nets[bit_index as usize] = base_net;
