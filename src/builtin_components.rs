@@ -963,11 +963,16 @@ impl LogicDevice for EncoderOrDecoder {
 /// Maximum address size is 16 for 65,536 bytes
 /// CE - chip enable - active high, RE - enables outputs, WE - write enable - level triggered
 /// Pin layout: data on top left, controls (CE, WE, RE) on bottom left, address on right
+/// TODO: Limit size of `data` if all 0
 #[derive(Debug)]
 pub struct Memory {
 	pub generic: LogicDeviceGeneric,
 	pub addr_size: u8,
+	/// List of words, word size is always 8-bits
+	/// To save space this vec may not be as long as the entire address space. Any index off the end will be a 0 and setting a non-existant index to something other than 0 will extend it out to that address
+	/// If it is cleared to all 0's then this vec will be empty
 	pub data: Vec<u8>,
+	/// Whether to save memory state
 	pub nonvolatile: bool,
 	ui_csv_paste_string: Rc<RefCell<String>>,
 	ui_error_opt: Option<String>,
@@ -1037,15 +1042,6 @@ impl Memory {
 		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("RE", 0), LogicState::Floating);
 		out
 	}
-	fn get_address(&self) -> u16 {
-		let mut out: u16 = 0;
-		for a in 0..self.addr_size {
-			if self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("A", a as u16)).to_bool() {
-				out += 2_u16.pow(a as u32);
-			}
-		}
-		out
-	}
 }
 
 impl LogicDevice for Memory {
@@ -1059,7 +1055,7 @@ impl LogicDevice for Memory {
 		let ce: bool = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("CE", 0)).to_bool();
 		let we: bool = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("WE", 0)).to_bool();
 		let re: bool = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("RE", 0)).to_bool();
-		let address = self.get_address() as usize;
+		let address = self.layout.get_bus_value_panic("A", &self.generic.logic_pins).0 as usize;
 		if !re || !ce {// Set all data lines floating
 			for bit_i in 0..8_u16 {
 				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("D", bit_i), LogicState::Floating);
@@ -1122,7 +1118,7 @@ impl LogicDevice for Memory {
 			if props.paste {
 				let csv_string = self.ui_csv_paste_string.borrow();
 				for (i, number_string) in csv_string.split(",").into_iter().enumerate() {
-					match number_string.parse::<u8>() {
+					match number_string.trim().parse::<u8>() {
 						Ok(new_elem) => {
 							self.data[i] = new_elem;
 						}
@@ -1144,6 +1140,25 @@ impl LogicDevice for Memory {
 		}
 		if self.layout.set_property(property) {
 			*self = Self::from_save(self.generic.save(), self.addr_size, Some(self.data.clone()), self.layout.save());
+		}
+	}
+	fn set_instance_config(&mut self, instance_config: &crate::simulator::ComponentInstanceConfig) {
+		if let ComponentInstanceConfig::Memory(data) = instance_config {
+			let max_size = 2_usize.pow(self.addr_size as u32);
+			if data.len() > max_size {
+				self.data = data[0..max_size].to_vec();
+			}
+			else {
+				self.data = data.clone();
+			}
+		}
+	}
+	fn get_instance_config_opt(&self) -> Option<ComponentInstanceConfig> {
+		if self.nonvolatile {
+			Some(ComponentInstanceConfig::Memory(self.data.clone()))
+		}
+		else {
+			None
 		}
 	}
 }
@@ -1599,6 +1614,15 @@ impl LogicDevice for DLatch {
 			self.layout.set_property(property);
 		}
 		*self = Self::from_save(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe, self.sr)
+	}
+	fn set_instance_config(&mut self, instance_config: &ComponentInstanceConfig) {
+		if let ComponentInstanceConfig::Latch(lower, upper) = instance_config {
+			self.data_low = *lower;
+			self.data_high = *upper;
+		}
+	}
+	fn get_instance_config_opt(&self) -> Option<ComponentInstanceConfig> {
+		Some(ComponentInstanceConfig::Latch(self.data_low, self.data_high))
 	}
 }
 
@@ -2101,16 +2125,15 @@ impl LogicDevice for LED32Square {
 		Ok(EnumAllLogicDevices::LED32Square(self.generic.save(), self.layout.save(), self.px_grid_size))
 	}
 	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
-		let px_rect_grid: V2 = V2::new(self.px_grid_size as f32, self.px_grid_size as f32) * 0.9;
+		let px_rect_grid: V2 = V2::new(-(self.px_grid_size as f32), self.px_grid_size as f32) * 0.9;
 		// Display matrix
-		for y_flipped in 0..32_i32 {
-			let y = 31 - y_flipped;
+		for y in 0..32_i32 {
 			for byte_x in 0..4_i32 {
 				let i = (y*4) + byte_x;
 				let current_byte: u8 = self.px[i as usize];
 				for bit_i in 0..8 {
 					if (current_byte >> bit_i) & 0x01 == 1 {// If LSB (after shifting by `bit_i`) is 1
-						let pixel_upper_left_pos = IntV2((byte_x*8 + bit_i - 16) * (self.px_grid_size as i32), (y - 16) * (self.px_grid_size as i32)).to_v2();
+						let pixel_upper_left_pos = IntV2((byte_x*8 + bit_i - 16) * (self.px_grid_size as i32), (16 - y) * (self.px_grid_size as i32)).to_v2();
 						draw.draw_rect(pixel_upper_left_pos, pixel_upper_left_pos - px_rect_grid, [255, 255, 255, 255], [255, 255, 255]);
 					}
 				}

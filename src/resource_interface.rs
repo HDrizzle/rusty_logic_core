@@ -19,7 +19,7 @@ pub static STYLES_FILE: &str = "resources/styles.json";
 
 /// Loads circuit, path is relative to `CIRCUITS_DIR` and does not include .json extension
 /// Example: File is located at `resources/circuits/sequential/d_latch.json` -> circuit path is `sequential/d_latch`
-pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String, mut lib_name: String) -> Result<LogicCircuit, String> {
+pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String, mut lib_name: String, instance_config_opt: Option<&CircuitInstanceConfig>) -> Result<LogicCircuit, String> {
 	if lib_name.is_empty() {
 		lib_name = DEFAULT_CIRCUIT_LIB.to_owned();
 	}
@@ -49,7 +49,13 @@ pub fn load_circuit(circuit_rel_path: &str, displayed_as_block: bool, toplevel: 
 		};
 	}
 	match save_opt {
-		Some(save) => LogicCircuit::from_save(save, circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir, name.clone(), lib_name.clone()),
+		Some(save) => {
+			let mut out = LogicCircuit::from_save(save, circuit_rel_path.to_string(), displayed_as_block, toplevel, pos, dir, name.clone(), lib_name.clone())?;
+			if let Some(instance_config) = instance_config_opt {
+				out.set_instance_config_circuit(instance_config);
+			}
+			Ok(out)
+		},
 		None => Err("Both `using_filesystem` and `using_wasm` features are disabled, therefore there is no mechanism for loading sub-circuits".to_owned())
 	}
 }
@@ -164,8 +170,8 @@ mod restore_old_files {
 /// Not great but I can't think of anything else
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EnumAllLogicDevices {
-	/// (Relative path of circuit, Whether to use block diagram, Position, Orientation, Name, Library name)
-	SubCircuit(String, bool, IntV2, FourWayDir, #[serde(default)]String, #[serde(default)]String),
+	/// (Relative path of circuit, Whether to use block diagram, Position, Orientation, Name, Library name, Instance-specific data)
+	SubCircuit(String, bool, IntV2, FourWayDir, #[serde(default)]String, #[serde(default)]String, #[serde(default)]CircuitInstanceConfig),
 	GateAnd(LogicDeviceSave),
 	GateNand(LogicDeviceSave),
 	GateNot(LogicDeviceSave),
@@ -198,7 +204,7 @@ pub enum EnumAllLogicDevices {
 impl EnumAllLogicDevices {
 	pub fn to_dynamic(self_instance: Self) -> Result<Box<dyn LogicDevice>, String> {
 		match self_instance {
-			Self::SubCircuit(circuit_rel_path, displayed_as_block, pos, dir, name, lib_name) => Ok(Box::new(to_string_err_with_message(load_circuit(&circuit_rel_path, displayed_as_block, false, pos, dir, name, lib_name), "While loading sub circuit")?)),
+			Self::SubCircuit(circuit_rel_path, displayed_as_block, pos, dir, name, lib_name, instance_config) => Ok(Box::new(to_string_err_with_message(load_circuit(&circuit_rel_path, displayed_as_block, false, pos, dir, name, lib_name, Some(&instance_config)), "While loading sub circuit")?)),
 			Self::GateAnd(gate) => Ok(Box::new(builtin_components::GateAnd::from_save(gate))),
 			Self::GateNand(gate) => Ok(Box::new(builtin_components::GateNand::from_save(gate))),
 			Self::GateNot(gate) => Ok(Box::new(builtin_components::GateNot::from_save(gate))),
@@ -224,7 +230,7 @@ impl EnumAllLogicDevices {
 	/// Example: "AND Gate" or "D Latch", for the component search UI
 	pub fn type_name(&self) -> String {
 		match self {
-			Self::SubCircuit(circuit_rel_path, _, _, _, _, _) => circuit_rel_path.clone(),
+			Self::SubCircuit(circuit_rel_path, _, _, _, _, _, _) => circuit_rel_path.clone(),
 			Self::GateAnd(_) => "AND Gate".to_owned(),
 			Self::GateNand(_) => "NAND Gate".to_owned(),
 			Self::GateNot(_) => "NOT Gate (OLD)".to_owned(),
@@ -301,10 +307,13 @@ pub fn load_file_with_better_error(path: &str) -> Result<String, String> {// Wit
 pub fn load_circuit_libraries() -> Result<(HashMap<String, String>, Vec<String>), String> {
 	let raw = load_file_with_better_error(CIRCUIT_LIBS_FILE)?;
 	let libs = to_string_err(serde_json::from_str::<HashMap<String, String>>(&raw))?;
-	// Check that they are valid directories
+	// Check that they are valid directories and end with "/"
 	for (lib_name, dir_) in &libs {
 		if !(to_string_err_with_message(fs::metadata(dir_), &format!("Could not read metadata for \"{}\"", dir_))?.is_dir()) {
 			return Err(format!("\"{dir_}\" for circuit library \"{lib_name}\" is not a directory"));
+		}
+		if !dir_.ends_with('/') {
+			return Err(format!("\"{dir_}\" for circuit library \"{lib_name}\" does not end with \"/\""));
 		}
 	}
 	// Check that the default library exists
@@ -343,22 +352,22 @@ pub fn move_circuit(old_lib: &str, old_name: &str, new_lib: &str, new_name: &str
 			continue;
 		}
 		// Load circuit
-		let circuit = to_string_err_with_message(load_circuit(&file_name, false, false, IntV2(0, 0), FourWayDir::default(), "".to_owned(), lib_name), "Could not load circuit during circuit move")?;
+		let circuit = to_string_err_with_message(load_circuit(&file_name, false, false, IntV2(0, 0), FourWayDir::default(), "".to_owned(), lib_name, None), "Could not load circuit during circuit move")?;
 		// Check components
 		let mut save = false;
 		for (_, component_cell) in circuit.components.borrow_mut().iter() {
 			let mut component = component_cell.borrow_mut();
 			let comp_save = component.save()?;
 			// (Relative path of circuit, Whether to use block diagram, Position, Orientation, Name, Library name)
-			if let EnumAllLogicDevices::SubCircuit(comp_file_name, block, pos, dir, name, comp_lib_name) = comp_save {
+			if let EnumAllLogicDevices::SubCircuit(comp_file_name, block, pos, dir, name, comp_lib_name, instance_config) = comp_save {
 				if comp_file_name == old_name && comp_lib_name == old_lib {
 					save = true;
-					*component = EnumAllLogicDevices::to_dynamic(EnumAllLogicDevices::SubCircuit(new_name.to_owned(), block, pos, dir, name, new_lib.to_owned()))?;
+					*component = EnumAllLogicDevices::to_dynamic(EnumAllLogicDevices::SubCircuit(new_name.to_owned(), block, pos, dir, name, new_lib.to_owned(), instance_config))?;
 				}
 			}
 		}
 		if save {
-			to_string_err_with_message(circuit.save_circuit(), "Could not save circuit during circuit move")?;
+			to_string_err_with_message(circuit.save_circuit_toplevel(), "Could not save circuit during circuit move")?;
 		}
 	}
 	// Delete old file
