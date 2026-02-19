@@ -1492,7 +1492,7 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn get_generic(&self) -> &LogicDeviceGeneric;
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric;
 	fn compute_step(&mut self, ancestors: &AncestryStack, self_component_id: u64, clock_state: bool, first_propagation_step: bool);
-	fn save(&self, include_instance_config: bool) -> Result<EnumAllLogicDevices, String>;
+	fn save(&self) -> Result<EnumAllLogicDevices, String>;
 	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>);
 	/// In CircuitVerse there can be, for example, one AND gate that acts like 8 gates, with 8-bit busses going in and out of it
 	fn get_bit_width(&self) -> Option<u16> {None}
@@ -1681,7 +1681,7 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 	}
 	#[cfg(feature = "using_egui")]
 	fn copy(&self) -> CopiedGraphicItem {
-		CopiedGraphicItem::Component(self.save(true).unwrap())
+		CopiedGraphicItem::Component(self.save().unwrap(), self.get_instance_config_opt())
 	}
 }
 
@@ -2187,8 +2187,7 @@ pub struct LogicCircuit {
 	pub include_in_timing_diagram: bool,
 	/// Determines if components including sub circuits have their instance config saved. Not saving can reduce file size by a lot.
 	/// Can be overridden by parent if this is a subcircuit.
-	/// TODO: Use this
-	pub save_component_instance_config: bool
+	pub save_instance_config: bool
 }
 
 impl LogicCircuit {
@@ -2241,7 +2240,7 @@ impl LogicCircuit {
 			propagation_done: RefCell::new((false, false)),
 			lib_name: lib_name,
 			include_in_timing_diagram: false,
-			save_component_instance_config: true
+			save_instance_config: true
 		};
 		new.setup_external_connection_sources();
 		new.recompute_default_layout();
@@ -2319,11 +2318,14 @@ impl LogicCircuit {
 			propagation_done: RefCell::new((false, false)),
 			lib_name,
 			include_in_timing_diagram: false,
-			save_component_instance_config: true
+			save_instance_config: save.save_instance_config
 		};
 		out.setup_external_connection_sources();
 		out.check_wire_geometry_and_connections(None);
 		out.update_pin_block_positions();
+		if let Some(instance_config) = save.instance_config_opt {
+			out.set_instance_config_circuit(&instance_config);
+		}
 		Ok(out)
 	}
 	fn setup_external_connection_sources(&mut self) {
@@ -2388,10 +2390,14 @@ impl LogicCircuit {
 		graphic_pins.insert(new_pin_id, GraphicPin::new(Rc::clone(&self.generic_device.logic_pins), owned_pins, pos, dir, 1.0, name, show_name));
 		new_pin_id
 	}
-	pub fn insert_component(&self, comp_save: &EnumAllLogicDevices) -> GraphicSelectableItemRef {
+	pub fn insert_component(&self, comp_save: &EnumAllLogicDevices, instance_config_opt: Option<&ComponentInstanceConfig>) -> GraphicSelectableItemRef {
 		let mut components = self.components.borrow_mut();
 		let new_comp_id = lowest_unused_key(&components);
-		components.insert(new_comp_id, RefCell::new(EnumAllLogicDevices::to_dynamic(comp_save.clone()).unwrap()));
+		let mut new_comp_box = EnumAllLogicDevices::to_dynamic(comp_save.clone()).unwrap();
+		if let Some(instance_config) = instance_config_opt {
+			new_comp_box.set_instance_config(instance_config);
+		}
+		components.insert(new_comp_id, RefCell::new(new_comp_box));
 		GraphicSelectableItemRef::Component(new_comp_id)
 	}
 	pub fn insert_splitter(&self, splitter: SplitterSave) -> GraphicSelectableItemRef {
@@ -3178,7 +3184,7 @@ impl LogicCircuit {
 		save.type_name = format!("{} (flattened)", save.type_name);
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&save_path, &self.lib_name)?, &raw_string))?;
-		Ok(EnumAllLogicDevices::SubCircuit(save_path, self.displayed_as_block, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone(), self.lib_name.clone(), Some(self.get_instance_config_circuit())))
+		Ok(EnumAllLogicDevices::SubCircuit(save_path, self.displayed_as_block, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone(), self.lib_name.clone()))
 	}
 	/// Recursively extracts all sub-circuits that don't have a fixed sub-cycle count
 	#[cfg(feature = "using_filesystem")]
@@ -3205,7 +3211,7 @@ impl LogicCircuit {
 				}
 			}
 			else {
-				components.push(comp.save(true).unwrap());
+				components.push(comp.save().unwrap());
 			}
 		}
 		// Apply transformation for this circuit
@@ -3222,7 +3228,7 @@ impl LogicCircuit {
 				let mut comp = EnumAllLogicDevices::to_dynamic(comp_save.clone()).unwrap();
 				let ui_data = comp.get_ui_data_mut();
 				transform(&mut ui_data.position, &mut ui_data.direction);
-				*comp_save = comp.save(true).unwrap();
+				*comp_save = comp.save().unwrap();
 			}
 		}
 		Ok((wire_geometry, components))
@@ -3362,7 +3368,7 @@ impl LogicCircuit {
 		let mut components_save = HashMap::<u64, EnumAllLogicDevices>::new();
 		for (ref_, component) in self.components.borrow().iter() {
 			// Because this is the toplevel circuit, use `self.save_component_instance_config` to determine if all lower circuits save stuff
-			components_save.insert(*ref_, component.borrow().save(self.save_component_instance_config)?);
+			components_save.insert(*ref_, component.borrow().save()?);
 		}
 		// Un-RefCell Logic pins
 		let mut logic_pins = HashMap::<u64, LogicConnectionPin>::new();
@@ -3382,6 +3388,11 @@ impl LogicCircuit {
 			wires_save.insert(*ref_, (wire.ui_data.position, wire.ui_data.direction, wire.length));
 		}
 		let clock = self.clock.borrow();
+		// Instance config
+		let instance_config_opt: Option<CircuitInstanceConfig> = match self.save_instance_config {
+			true => Some(self.get_instance_config_circuit()),
+			false => None
+		};
 		// First, actually save this circuit
 		Ok(LogicCircuitSave {
 			logic_pins,
@@ -3398,12 +3409,13 @@ impl LogicCircuit {
 			clock_state: clock.state,
 			probes: HashMap::from_iter(self.probes.borrow().iter().map(|(id, probe)| (*id, probe.save()))),
 			timing_probe_order: self.timing_probe_order.clone(),//self.timing.borrow().signal_groups.iter().enumerate().filter(|(i, _)| *i > 0).map(|(_, (probe_id, _))| *probe_id).collect(),
-			block_bb: (round_v2_to_intv2(self.generic_device.ui_data.local_bb.0), round_v2_to_intv2(self.generic_device.ui_data.local_bb.1))
+			block_bb: (round_v2_to_intv2(self.generic_device.ui_data.local_bb.0), round_v2_to_intv2(self.generic_device.ui_data.local_bb.1)),
+			instance_config_opt,
+			save_instance_config: self.save_instance_config
 		})
 	}
 	#[cfg(feature = "using_filesystem")]
 	pub fn save_circuit_toplevel(&self) -> Result<(), String> {
-		// TODO: Optional instance config save
 		let save = self.create_save_circuit()?;
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_name, &self.lib_name)?, &raw_string))?;
@@ -3489,6 +3501,7 @@ impl LogicCircuit {
 		}
 	}
 	/// Most functionality is here, `LogicDevice::get_instance_config_opt()` is a wrapper
+	/// Generates a tree of everything
 	pub fn get_instance_config_circuit(&self) -> CircuitInstanceConfig {
 		// Iterate components
 		let mut component_pin_states = HashMap::<u64, HashMap::<u64, LogicState>>::new();
@@ -3529,13 +3542,9 @@ impl LogicDevice for LogicCircuit {
 	}
 	/// Returns handle to file for inclusion in other circuits
 	/// The actual save is done with `LogicCircuit::save_circuit()`
-	fn save(&self, include_instance_config: bool) -> Result<EnumAllLogicDevices, String> {
-		let instance_opt: Option<CircuitInstanceConfig> = match include_instance_config {
-			true => Some(self.get_instance_config_circuit()),
-			false => None
-		};
+	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		// Path to save file
-		Ok(EnumAllLogicDevices::SubCircuit(self.save_name.clone(), self.displayed_as_block, self.get_ui_data().position, self.get_ui_data().direction, self.generic_device.name.clone(), self.lib_name.clone(), instance_opt))
+		Ok(EnumAllLogicDevices::SubCircuit(self.save_name.clone(), self.displayed_as_block, self.get_ui_data().position, self.get_ui_data().direction, self.generic_device.name.clone(), self.lib_name.clone()))
 	}
 	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		if self.displayed_as_block {
@@ -3703,7 +3712,7 @@ impl LogicDevice for LogicCircuit {
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		if let SelectProperty::ReloadCircuit(reload, _) = property {
 			if reload {
-				match resource_interface::load_circuit(&self.save_name, self.displayed_as_block, false, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone(), self.lib_name.clone(), Some(&self.get_instance_config_circuit())) {
+				match resource_interface::load_circuit(&self.save_name, self.displayed_as_block, false, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone(), self.lib_name.clone()) {
 					Ok(new) => {
 						*self = new;
 					},

@@ -231,7 +231,8 @@ impl SelectProperty {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum CopiedGraphicItem {
-	Component(EnumAllLogicDevices),
+	/// Usual circuit save handle, state config
+	Component(EnumAllLogicDevices, Option<ComponentInstanceConfig>),
 	Wire((IntV2, FourWayDir, u32)),
 	/// (Position, Direction, Name, Show name, Bit width)
 	ExternalConnection(IntV2, FourWayDir, String, bool, u16),
@@ -983,7 +984,7 @@ impl LogicCircuit {
 		let mut out = Vec::<GraphicSelectableItemRef>::new();
 		for pasted_item in item_set.items {
 			out.push(match pasted_item {
-				CopiedGraphicItem::Component(comp_save) => self.insert_component(&comp_save),
+				CopiedGraphicItem::Component(comp_save, inst_config_opt) => self.insert_component(&comp_save, inst_config_opt.as_ref()),
 				CopiedGraphicItem::ExternalConnection(pos, dir, name, show_name, bit_width) => {
 					GraphicSelectableItemRef::Pin(self.insert_graphic_pin(pos, dir, name, show_name, bit_width))
 				},
@@ -1374,7 +1375,7 @@ impl LogicCircuitToplevelView {
 					// Update component search list
 					self.all_logic_devices_search = builtin_components::list_all_basic_components();
 					for (lib_name, file_name) in resource_interface::list_all_circuit_files().unwrap() {
-						self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(file_name, false, IntV2(0, 0), FourWayDir::default(), String::new(), lib_name, CircuitInstanceConfig::default()));
+						self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(file_name, false, IntV2(0, 0), FourWayDir::default(), String::new(), lib_name));
 					}
 					self.showing_component_popup = true;
 				}
@@ -1417,6 +1418,7 @@ impl LogicCircuitToplevelView {
 				if ui.button("Change library or filename...").clicked() {
 					self.move_popup_opt = Some(MoveCircuitPopup::new(self.circuit.save_name.clone(), self.circuit.lib_name.clone()));
 				}
+				ui.checkbox(&mut self.circuit.save_instance_config, "Save state (increases file size)");
 				ui.horizontal(|ui| {
 					let mut fixed_cycles_enabled = self.circuit.fixed_sub_cycles_opt.is_some();
 					ui.checkbox(&mut fixed_cycles_enabled, "Fixed sub cycles");
@@ -1520,7 +1522,7 @@ impl LogicCircuitToplevelView {
 						if device_save.type_name().to_ascii_lowercase().contains(&self.component_search_text.to_ascii_lowercase()) {
 							if ui.button(device_save.type_name()).clicked() {
 								self.showing_component_popup = false;
-								let handle = self.circuit.insert_component(device_save);
+								let handle = self.circuit.insert_component(device_save, None);
 								*self.circuit.tool.borrow_mut() = Tool::Select{
 									selected_graphics: HashSet::from_iter(vec![handle].into_iter()),
 									selected_graphics_state: SelectionState::FollowingMouse(V2::zeros())
@@ -1544,7 +1546,7 @@ impl LogicCircuitToplevelView {
 				ui.horizontal(|ui| {
 					if ui.button("Flatten Circuit").clicked() {
 						match self.circuit.flatten(true) {
-							Ok(device_save) => if let EnumAllLogicDevices::SubCircuit(save_path, _, _, _, _, lib_name, _) = device_save {
+							Ok(device_save) => if let EnumAllLogicDevices::SubCircuit(save_path, _, _, _, _, lib_name) = device_save {
 								return_new_circuit_tab = Some((save_path, lib_name));
 								self.showing_flatten_opoup = false;
 							}
@@ -1810,7 +1812,7 @@ impl App {
 		Ok(())
 	}
 	fn load_circuit_tab(&mut self, file_name: &str, lib_name: &str) -> Result<LogicCircuit, String> {
-		resource_interface::load_circuit(file_name, false, true, IntV2(0, 0), FourWayDir::default(), String::new(), lib_name.to_owned(), None)
+		resource_interface::load_circuit(file_name, false, true, IntV2(0, 0), FourWayDir::default(), String::new(), lib_name.to_owned())
 	}
 	fn new_circuit_tab(&mut self, file_name: &str, lib_name: &str) {
 		match self.load_circuit_tab(file_name, lib_name) {

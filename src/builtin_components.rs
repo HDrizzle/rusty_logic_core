@@ -9,24 +9,24 @@ use web_time::Instant;
 /// For the component search popup
 pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
 	vec![
-		GateAnd::new().save(false).unwrap(),
-		GateNand::new().save(false).unwrap(),
-		GateNotNew::new().save(false).unwrap(),
-		GateOr::new().save(false).unwrap(),
-		GateNor::new().save(false).unwrap(),
-		GateXor::new().save(false).unwrap(),
-		GateXnor::new().save(false).unwrap(),
-		ClockSymbol::new().save(false).unwrap(),
-		FixedSource::new().save(false).unwrap(),
-		EncoderOrDecoder::new().save(false).unwrap(),
-		Memory::new().save(false).unwrap(),
-		TriStateBuffer::new().save(false).unwrap(),
-		Adder::new().save(false).unwrap(),
-		DLatch::new().save(false).unwrap(),
-		Counter::new().save(false).unwrap(),
-		SRLatch::new().save(false).unwrap(),
-		VectorCRT::new().save(false).unwrap(),
-		LED32Square::new().save(false).unwrap()
+		GateAnd::new().save().unwrap(),
+		GateNand::new().save().unwrap(),
+		GateNotNew::new().save().unwrap(),
+		GateOr::new().save().unwrap(),
+		GateNor::new().save().unwrap(),
+		GateXor::new().save().unwrap(),
+		GateXnor::new().save().unwrap(),
+		ClockSymbol::new().save().unwrap(),
+		FixedSource::new().save().unwrap(),
+		EncoderOrDecoder::new().save().unwrap(),
+		Memory::new().save().unwrap(),
+		TriStateBuffer::new().save().unwrap(),
+		Adder::new().save().unwrap(),
+		DLatch::new().save().unwrap(),
+		Counter::new().save().unwrap(),
+		SRLatch::new().save().unwrap(),
+		VectorCRT::new().save().unwrap(),
+		LED32Square::new().save().unwrap()
 	]
 }
 
