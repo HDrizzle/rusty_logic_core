@@ -9,24 +9,24 @@ use web_time::Instant;
 /// For the component search popup
 pub fn list_all_basic_components() -> Vec<EnumAllLogicDevices> {
 	vec![
-		GateAnd::new().save().unwrap(),
-		GateNand::new().save().unwrap(),
-		GateNotNew::new().save().unwrap(),
-		GateOr::new().save().unwrap(),
-		GateNor::new().save().unwrap(),
-		GateXor::new().save().unwrap(),
-		GateXnor::new().save().unwrap(),
-		ClockSymbol::new().save().unwrap(),
-		FixedSource::new().save().unwrap(),
-		EncoderOrDecoder::new().save().unwrap(),
-		Memory::new().save().unwrap(),
-		TriStateBuffer::new().save().unwrap(),
-		Adder::new().save().unwrap(),
-		DLatch::new().save().unwrap(),
-		Counter::new().save().unwrap(),
-		SRLatch::new().save().unwrap(),
-		VectorCRT::new().save().unwrap(),
-		LED32Square::new().save().unwrap()
+		GateAnd::new().save(false).unwrap(),
+		GateNand::new().save(false).unwrap(),
+		GateNotNew::new().save(false).unwrap(),
+		GateOr::new().save(false).unwrap(),
+		GateNor::new().save(false).unwrap(),
+		GateXor::new().save(false).unwrap(),
+		GateXnor::new().save(false).unwrap(),
+		ClockSymbol::new().save(false).unwrap(),
+		FixedSource::new().save(false).unwrap(),
+		EncoderOrDecoder::new().save(false).unwrap(),
+		Memory::new().save(false).unwrap(),
+		TriStateBuffer::new().save(false).unwrap(),
+		Adder::new().save(false).unwrap(),
+		DLatch::new().save(false).unwrap(),
+		Counter::new().save(false).unwrap(),
+		SRLatch::new().save(false).unwrap(),
+		VectorCRT::new().save(false).unwrap(),
+		LED32Square::new().save(false).unwrap()
 	]
 }
 
@@ -963,7 +963,6 @@ impl LogicDevice for EncoderOrDecoder {
 /// Maximum address size is 16 for 65,536 bytes
 /// CE - chip enable - active high, RE - enables outputs, WE - write enable - level triggered
 /// Pin layout: data on top left, controls (CE, WE, RE) on bottom left, address on right
-/// TODO: Limit size of `data` if all 0
 #[derive(Debug)]
 pub struct Memory {
 	pub generic: LogicDeviceGeneric,
@@ -1040,7 +1039,41 @@ impl Memory {
 		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("CE", 0), LogicState::Floating);
 		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("WE", 0), LogicState::Floating);
 		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("RE", 0), LogicState::Floating);
+		Self::trim_memory_if_blank(&mut out.data);
 		out
+	}
+	/// Shortens `self.data` to the longest it can be without trailing zeros
+	/// Slow function, should only be run on load and save
+	fn trim_memory_if_blank(data: &mut Vec<u8>) {
+		// Using length and not index in case it can be empty
+		let mut highest_length_non_zero: usize = 0;
+		for (i, value) in data.iter().enumerate() {
+			if *value != 0 {
+				highest_length_non_zero = i+1;
+			}
+		}
+		// Trim
+		*data = data[0..highest_length_non_zero].to_vec();
+	}
+	/// Handles off-the-end case where memory is assumed to all be zero
+	fn get_data(&self, address: usize) -> u8 {
+		if address >= self.data.len() {
+			0
+		}
+		else {
+			self.data[address]
+		}
+	}
+	/// Extends vec if necessary in case its short and assumed to be zeros
+	fn set_data(data_vec: &mut Vec<u8>, address: usize, entry: u8) {
+		let diff = (address as isize + 1) - (data_vec.len() as isize);
+		// Extend if necessary
+		if diff > 0 {
+			for _ in 0..diff {
+				data_vec.push(0);
+			}
+		}
+		data_vec[address] = entry;
 	}
 }
 
@@ -1063,7 +1096,7 @@ impl LogicDevice for Memory {
 		}
 		if ce {
 			if re {// Memory read
-				let byte: u8 = self.data[address];
+				let byte: u8 = self.get_data(address);
 				for bit_i in 0..8_u16 {
 					self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("D", bit_i), match (byte >> bit_i) & 1 {0 => false, 1 => true, _ => panic!("bruh")}.into());
 				}
@@ -1075,7 +1108,7 @@ impl LogicDevice for Memory {
 						new_byte += 2_u8.pow(bit_i as u32);
 					}
 				}
-				self.data[address] = new_byte;
+				Self::set_data(&mut self.data, address, new_byte);
 			}
 		}
 	}
@@ -1084,7 +1117,11 @@ impl LogicDevice for Memory {
 			self.generic.save(),
 			self.addr_size,
 			match self.nonvolatile {
-				true => Some(self.data.clone()),
+				true => {
+					let mut data = self.data.clone();
+					Self::trim_memory_if_blank(&mut data);
+					Some(data)
+				},
 				false => None
 			},
 			self.layout.save()
@@ -1111,16 +1148,14 @@ impl LogicDevice for Memory {
 			let mut new_err_opt = Option::<String>::None;
 			self.nonvolatile = props.nonvolatile;
 			if props.erase {
-				for i in 0..self.data.len() {
-					self.data[i] = 0;
-				}
+				self.data = Vec::new();
 			}
 			if props.paste {
 				let csv_string = self.ui_csv_paste_string.borrow();
 				for (i, number_string) in csv_string.split(",").into_iter().enumerate() {
 					match number_string.trim().parse::<u8>() {
 						Ok(new_elem) => {
-							self.data[i] = new_elem;
+							Self::set_data(&mut self.data, i, new_elem);
 						}
 						Err(e) => {
 							new_err_opt = Some(format!("CSV paste error: {}", e));

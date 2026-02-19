@@ -171,7 +171,7 @@ mod restore_old_files {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EnumAllLogicDevices {
 	/// (Relative path of circuit, Whether to use block diagram, Position, Orientation, Name, Library name, Instance-specific data)
-	SubCircuit(String, bool, IntV2, FourWayDir, #[serde(default)]String, #[serde(default)]String, #[serde(default)]CircuitInstanceConfig),
+	SubCircuit(String, bool, IntV2, FourWayDir, #[serde(default)]String, #[serde(default)]String, #[serde(default)]Option<CircuitInstanceConfig>),
 	GateAnd(LogicDeviceSave),
 	GateNand(LogicDeviceSave),
 	GateNot(LogicDeviceSave),
@@ -204,7 +204,7 @@ pub enum EnumAllLogicDevices {
 impl EnumAllLogicDevices {
 	pub fn to_dynamic(self_instance: Self) -> Result<Box<dyn LogicDevice>, String> {
 		match self_instance {
-			Self::SubCircuit(circuit_rel_path, displayed_as_block, pos, dir, name, lib_name, instance_config) => Ok(Box::new(to_string_err_with_message(load_circuit(&circuit_rel_path, displayed_as_block, false, pos, dir, name, lib_name, Some(&instance_config)), "While loading sub circuit")?)),
+			Self::SubCircuit(circuit_rel_path, displayed_as_block, pos, dir, name, lib_name, instance_config_opt) => Ok(Box::new(to_string_err_with_message(load_circuit(&circuit_rel_path, displayed_as_block, false, pos, dir, name, lib_name, instance_config_opt.as_ref()), "While loading sub circuit")?)),
 			Self::GateAnd(gate) => Ok(Box::new(builtin_components::GateAnd::from_save(gate))),
 			Self::GateNand(gate) => Ok(Box::new(builtin_components::GateNand::from_save(gate))),
 			Self::GateNot(gate) => Ok(Box::new(builtin_components::GateNot::from_save(gate))),
@@ -357,7 +357,7 @@ pub fn move_circuit(old_lib: &str, old_name: &str, new_lib: &str, new_name: &str
 		let mut save = false;
 		for (_, component_cell) in circuit.components.borrow_mut().iter() {
 			let mut component = component_cell.borrow_mut();
-			let comp_save = component.save()?;
+			let comp_save = component.save(circuit.save_component_instance_config)?;
 			// (Relative path of circuit, Whether to use block diagram, Position, Orientation, Name, Library name)
 			if let EnumAllLogicDevices::SubCircuit(comp_file_name, block, pos, dir, name, comp_lib_name, instance_config) = comp_save {
 				if comp_file_name == old_name && comp_lib_name == old_lib {

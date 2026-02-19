@@ -1492,7 +1492,7 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn get_generic(&self) -> &LogicDeviceGeneric;
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric;
 	fn compute_step(&mut self, ancestors: &AncestryStack, self_component_id: u64, clock_state: bool, first_propagation_step: bool);
-	fn save(&self) -> Result<EnumAllLogicDevices, String>;
+	fn save(&self, include_instance_config: bool) -> Result<EnumAllLogicDevices, String>;
 	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>);
 	/// In CircuitVerse there can be, for example, one AND gate that acts like 8 gates, with 8-bit busses going in and out of it
 	fn get_bit_width(&self) -> Option<u16> {None}
@@ -1681,7 +1681,7 @@ impl<T: LogicDevice> GraphicSelectableItem for T {
 	}
 	#[cfg(feature = "using_egui")]
 	fn copy(&self) -> CopiedGraphicItem {
-		CopiedGraphicItem::Component(self.save().unwrap())
+		CopiedGraphicItem::Component(self.save(true).unwrap())
 	}
 }
 
@@ -2184,7 +2184,11 @@ pub struct LogicCircuit {
 	pub propagation_done: RefCell<(bool, bool)>,
 	pub lib_name: String,
 	/// If this is a subcircuit, whether to include this circuit in the timing diagram tree
-	pub include_in_timing_diagram: bool
+	pub include_in_timing_diagram: bool,
+	/// Determines if components including sub circuits have their instance config saved. Not saving can reduce file size by a lot.
+	/// Can be overridden by parent if this is a subcircuit.
+	/// TODO: Use this
+	pub save_component_instance_config: bool
 }
 
 impl LogicCircuit {
@@ -2236,7 +2240,8 @@ impl LogicCircuit {
 			highlighted_net_opt: None,
 			propagation_done: RefCell::new((false, false)),
 			lib_name: lib_name,
-			include_in_timing_diagram: false
+			include_in_timing_diagram: false,
+			save_component_instance_config: true
 		};
 		new.setup_external_connection_sources();
 		new.recompute_default_layout();
@@ -2313,7 +2318,8 @@ impl LogicCircuit {
 			highlighted_net_opt: None,
 			propagation_done: RefCell::new((false, false)),
 			lib_name,
-			include_in_timing_diagram: false
+			include_in_timing_diagram: false,
+			save_component_instance_config: true
 		};
 		out.setup_external_connection_sources();
 		out.check_wire_geometry_and_connections(None);
@@ -3172,7 +3178,7 @@ impl LogicCircuit {
 		save.type_name = format!("{} (flattened)", save.type_name);
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&save_path, &self.lib_name)?, &raw_string))?;
-		Ok(EnumAllLogicDevices::SubCircuit(save_path, self.displayed_as_block, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone(), self.lib_name.clone(), self.get_instance_config_circuit()))
+		Ok(EnumAllLogicDevices::SubCircuit(save_path, self.displayed_as_block, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone(), self.lib_name.clone(), Some(self.get_instance_config_circuit())))
 	}
 	/// Recursively extracts all sub-circuits that don't have a fixed sub-cycle count
 	#[cfg(feature = "using_filesystem")]
@@ -3199,7 +3205,7 @@ impl LogicCircuit {
 				}
 			}
 			else {
-				components.push(comp.save().unwrap());
+				components.push(comp.save(true).unwrap());
 			}
 		}
 		// Apply transformation for this circuit
@@ -3216,7 +3222,7 @@ impl LogicCircuit {
 				let mut comp = EnumAllLogicDevices::to_dynamic(comp_save.clone()).unwrap();
 				let ui_data = comp.get_ui_data_mut();
 				transform(&mut ui_data.position, &mut ui_data.direction);
-				*comp_save = comp.save().unwrap();
+				*comp_save = comp.save(true).unwrap();
 			}
 		}
 		Ok((wire_geometry, components))
@@ -3355,7 +3361,8 @@ impl LogicCircuit {
 		// Convert components to enum variants to be serialized
 		let mut components_save = HashMap::<u64, EnumAllLogicDevices>::new();
 		for (ref_, component) in self.components.borrow().iter() {
-			components_save.insert(*ref_, component.borrow().save()?);
+			// Because this is the toplevel circuit, use `self.save_component_instance_config` to determine if all lower circuits save stuff
+			components_save.insert(*ref_, component.borrow().save(self.save_component_instance_config)?);
 		}
 		// Un-RefCell Logic pins
 		let mut logic_pins = HashMap::<u64, LogicConnectionPin>::new();
@@ -3396,6 +3403,7 @@ impl LogicCircuit {
 	}
 	#[cfg(feature = "using_filesystem")]
 	pub fn save_circuit_toplevel(&self) -> Result<(), String> {
+		// TODO: Optional instance config save
 		let save = self.create_save_circuit()?;
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_name, &self.lib_name)?, &raw_string))?;
@@ -3521,9 +3529,13 @@ impl LogicDevice for LogicCircuit {
 	}
 	/// Returns handle to file for inclusion in other circuits
 	/// The actual save is done with `LogicCircuit::save_circuit()`
-	fn save(&self) -> Result<EnumAllLogicDevices, String> {
+	fn save(&self, include_instance_config: bool) -> Result<EnumAllLogicDevices, String> {
+		let instance_opt: Option<CircuitInstanceConfig> = match include_instance_config {
+			true => Some(self.get_instance_config_circuit()),
+			false => None
+		};
 		// Path to save file
-		Ok(EnumAllLogicDevices::SubCircuit(self.save_name.clone(), self.displayed_as_block, self.get_ui_data().position, self.get_ui_data().direction, self.generic_device.name.clone(), self.lib_name.clone(), self.get_instance_config_circuit()))
+		Ok(EnumAllLogicDevices::SubCircuit(self.save_name.clone(), self.displayed_as_block, self.get_ui_data().position, self.get_ui_data().direction, self.generic_device.name.clone(), self.lib_name.clone(), instance_opt))
 	}
 	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		if self.displayed_as_block {
@@ -3713,28 +3725,29 @@ impl LogicDevice for LogicCircuit {
 }
 
 /// Saved along with a sub circuit to keep data specific to this instance of the circuit so two different uses of the circuit cannot conflict with each other when saved
-/// Problem example with memory, but other state info such as pin states would work the same:
-/// 
-/// Circuit A
-/// |- SubCircuit A
-///    |- Nonvolatile memory
-/// Circuit B
-/// |- SubCircuit A
-///    |- Nonvolatile memory
-/// 
 /// As can be seen in this diagram, circuit's A and B when both saved would conflict with each other because the save file for "SubCircuit A" can only contain one copy of the nonvolatile memory
 /// Instead the memory contents will be saved in an instance config for "SubCircuit A" so it can be different for both "Circuit A" and "Circuit B":
 /// 
 /// Circuit A
 /// |- SubCircuit A
 ///    |- Nonvolatile memory
+///    |- SubCircuit B
+///       |- Nonvolatile memory
 ///    |- CircuitInstanceConfig
 ///       |- Memory contents
+///       |- SubCircuit B instance config
+///          |- Memory contents
 /// Circuit B
 /// |- SubCircuit A
 ///    |- Nonvolatile memory
+///    |- SubCircuit B
+///       |- Nonvolatile memory
 ///    |- CircuitInstanceConfig
 ///       |- Memory contents
+///       |- SubCircuit B instance config
+///          |- Memory contents
+/// 
+/// Alternate methgod: Everything stored in top circuit's save-file
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct CircuitInstanceConfig {
 	pub include_in_timing_diagram: bool,
