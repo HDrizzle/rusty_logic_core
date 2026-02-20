@@ -19,7 +19,7 @@ The simulator has a variety of built-in logic gates as well as some more complic
 
 ### The Clock
 
-Every circuit has its own clock which can be setup under the "Circuit Settings" menu. To access the clock in the circuit add the "Clock Source" component. All Clock source components use the simulation's clock state and will therefore always be the same. To prevent timing issues, the clock will be prevented from transitioning until all previous changes have been propagated. This means that even if the clock is set arbitrarily fast, it will only go so fast as to not timing issues.
+Every circuit has its own clock which can be setup under the "Circuit Settings" menu. To access the clock in the circuit add the "Clock Source" component. All Clock source components use the simulation's clock state and will therefore always be the same. To prevent timing issues, the clock will be prevented from transitioning until all previous changes have been propagated. This means that even if the clock is set arbitrarily fast, it will only go so fast as to not cause timing issues.
 
 A sub-circuit will have a different internal clock than the the parent circuit which is usually not ideal. In this situation, just have a normal connection pin called "Clock" or whatever on the sub-circuit so it can be clocked by the outside circuit correctly.
 

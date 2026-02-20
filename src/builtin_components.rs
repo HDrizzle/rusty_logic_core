@@ -1736,6 +1736,14 @@ impl LogicDevice for SRLatch {
 		self.layout.set_property(property);
 		*self = Self::from_save(self.generic.save(), self.layout.save(), self.state)
 	}
+	fn get_instance_config_opt(&self) -> Option<ComponentInstanceConfig> {
+		Some(ComponentInstanceConfig::Latch(self.state as u128, 0))
+	}
+	fn set_instance_config(&mut self, instance_config: &ComponentInstanceConfig) {
+		if let ComponentInstanceConfig::Latch(low, _) = instance_config {
+			self.state = low & 1 == 1;
+		}
+	}
 }
 
 /// Parameterized Counter

@@ -1821,6 +1821,23 @@ impl Default for Clock {
 	}
 }
 
+/// A "Signal Group" is one graphical section of the timing diagram, can be one logical wire or a bus
+#[derive(Debug, Clone)]
+pub enum TimingDiagramSignalGroupSource {
+	Clk,
+	/// Probe ID
+	Probe(u64),
+	/// (Component ID of sub circuit, Index into it's `signal_groups` field)
+	/// The toplevel timing diagram will collect all timing data, the sub circuit won't do anything
+	SubCircuitSignalGroup(u64, usize)
+}
+
+#[derive(Debug, Clone)]
+pub enum TimingDiagramTreeElement {
+	Branch(Vec<TimingDiagramTreeElement>),
+	Leaf(TimingDiagramSignalGroupSource, Vec<Vec<(TimingDiagramTimestamp, LogicState)>>)
+}
+
 #[derive(Debug, Clone)]
 pub struct TimingDiagram {
 	/// List of signal groups and corresponding probe IDs (CLK probe ID is ignored and set to 0), each signal group contains list of signals (one signal per bit width of probe), each signal contains list of samples
@@ -3733,30 +3750,28 @@ impl LogicDevice for LogicCircuit {
 	}
 }
 
-/// Saved along with a sub circuit to keep data specific to this instance of the circuit so two different uses of the circuit cannot conflict with each other when saved
-/// As can be seen in this diagram, circuit's A and B when both saved would conflict with each other because the save file for "SubCircuit A" can only contain one copy of the nonvolatile memory
+/// Saved along with a toplevel circuit save file to keep data specific to each instance of every component / sub circuit so two different uses of the circuit cannot conflict with each other when saved
 /// Instead the memory contents will be saved in an instance config for "SubCircuit A" so it can be different for both "Circuit A" and "Circuit B":
 /// 
-/// Circuit A
+/// Toplevel Circuit A
 /// |- SubCircuit A
 ///    |- Nonvolatile memory
 ///    |- SubCircuit B
 ///       |- Nonvolatile memory
-///    |- CircuitInstanceConfig
+/// |- CircuitInstanceConfig
+///    |- Memory contents
+///    |- SubCircuit B instance config
 ///       |- Memory contents
-///       |- SubCircuit B instance config
-///          |- Memory contents
-/// Circuit B
-/// |- SubCircuit A
-///    |- Nonvolatile memory
-///    |- SubCircuit B
-///       |- Nonvolatile memory
-///    |- CircuitInstanceConfig
-///       |- Memory contents
-///       |- SubCircuit B instance config
-///          |- Memory contents
 /// 
-/// Alternate methgod: Everything stored in top circuit's save-file
+/// Toplevel Circuit B
+/// |- SubCircuit A
+///    |- Nonvolatile memory
+///    |- SubCircuit B
+///       |- Nonvolatile memory
+/// |- CircuitInstanceConfig
+///    |- Memory contents
+///    |- SubCircuit B instance config
+///       |- Memory contents
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct CircuitInstanceConfig {
 	pub include_in_timing_diagram: bool,
@@ -3767,7 +3782,7 @@ pub struct CircuitInstanceConfig {
 	pub component_save_states: HashMap<u64, ComponentInstanceConfig>
 }
 
-/// Instance state save for any component, example: Nonvolatile memory contents
+/// Represents ONLY the electrical state of a component, such as Nonvolatile memory contents or the state of a flip flop. DOES NOT represent configuration such as bit width
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ComponentInstanceConfig {
 	/// Sub circuit

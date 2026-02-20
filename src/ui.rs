@@ -980,6 +980,9 @@ impl LogicCircuit {
 			});
 		});
 	}
+	fn timing_diagram_show_signal_group(&self, signal_group: Vec<Vec<LogicState>>) {
+		// TODO
+	}
 	pub fn paste(&self, item_set: CopiedItemSet) -> Vec<GraphicSelectableItemRef> {
 		let mut out = Vec::<GraphicSelectableItemRef>::new();
 		for pasted_item in item_set.items {
