@@ -78,14 +78,25 @@ pub struct LogicCircuitSave {
 	pub clock_state: bool,
 	#[serde(default)]
 	pub probes: HashMap<u64, ProbeSave>,
+	/// Order for just this circuit
 	#[serde(default)]
-	pub timing_probe_order: Vec<u64>,
+	pub timing_diagram_order: Vec<TimingDiagramTreeRootNodeSave>,
 	#[serde(default)]
 	pub block_bb: (IntV2, IntV2),
 	#[serde(default)]
 	pub instance_config_opt: Option<CircuitInstanceConfig>,
 	#[serde(default)]
 	pub save_instance_config: bool
+}
+
+/// What order is everything displayed in the timing diagram
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TimingDiagramTreeRootNodeSave {
+	Clk,
+	/// Probe ID
+	Probe(u64),
+	/// SubCircuit component ID
+	Branch(u64)
 }
 
 #[cfg(feature = "using_filesystem")]
@@ -156,7 +167,7 @@ mod restore_old_files {
 				clock_freq: 1.0,
 				clock_state: false,
 				probes: HashMap::new(),
-				timing_probe_order: Vec::new(),
+				timing_diagram_order: Vec::new(),
 				block_bb: (IntV2(0, 0), IntV2(0, 0)),
 				instance_config_opt: None,
 				save_instance_config: false
@@ -369,7 +380,7 @@ pub fn move_circuit(old_lib: &str, old_name: &str, new_lib: &str, new_name: &str
 			}
 		}
 		if save {
-			to_string_err_with_message(circuit.save_circuit_toplevel(), "Could not save circuit during circuit move")?;
+			to_string_err_with_message(circuit.save_circuit_toplevel(None), "Could not save circuit during circuit move")?;
 		}
 	}
 	// Delete old file

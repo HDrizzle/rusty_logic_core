@@ -1826,22 +1826,22 @@ impl Default for Clock {
 pub enum TimingDiagramSignalGroupSource {
 	Clk,
 	/// Probe ID
-	Probe(u64),
-	/// (Component ID of sub circuit, Index into it's `signal_groups` field)
-	/// The toplevel timing diagram will collect all timing data, the sub circuit won't do anything
-	SubCircuitSignalGroup(u64, usize)
+	Probe(u64)
 }
 
 #[derive(Debug, Clone)]
-pub enum TimingDiagramTreeElement {
-	Branch(Vec<TimingDiagramTreeElement>),
+pub enum TimingDiagramTreeNode {
+	/// (Component ID of sub circuit, It's list of tree elements)
+	/// The toplevel timing diagram will collect all timing data, the sub circuit won't do anything
+	Branch(u64, Vec<TimingDiagramTreeNode>),
+	/// Actual signal group
 	Leaf(TimingDiagramSignalGroupSource, Vec<Vec<(TimingDiagramTimestamp, LogicState)>>)
 }
 
 #[derive(Debug, Clone)]
 pub struct TimingDiagram {
 	/// List of signal groups and corresponding probe IDs (CLK probe ID is ignored and set to 0), each signal group contains list of signals (one signal per bit width of probe), each signal contains list of samples
-	pub signal_groups: Vec<(u64, Vec<Vec<(TimingDiagramTimestamp, LogicState)>>)>,
+	pub tree: Vec<TimingDiagramTreeNode>,
 	pub n_samples: usize,
 	pub running: TimingTiagramRunningState,
 	pub current_timestamp: TimingDiagramTimestamp,
@@ -1854,9 +1854,9 @@ pub struct TimingDiagram {
 }
 
 impl TimingDiagram {
-	pub fn from_probe_id_list(probes: &Vec<u64>) -> Self {
+	pub fn new(tree: Vec<TimingDiagramTreeNode>) -> Self {
 		Self {
-			signal_groups: vec![0_u64].iter().chain(probes.iter()).map(|probe_id| (*probe_id, vec![vec![]])).collect(),
+			tree,
 			n_samples: 0,
 			running: TimingTiagramRunningState::Off,
 			current_timestamp: TimingDiagramTimestamp::default(),
@@ -1889,20 +1889,45 @@ impl TimingDiagram {
 			&TimingDiagramTimestamp::PropagationAndSimStep(_, _) => TimingDiagramTimestamp::PropagationAndSimStep(0, 0)
 		}
 	}
-	pub fn push_state_if_different(&mut self, signal_group_i: usize, bit_i: usize, state: LogicState) {
-		let bit_line = &mut self.signal_groups[signal_group_i].1[bit_i];
+	/// Not an instance method so that caller can recurse into the tree. Recursive `&mut self` functions will have borrowing issues
+	pub fn push_state_if_different(current_timestamp: TimingDiagramTimestamp, tree: &mut Vec<TimingDiagramTreeNode>, signal_group_i: usize, bit_i: usize, state: LogicState) {
+		// Old
+		/*let bit_line = &mut self.signal_groups[signal_group_i].1[bit_i];
 		if bit_line.len() == 0 {
 			bit_line.push((self.current_timestamp, state));
 		}
 		else if bit_line[bit_line.len() - 1].1 != state {
 			bit_line.push((self.current_timestamp, state));
+		}*/
+		// New
+		match &mut tree[signal_group_i] {
+			TimingDiagramTreeNode::Leaf(_, signl_group) => {
+				let bit_line = &mut signl_group[bit_i];
+				if bit_line.len() == 0 {
+					bit_line.push((current_timestamp, state));
+				}
+				else if bit_line[bit_line.len() - 1].1 != state {
+					bit_line.push((current_timestamp, state));
+				}
+			},
+			TimingDiagramTreeNode::Branch(_, _) => panic!("Cannot update state if node is a branch")
 		}
 	}
 	pub fn clear(&mut self) {
-		// Signal recordings
-		for group in self.signal_groups.iter_mut() {
-			for bit_line in group.1.iter_mut() {
-				bit_line.clear();
+		// Clear recording in tree, using DFS
+		let mut tree_stack = Vec::<&mut Vec<TimingDiagramTreeNode>>::new();
+		tree_stack.push(&mut self.tree);
+		while !tree_stack.is_empty() {
+			let nodes: &mut Vec<TimingDiagramTreeNode> = tree_stack.pop().expect("Shouldn't be empty");
+			for node in nodes {
+				match node {
+					TimingDiagramTreeNode::Leaf(_, signal_group) => {
+						for bit_line in signal_group.iter_mut() {
+							bit_line.clear();
+						}
+					},
+					TimingDiagramTreeNode::Branch(_, branch_nodes) => {tree_stack.push(branch_nodes);}
+				}
 			}
 		}
 		// Counts & timing
@@ -2193,7 +2218,9 @@ pub struct LogicCircuit {
 	/// Timing diagram probes
 	pub probes: RefCell<HashMap<u64, Probe>>,
 	/// What order are the timing probes displayed
-	pub timing_probe_order: Vec<u64>,
+	/// NOTE: NOT USED AS THE INFORMATION SOURCE FOR TOPLEVEL, will be overruled by actual timing diagram tree. Should only be read when creating the timing diagram tree
+	/// When saved (only toplevel circuit's actually get saved), use the timing diagram tree, NOT this
+	pub timing_diagram_order: Vec<TimingDiagramTreeRootNodeSave>,
 	pub bit_width_errors: Vec<BitWidthError>,
 	pub highlighted_net_opt: Option<u64>,
 	/// Prevents clock changes when circuit propagation from something else (such as previous clock edge) isn't complete yet
@@ -2251,7 +2278,7 @@ impl LogicCircuit {
 			self_reload_err_opt: None,
 			clock: RefCell::new(Clock::default()),
 			probes: RefCell::new(HashMap::new()),
-			timing_probe_order: Vec::new(),
+			timing_diagram_order: Vec::new(),
 			bit_width_errors: Vec::new(),
 			highlighted_net_opt: None,
 			propagation_done: RefCell::new((false, false)),
@@ -2329,7 +2356,7 @@ impl LogicCircuit {
 			self_reload_err_opt: None,
 			clock: RefCell::new(Clock::load(save.clock_enabled, save.clock_freq, save.clock_state)),
 			probes: RefCell::new(probes),
-			timing_probe_order: save.timing_probe_order,
+			timing_diagram_order: save.timing_diagram_order,
 			bit_width_errors: Vec::new(),
 			highlighted_net_opt: None,
 			propagation_done: RefCell::new((false, false)),
@@ -2778,8 +2805,13 @@ impl LogicCircuit {
 			}
 		}
 	}
+	/// Run as part of circuit reconnection process after edit or on load
+	/// Will only be used on toplevel circuit
+	/// Does not edit `self.timing_diagram_order`, instead directly modifies timing diagram tree
 	pub fn update_probe_net_connections_and_timing(&self, timing: &mut TimingDiagram) {
+		assert!(self.is_toplevel);
 		let mut probes = self.probes.borrow_mut();
+		// Set probe connections
 		for probe in probes.values_mut() {
 			probe.nets_opt = self.is_connection_point(probe.ui_data.position).1;
 		}
@@ -3193,7 +3225,7 @@ impl LogicCircuit {
 	/// Creates a new flatened circuit and saves it, returning the path to the saved circuit
 	#[cfg(feature = "using_filesystem")]
 	pub fn flatten(&self, apply_transform: bool) -> Result<EnumAllLogicDevices, String> {
-		let mut save = self.create_save_circuit().unwrap();
+		let mut save = self.create_save_circuit(None).unwrap();
 		let (wires, comps) = self.flatten_recursive(apply_transform)?;
 		save.wires = vec_to_u64_keyed_hashmap(wires);
 		save.components = vec_to_u64_keyed_hashmap(comps);
@@ -3330,7 +3362,7 @@ impl LogicCircuit {
 		changed
 	}
 	/// Adds one time increment to the timing diagram data
-	pub fn update_timing_diagram(&self, propagation_states: &mut RefMut<'_, (bool, bool)>, timing: &mut TimingDiagram, mut first_propagation_step: bool) {
+	pub fn update_timing_diagram_toplevel(&self, propagation_states: &mut RefMut<'_, (bool, bool)>, timing: &mut TimingDiagram, mut first_propagation_step: bool) {
 		if timing.running == TimingTiagramRunningState::Off {
 			return;
 		}
@@ -3380,7 +3412,32 @@ impl LogicCircuit {
 		}
 		timing.n_samples += 1;
 	}
-	pub fn create_save_circuit(&self) -> Result<LogicCircuitSave, String> {
+	/// Creates blank timing recording
+	pub fn build_timing_diagram_tree(&self) -> Vec<TimingDiagramTreeNode> {
+		let mut out = Vec::<TimingDiagramTreeNode>::new();
+		// Iterate toplevel order
+		for tree_node in &self.timing_diagram_order {
+			match tree_node {
+				//	i love my boyfriend , love haley <3
+				TimingDiagramTreeRootNodeSave::Clk => {out.push(TimingDiagramTreeNode::Leaf(TimingDiagramSignalGroupSource::Clk, Vec::new()));},
+				TimingDiagramTreeRootNodeSave::Probe(probe_id) => {out.push(TimingDiagramTreeNode::Leaf(TimingDiagramSignalGroupSource::Probe(*probe_id), Vec::new()));},
+				TimingDiagramTreeRootNodeSave::Branch(component_id) => {// Subcircuit branch
+					let components = self.components.borrow();
+					if let Some(comp_cell) = components.get(component_id) {
+						let component = comp_cell.borrow();
+						// Check that this component is a circuit, its good to be fault tolerant
+						if component.is_circuit() {
+							out.push(TimingDiagramTreeNode::Branch(*component_id, component.get_circuit().build_timing_diagram_tree()));
+							// 2nd day of initiation is tonight, more top secret stuff
+						}
+					}
+				}
+			}
+		}
+		// Done
+		out
+	}
+	pub fn create_save_circuit(&self, timing_diagram_opt: Option<&TimingDiagram>) -> Result<LogicCircuitSave, String> {
 		// Convert components to enum variants to be serialized
 		let mut components_save = HashMap::<u64, EnumAllLogicDevices>::new();
 		for (ref_, component) in self.components.borrow().iter() {
@@ -3410,6 +3467,23 @@ impl LogicCircuit {
 			true => Some(self.get_instance_config_circuit()),
 			false => None
 		};
+		// Timing diagram order, if timing diagram is supplied then use that, otherwise copy existing display order
+		let timing_diagram_order: Vec<TimingDiagramTreeRootNodeSave> = match timing_diagram_opt {
+			Some(timing) => {
+				let mut out = Vec::<TimingDiagramTreeRootNodeSave>::new();
+				for node in &timing.tree {
+					out.push(match node {
+						TimingDiagramTreeNode::Branch(sub_circuit_comp_id, _) => TimingDiagramTreeRootNodeSave::Branch(*sub_circuit_comp_id),
+						TimingDiagramTreeNode::Leaf(source, _) => match source {
+							TimingDiagramSignalGroupSource::Clk => TimingDiagramTreeRootNodeSave::Clk,
+							TimingDiagramSignalGroupSource::Probe(probe_id) => TimingDiagramTreeRootNodeSave::Probe(*probe_id)
+						}
+					});
+				}
+				out
+			},
+			None => self.timing_diagram_order.clone()
+		};
 		// First, actually save this circuit
 		Ok(LogicCircuitSave {
 			logic_pins,
@@ -3425,15 +3499,15 @@ impl LogicCircuit {
 			clock_freq: clock.freq,
 			clock_state: clock.state,
 			probes: HashMap::from_iter(self.probes.borrow().iter().map(|(id, probe)| (*id, probe.save()))),
-			timing_probe_order: self.timing_probe_order.clone(),//self.timing.borrow().signal_groups.iter().enumerate().filter(|(i, _)| *i > 0).map(|(_, (probe_id, _))| *probe_id).collect(),
+			timing_diagram_order,//self.timing.borrow().signal_groups.iter().enumerate().filter(|(i, _)| *i > 0).map(|(_, (probe_id, _))| *probe_id).collect(),
 			block_bb: (round_v2_to_intv2(self.generic_device.ui_data.local_bb.0), round_v2_to_intv2(self.generic_device.ui_data.local_bb.1)),
 			instance_config_opt,
 			save_instance_config: self.save_instance_config
 		})
 	}
 	#[cfg(feature = "using_filesystem")]
-	pub fn save_circuit_toplevel(&self) -> Result<(), String> {
-		let save = self.create_save_circuit()?;
+	pub fn save_circuit_toplevel(&self, timing_diagram_opt: Option<&TimingDiagram>) -> Result<(), String> {
+		let save = self.create_save_circuit(timing_diagram_opt)?;
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&self.save_name, &self.lib_name)?, &raw_string))?;
 		Ok(())

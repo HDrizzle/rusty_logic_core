@@ -1252,13 +1252,14 @@ pub struct LogicCircuitToplevelView {
 	frame_compute_cycles: usize,
 	showing_flatten_opoup: bool,
 	flatten_error: Option<String>,
+	/// Not owned by the circuit itself because its only used for the toplevel circuit and would use more memory if subcircuits had it
 	timing: TimingDiagram,
 	move_popup_opt: Option<MoveCircuitPopup>
 }
 
 impl LogicCircuitToplevelView {
 	pub fn new(circuit: LogicCircuit, saved: bool, styles: &Styles) -> Self {
-		let timing_probe_order = circuit.timing_probe_order.clone();
+		let timing_diagram_order = circuit.build_timing_diagram_tree();
 		let mut out = Self {
 			circuit,
 			screen_center_wrt_grid: V2::zeros(),
@@ -1273,7 +1274,7 @@ impl LogicCircuitToplevelView {
 			frame_compute_cycles: 0,
 			showing_flatten_opoup: false,
 			flatten_error: None,
-			timing: TimingDiagram::from_probe_id_list(&timing_probe_order),
+			timing: TimingDiagram::new(timing_diagram_order),
 			move_popup_opt: None
 		};
 		out.circuit.update_probe_net_connections_and_timing(&mut out.timing);
@@ -1370,7 +1371,7 @@ impl LogicCircuitToplevelView {
 		// Top: general controls
 		Popup::from_response(&inner_response.response).align(RectAlign{parent: Align2::LEFT_TOP, child: Align2::LEFT_TOP}).id("top-left controls".into()).show(|ui| {
 			if ui.button("Save").clicked() {
-				self.circuit.save_circuit_toplevel().unwrap();
+				self.circuit.save_circuit_toplevel(Some(&self.timing)).unwrap();
 				self.saved = true;
 			}
 			if self.circuit.tool.borrow().tool_select_allowed() {
@@ -1577,7 +1578,7 @@ impl LogicCircuitToplevelView {
 					self.move_popup_opt = None;
 				}
 				if save {
-					self.circuit.save_circuit_toplevel().unwrap();
+					self.circuit.save_circuit_toplevel(Some(&self.timing)).unwrap();
 					self.saved = true;
 				}
 				if let Some(reload_data) = reload_opt {
