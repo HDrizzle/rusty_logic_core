@@ -1891,11 +1891,10 @@ impl TimingDiagram {
 	}
 	// Not an instance method so that caller can recurse into the tree. Recursive `&mut self` functions will have borrowing issues
 	pub fn push_state_if_different(current_timestamp: &TimingDiagramTimestamp, signal_group: &mut Vec<Vec<(TimingDiagramTimestamp, LogicState)>>, bit_i: usize, state: LogicState) {
-		// New
 		let bit_line = &mut signal_group[bit_i];
-		if bit_line.len() == 0 {
+		if bit_line.len() == 0 {// If first sample put there anyway
 			bit_line.push((*current_timestamp, state));
-		}
+		}// Otherwise only if different from previous sample
 		else if bit_line[bit_line.len() - 1].1 != state {
 			bit_line.push((*current_timestamp, state));
 		}
@@ -3870,7 +3869,8 @@ impl LogicDevice for LogicCircuit {
 	#[cfg(feature = "using_egui")]
 	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
 		vec![
-			SelectProperty::ReloadCircuit(false, self.self_reload_err_opt.clone())
+			SelectProperty::ReloadCircuit(false, self.self_reload_err_opt.clone()),
+			SelectProperty::IncludeInTimingDiagram(self.include_in_timing_diagram)
 		]
 	}
 	#[cfg(feature = "using_egui")]
@@ -3886,6 +3886,9 @@ impl LogicDevice for LogicCircuit {
 					}
 				}
 			}
+		}
+		if let SelectProperty::IncludeInTimingDiagram(state) = property {
+			self.include_in_timing_diagram = state;
 		}
 	}
 	fn set_instance_config(&mut self, instance_config_generic: &ComponentInstanceConfig) {

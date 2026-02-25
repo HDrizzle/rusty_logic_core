@@ -38,7 +38,7 @@ pub mod prelude {
 	#[cfg(feature = "using_egui")]
 	pub use ui::{LogicCircuitToplevelView, App, SelectProperty, CopiedGraphicItem, CopiedItemSet};
 	pub use graphics::{UIData, GraphicSelectableItem, DrawInterface, Styles, DrawData};
-	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, GraphicPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection, LogicDeviceSave, GraphicLabel, GraphicLabelSave, Splitter, SplitterSave, Probe, ProbeSave, CircuitInstanceConfig, ComponentInstanceConfig};
+	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, GraphicPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection, LogicDeviceSave, GraphicLabel, GraphicLabelSave, Splitter, SplitterSave, Probe, ProbeSave, CircuitInstanceConfig, ComponentInstanceConfig, TimingDiagramSignalGroupSource};
 	pub use resource_interface::{EnumAllLogicDevices, TimingDiagramTreeRootNodeSave};
 	#[cfg(feature = "using_filesystem")]
 	pub use resource_interface::load_file_with_better_error;

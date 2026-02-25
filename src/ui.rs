@@ -1,12 +1,12 @@
 //! Only UI stuff
 
-use crate::{builtin_components, prelude::*, resource_interface, simulator::{AncestryStack, GraphicSelectableItemRef, SelectionState, TimingDiagram, TimingTiagramRunningState, TimingDiagramTimestamp, Tool}};
+use crate::{builtin_components, prelude::*, resource_interface, simulator::{AncestryStack, GraphicSelectableItemRef, SelectionState, TimingDiagram, TimingDiagramTimestamp, TimingDiagramTreeNode, TimingTiagramRunningState, Tool}};
 use eframe::{egui::{self, containers::Popup, response::Response, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, Color32, DragValue, FontFamily, FontId, Frame, Galley, Key, KeyboardShortcut, Modifiers, Painter, PointerButton, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2, Window}, emath, epaint::{PathStroke, TextShape}};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
 use serde_json;
-use std::{collections::HashSet, f32::consts::TAU, ops::{AddAssign, DerefMut, RangeInclusive, SubAssign}, rc::Rc, sync::Arc, time::Instant};
+use std::{cell::RefCell, collections::{HashSet, HashMap}, f32::consts::TAU, ops::{AddAssign, DerefMut, RangeInclusive, SubAssign}, rc::Rc, sync::Arc, time::Instant};
 #[cfg(feature = "kicad_scrolling")]
 use mouse_rs;
 
@@ -34,7 +34,8 @@ pub enum SelectProperty {
 	BusLayout(String, bool, bool),
 	/// Namee of pin (ex: "Output Enable"), whether it is enabled
 	HasPin(String, bool),
-	PxGridSize(u8)
+	PxGridSize(u8),
+	IncludeInTimingDiagram(bool)
 }
 
 impl SelectProperty {
@@ -58,7 +59,8 @@ impl SelectProperty {
 			Self::SplitterSplits(_) => "Splits".to_owned(),
 			Self::BusLayout(name, _, _) => format!("{} bus config", name),
 			Self::HasPin(name, _) => format!("Has {} pin", name),
-			Self::PxGridSize(_) => "Px Size Grid".to_owned()
+			Self::PxGridSize(_) => "Px Size Grid".to_owned(),
+			Self::IncludeInTimingDiagram(_) => "Include in timing diagram".to_owned()
 		}
 	}
 	/// Add this property to a list on the UI
@@ -224,6 +226,9 @@ impl SelectProperty {
 			},
 			Self::PxGridSize(px_size) => {
 				ui_drag_value_with_arrows(ui, px_size, Some((1, 255)))
+			},
+			Self::IncludeInTimingDiagram(state) => {
+				ui.checkbox(state, "").changed()
 			}
 		}
 	}
@@ -635,42 +640,25 @@ impl LogicCircuit {
 			ui.horizontal(|ui| {
 				let mut amplitude: f32 = 8.5;
 				let mut vert_spacing: f32 = 25.0;
-				// Labels
-				let vert_widget_extra_spacing = ui.style().spacing.item_spacing.y;
+				//let mut flattened_signal_groups = Vec::<Option<Vec<Vec<(TimingDiagramTimestamp, LogicState)>>>>::new();
+				// Recursively generate tree UI and flatten vec of signal groups
 				ui.vertical(|ui| {
-					ui.add_space(8.0);
-					let height = ui.label("CLK").rect.height() + vert_widget_extra_spacing;
-					if height > vert_spacing {
-						let r = height / vert_spacing;
-						vert_spacing /= r;
-						amplitude /= r;
-					}
-					ui.add_space(vert_spacing - height);
-					let probes = self.probes.borrow();
-					for (i, (probe_id, _)) in timing.signal_groups.iter().enumerate() {
-						if i == 0 {
-							continue;
-						}
-						let height = ui.label(&probes.get(probe_id).unwrap().name).rect.height() + vert_widget_extra_spacing;
-						ui.add_space(vert_spacing - height);
-					}
+					Self::show_timing_diagram_ui_recursive(
+						ui,
+						&timing.tree,
+						&*self.probes.borrow(),
+						&*self.components.borrow(),
+						styles,
+						amplitude,
+						vert_spacing
+					);
 				});
-				// Signals
-				if timing.n_samples > 0 {
+				// Signals, TODO
+				/*if timing.n_samples > 0 {
 					ScrollArea::horizontal().stick_to_right(true).show(ui, |ui| {
 						Frame::canvas(ui.style()).show::<()>(ui, |ui| {
 							let canvas_size = Vec2::new(timing.convert_timestamp_to_x_value(&*styles, timing.timing_diagram_end()) + 4.0, timing.signal_groups.len() as f32 * vert_spacing);
 							let (response, painter) = ui.allocate_painter(canvas_size, Sense::empty());
-							let logic_state_to_graph_y_and_color = |state: LogicState| -> (f32, [u8; 3]) {
-								match state {
-									LogicState::Floating => (0.0, styles.color_wire_floating),
-									LogicState::Contested => (0.0, styles.color_wire_contested),
-									LogicState::Driven(bit) => match bit {
-										true => (amplitude, styles.color_foreground),
-										false => (-amplitude, styles.color_foreground)
-									}
-								}
-							};
 							let graph_pos_to_canvas_pos = |graph_x: f32, graph_y: f32, group_i: usize| -> Pos2 {
 								Pos2::new(graph_x + response.rect.left() + 2.0, (-graph_y) + (group_i as f32 + 0.5)*vert_spacing + response.rect.top())
 							};
@@ -680,308 +668,358 @@ impl LogicCircuit {
 									let x = timing.convert_timestamp_to_x_value(&*styles, TimingDiagramTimestamp::PropagationAndSimStep(i, 0));
 									painter.line_segment(
 										[
-											graph_pos_to_canvas_pos(x, logic_state_to_graph_y_and_color(LogicState::Driven(true)).0, 0),
-											graph_pos_to_canvas_pos(x, logic_state_to_graph_y_and_color(LogicState::Driven(false)).0, timing.signal_groups.len() - 1)],
+											graph_pos_to_canvas_pos(x, 0.0, 0),
+											graph_pos_to_canvas_pos(x, 0.0, timing.signal_groups.len() - 1)],
 										Stroke::new(0.7, u8_3_to_color32([128, 128, 128]))
 									);
 								}
 							}
 							// Iterate signal groups, each line on the timing diagram
 							for (group_i, (_, signal_group)) in timing.signal_groups.iter().enumerate() {
-								let mut prev_x: f32 = 0.0;
-								let (mut prev_y, color) = logic_state_to_graph_y_and_color(LogicState::Floating);
-								let mut prev_stroke = Stroke::new(1.0, u8_3_to_color32(color));
-								if signal_group.len() == 0 {
-									panic!("Cannot have empty signal group")
-								} else if signal_group.len() == 1 {// Single bit, code here can be simplified
-									let bit_line = &signal_group[0];
-									let mut prev_sample: LogicState = if bit_line.len() == 0 {
-										LogicState::Floating
-									}
-									else {
-										bit_line[0].1
-									};
-									for (i, (timestamp, state)) in bit_line.iter().enumerate() {
-										let x: f32 = timing.convert_timestamp_to_x_value(&*styles, *timestamp);
-										let (y, color) = logic_state_to_graph_y_and_color(*state);
-										let stroke = Stroke::new(1.0, u8_3_to_color32(color));
-										if i == 0 {
-											// Save numbers
-											prev_y = y;
-											prev_stroke = stroke;
-										}
-										else {
-											// Vertical connection line if states are different
-											if *state != prev_sample {
-												painter.line_segment([graph_pos_to_canvas_pos(x, prev_y, group_i), graph_pos_to_canvas_pos(x, y, group_i)], stroke);
-											}
-										}
-										// Horizontal line
-										painter.line_segment([graph_pos_to_canvas_pos(prev_x, prev_y, group_i), graph_pos_to_canvas_pos(x, prev_y, group_i)], prev_stroke);
-										// Last sample until the end
-										if *timestamp < timing.current_timestamp && i + 1 == bit_line.len() {
-											let last_x: f32 = timing.convert_timestamp_to_x_value(&*styles, timing.timing_diagram_end());
-											let (last_y, last_color) = logic_state_to_graph_y_and_color(*state);
-											let last_stroke = Stroke::new(1.0, u8_3_to_color32(last_color));
-											// Vertical
-											painter.line_segment([graph_pos_to_canvas_pos(x, prev_y, group_i), graph_pos_to_canvas_pos(x, last_y, group_i)], last_stroke);
-											// Horizontal
-											painter.line_segment([graph_pos_to_canvas_pos(x, last_y, group_i), graph_pos_to_canvas_pos(last_x, last_y, group_i)], last_stroke);
-										}
-										// Save numbers
-										prev_sample = *state;
-										prev_x = x;
-										prev_y = y;
-										prev_stroke = stroke;
-									}
-								}
-								else {// Multiple bits, complicated
-									// Current index of each bit line, they won't all be updated the same amount so each needs its own index
-									let mut bit_indices: Vec<usize> = (0..signal_group.len()).map(|_| 0).collect();// Splat 0
-									// Get first recorded state of each bit
-									let mut prev_sample: Vec<LogicState> = signal_group.iter().map(|bit_line| if bit_line.len() == 0 {
-										LogicState::Floating
-									}
-									else {
-										bit_line[0].1
-									}).collect();
-									// Returns: ((N lower, N upper), valid, is contested)
-									let get_n_and_whether_valid_from_sample = |sample: &Vec<LogicState>| -> ((u128, u128), bool, bool) {
-										let mut valid = true;
-										let mut contested = false;
-										let mut curr_n: (u128, u128) = (0, 0);
-										for (i, state) in sample.iter().enumerate() {
-											if state.is_valid() {
-												if state.to_bool() {
-													if i < 128 {
-														curr_n.0 += 1 << i;
-													}
-													else {
-														curr_n.1 += 1 << (i - 128);
-													}
-												}
-											}
-											else {
-												valid = false;
-												contested |= state.is_contested();
-											}
-										}
-										(curr_n, valid, contested)
-									};
-									// (Binary lower, Binary upper)
-									let (mut prev_n_opt, mut prev_sample_contested): (Option<(u128, u128)>, bool) = {
-										let (n, valid, contested) = get_n_and_whether_valid_from_sample(&prev_sample);
-										(
-											match valid {
-												true => Some(n),
-												false => None
-											},
-											contested
-										)
-									};
-									// I Love you Haley
-									// ((Binary lower, Binary upper), X pos of center)
-									let mut bus_labels = Vec::<((u128, u128), f32)>::new();
-									let mut latest_bus_label_start: f32 = 0.0;
-									let mut end = false;
-									// Draw graphics
-									let mut draw_bus_segment = |curr_n: (u128, u128), valid: bool, contested: bool, x: f32, prev_x: f32, end: bool| {
-										let ((y_low, _), (y_high, _)) = (logic_state_to_graph_y_and_color(LogicState::Driven(false)), logic_state_to_graph_y_and_color(LogicState::Driven(true)));
-										let center_pt = graph_pos_to_canvas_pos(x + styles.timing_diagram_bus_half_change_px, (y_high+y_low)/2.0, group_i);
-										let stroke_normal = Stroke::new(1.0, u8_3_to_color32(styles.color_foreground));
-										let mut both_valid_diff = false;
-										let mut diags_from_prev_segment = false;
-										// Diagonals from prev segment
-										if let Some(prev_n) = prev_n_opt {
-											both_valid_diff = (prev_n != curr_n) && valid;
-											if both_valid_diff || !valid {
-												diags_from_prev_segment = true;
-												painter.line_segment(
-													[
-														graph_pos_to_canvas_pos(x, y_high, group_i),
-														center_pt
-													],
-													stroke_normal
-												);
-												painter.line_segment(
-													[
-														center_pt,
-														graph_pos_to_canvas_pos(x, y_low, group_i),
-													],
-													stroke_normal
-												);
-												// Is it weird for guys to name their dicks?
-											}
-											if diags_from_prev_segment || end {
-												// End current bus
-												bus_labels.push((prev_n, (latest_bus_label_start + x)/2.0));
-											}
-										}
-										// Campus is looking really pretty in the fall
-										// Diagonals to this segment
-										let diags_to_this_segment = both_valid_diff || (prev_n_opt.is_none() && valid);
-										if diags_to_this_segment {
-											painter.line_segment(
-												[
-													graph_pos_to_canvas_pos(x + styles.timing_diagram_bus_half_change_px*2.0, y_high, group_i),
-													center_pt
-												],
-												stroke_normal
-											);
-											painter.line_segment(
-												[
-													center_pt,
-													graph_pos_to_canvas_pos(x + styles.timing_diagram_bus_half_change_px*2.0, y_low, group_i),
-												],
-												stroke_normal
-											);
-											latest_bus_label_start = x;
-										}
-										// horiz line(s)
-										if prev_n_opt.is_some() {
-											let start_x = /*(sample_i_f32+DIAGONAL_HALF_WIDTH*2.0)*wavelength;*/match diags_to_this_segment {
-												true => prev_x + styles.timing_diagram_bus_half_change_px*2.0,
-												false => prev_x
-											};
-											painter.line_segment(
-												[
-													graph_pos_to_canvas_pos(start_x, y_high, group_i),
-													graph_pos_to_canvas_pos(x, y_high, group_i)
-												],
-												stroke_normal
-											);
-											painter.line_segment(
-												[
-													graph_pos_to_canvas_pos(start_x, y_low, group_i),
-													graph_pos_to_canvas_pos(x, y_low, group_i)
-												],
-												stroke_normal
-											);
-										}
-										else {
-											let start_x = match diags_from_prev_segment {
-												true => prev_x + styles.timing_diagram_bus_half_change_px,
-												false => prev_x
-											};
-											let color: [u8; 3] = if prev_sample_contested {
-												styles.color_wire_contested
-											}
-											else {
-												styles.color_wire_floating
-											};
-											let (y_mid, _) = logic_state_to_graph_y_and_color(LogicState::Floating);
-											painter.line_segment(
-												[
-													graph_pos_to_canvas_pos(start_x, y_mid, group_i),
-													graph_pos_to_canvas_pos(x, y_mid, group_i)
-												],
-												Stroke::new(1.0, u8_3_to_color32(color))
-											);
-										}
-										if valid {
-											prev_n_opt = Some(curr_n);
-										}
-										else {
-											prev_n_opt = None;
-										}
-										prev_sample_contested = contested;
-									};
-									// Iterate signal samples
-									while !end {
-										// Find first bit to change
-										let mut current_sample: Vec<LogicState> = prev_sample.clone();
-										let mut new_timestamp = timing.current_timestamp;
-										// Fixed by Gemini
-										let next_timestamps: Vec<TimingDiagramTimestamp> = signal_group.iter().enumerate().map(
-											|(bit_line_i, bit_line)| {
-												let current_idx = bit_indices[bit_line_i];
-												if bit_line.is_empty() || current_idx + 1 >= bit_line.len() {
-													// If empty or at the last recorded sample, use the diagram's end time
-													timing.timing_diagram_end() 
-												}
-												else {
-													// Use the timestamp of the NEXT sample
-													bit_line[current_idx + 1].0
-												}
-											}
-										).collect();
-										// Get time of next bit change, closest next change
-										for timestamp in &next_timestamps {
-											if timing.compare_timestamps_for_display(*timestamp, new_timestamp).is_le() {
-												new_timestamp = *timestamp;
-											}
-										}
-										// Fixed by Gemini
-										// Find bit lines to step forward, ones that changed at `new_timestamp`
-										let mut bit_lines_to_advance = Vec::<usize>::new();
-										for (bit_line_i, timestamp) in next_timestamps.iter().enumerate() {
-											// Check if this bit line's NEXT change time is equal to the earliest change time
-											if *timestamp <= new_timestamp { 
-												bit_lines_to_advance.push(bit_line_i);
-											}
-										}
-										// Update current sample and increment index for the bit lines that advance to the new timestamp
-										for bit_line_i in bit_lines_to_advance {
-											let current_idx = bit_indices[bit_line_i];
-											// We only update the current state if it hasn't already reached the last sample
-											if current_idx + 1 < signal_group[bit_line_i].len() {
-												// Increment the index
-												bit_indices[bit_line_i] += 1;
-												// Update current sample using the newly incremented index
-												current_sample[bit_line_i] = signal_group[bit_line_i][bit_indices[bit_line_i]].1;
-											}
-											// If the index was already at the last sample, current_sample is not updated
-										}
-										// End condition: Check if all `bit_indices` are endmaxxing
-										let mut bit_idices_endmaxxing: usize = 0;
-										for (bit_line_i, bit_i) in bit_indices.iter().enumerate() {
-											if *bit_i + 1 == signal_group[bit_line_i].len() {
-												bit_idices_endmaxxing += 1;
-											}
-										}
-										end |= bit_idices_endmaxxing == signal_group.len();
-										let x: f32 = timing.convert_timestamp_to_x_value(&*styles, new_timestamp);
-										assert!(current_sample.len() > 0, "Signal group must have at least one bit");
-										// Compile binary number, quit if any states are floating or contested
-										let (curr_n, valid, contested): ((u128, u128), bool, bool) = get_n_and_whether_valid_from_sample(&current_sample);
-										draw_bus_segment(curr_n, valid, contested, x, prev_x, false);
-										if end {
-											let last_x = timing.convert_timestamp_to_x_value(&*styles, timing.timing_diagram_end());
-											let last_sample: Vec<LogicState> = signal_group.iter().map(|bit_line| match bit_line.last() {
-												Some(t) => t.1,
-												None => LogicState::Floating
-											}).collect();
-											let (last_n, last_valid, last_contested): ((u128, u128), bool, bool) = get_n_and_whether_valid_from_sample(&last_sample);
-											draw_bus_segment(last_n, last_valid, last_contested, last_x, x, true);
-										}
-										prev_sample = current_sample;
-										prev_x = x;
-									}
-									// Bus labels
-									for (n_256, label_center_x) in bus_labels {
-										let mut text = format!("{:X}", n_256.0);
-										if n_256.1 != 0 {
-											text += &format!("{:X}", n_256.1);
-										}
-										let font_id = FontId::new(amplitude*1.5, FontFamily::Monospace);
-										painter.text(
-											graph_pos_to_canvas_pos(label_center_x, logic_state_to_graph_y_and_color(LogicState::Floating).0, group_i),
-											Align2::CENTER_CENTER,
-											text,
-											font_id,
-											u8_3_to_color32(styles.text_color)
-										);
-									}
-								}
+								Self::timing_diagram_show_signal_group(signal_group);
 							}
 						});
 					});
-				}
+				}*/
 			});
 		});
 	}
-	fn timing_diagram_show_signal_group(&self, signal_group: Vec<Vec<LogicState>>) {
-		// TODO
+	fn show_timing_diagram_ui_recursive(
+		ui: &mut Ui,
+		tree: &Vec<TimingDiagramTreeNode>,
+		probes: &HashMap<u64, Probe>,
+		components: &HashMap<u64, RefCell<Box<dyn LogicDevice>>>,
+		styles: Rc<Styles>,
+		amplitude: f32,
+		vert_spacing: f32,
+		//flattened_signal_groups: &mut Vec<Option<Vec<Vec<(TimingDiagramTimestamp, LogicState)>>>>
+	) {
+		for node in tree {
+			match node {
+				TimingDiagramTreeNode::Leaf(source, _) => {
+					ui.label(match source {
+						TimingDiagramSignalGroupSource::Clk => "CLK",
+						TimingDiagramSignalGroupSource::Probe(probe_id) => &(probes.get(probe_id).unwrap().name)
+					});
+				},
+				TimingDiagramTreeNode::Branch(comp_id, sub_tree) => {
+					if sub_tree.len() > 0 {
+						let comp_cell = components.get(comp_id).unwrap();
+						let comp = comp_cell.borrow();
+						ui.collapsing(&comp.get_generic().name, |ui_inner: &mut Ui| {
+							let circuit = comp.get_circuit();
+							LogicCircuit::show_timing_diagram_ui_recursive(ui_inner, sub_tree, &*circuit.probes.borrow(), &*circuit.components.borrow(), Rc::clone(&styles), amplitude, vert_spacing);
+						});
+					}
+				}
+			}
+		}
+	}
+	/// Corresponds to a single trace on the timing diagram (single bit or bus state)
+	fn timing_diagram_show_signal_group(
+		signal_group: Vec<Vec<(TimingDiagramTimestamp, LogicState)>>,
+		graph_pos_to_canvas_pos: impl Fn(f32, f32, usize) -> Pos2,
+		styles: Rc<Styles>,
+		timing: &mut TimingDiagram,
+		amplitude: f32,
+		painter: Painter,
+		group_i: usize
+	) {
+		let logic_state_to_graph_y_and_color = |state: LogicState| -> (f32, [u8; 3]) {
+			match state {
+				LogicState::Floating => (0.0, styles.color_wire_floating),
+				LogicState::Contested => (0.0, styles.color_wire_contested),
+				LogicState::Driven(bit) => match bit {
+					true => (amplitude, styles.color_foreground),
+					false => (-amplitude, styles.color_foreground)
+				}
+			}
+		};
+		let mut prev_x: f32 = 0.0;
+		let (mut prev_y, color) = logic_state_to_graph_y_and_color(LogicState::Floating);
+		let mut prev_stroke = Stroke::new(1.0, u8_3_to_color32(color));
+		if signal_group.len() == 0 {
+			panic!("Cannot have empty signal group")
+		} else if signal_group.len() == 1 {// Single bit, code here can be simplified
+			let bit_line = &signal_group[0];
+			let mut prev_sample: LogicState = if bit_line.len() == 0 {
+				LogicState::Floating
+			}
+			else {
+				bit_line[0].1
+			};
+			for (i, (timestamp, state)) in bit_line.iter().enumerate() {
+				let x: f32 = timing.convert_timestamp_to_x_value(&*styles, *timestamp);
+				let (y, color) = logic_state_to_graph_y_and_color(*state);
+				let stroke = Stroke::new(1.0, u8_3_to_color32(color));
+				if i == 0 {
+					// Save numbers
+					prev_y = y;
+					prev_stroke = stroke;
+				}
+				else {
+					// Vertical connection line if states are different
+					if *state != prev_sample {
+						painter.line_segment([graph_pos_to_canvas_pos(x, prev_y, group_i), graph_pos_to_canvas_pos(x, y, group_i)], stroke);
+					}
+				}
+				// Horizontal line
+				painter.line_segment([graph_pos_to_canvas_pos(prev_x, prev_y, group_i), graph_pos_to_canvas_pos(x, prev_y, group_i)], prev_stroke);
+				// Last sample until the end
+				if *timestamp < timing.current_timestamp && i + 1 == bit_line.len() {
+					let last_x: f32 = timing.convert_timestamp_to_x_value(&*styles, timing.timing_diagram_end());
+					let (last_y, last_color) = logic_state_to_graph_y_and_color(*state);
+					let last_stroke = Stroke::new(1.0, u8_3_to_color32(last_color));
+					// Vertical
+					painter.line_segment([graph_pos_to_canvas_pos(x, prev_y, group_i), graph_pos_to_canvas_pos(x, last_y, group_i)], last_stroke);
+					// Horizontal
+					painter.line_segment([graph_pos_to_canvas_pos(x, last_y, group_i), graph_pos_to_canvas_pos(last_x, last_y, group_i)], last_stroke);
+				}
+				// Save numbers
+				prev_sample = *state;
+				prev_x = x;
+				prev_y = y;
+				prev_stroke = stroke;
+			}
+		}
+		else {// Multiple bits, complicated
+			// Current index of each bit line, they won't all be updated the same amount so each needs its own index
+			let mut bit_indices: Vec<usize> = (0..signal_group.len()).map(|_| 0).collect();// Splat 0
+			// Get first recorded state of each bit
+			let mut prev_sample: Vec<LogicState> = signal_group.iter().map(|bit_line| if bit_line.len() == 0 {
+				LogicState::Floating
+			}
+			else {
+				bit_line[0].1
+			}).collect();
+			// Returns: ((N lower, N upper), valid, is contested)
+			let get_n_and_whether_valid_from_sample = |sample: &Vec<LogicState>| -> ((u128, u128), bool, bool) {
+				let mut valid = true;
+				let mut contested = false;
+				let mut curr_n: (u128, u128) = (0, 0);
+				for (i, state) in sample.iter().enumerate() {
+					if state.is_valid() {
+						if state.to_bool() {
+							if i < 128 {
+								curr_n.0 += 1 << i;
+							}
+							else {
+								curr_n.1 += 1 << (i - 128);
+							}
+						}
+					}
+					else {
+						valid = false;
+						contested |= state.is_contested();
+					}
+				}
+				(curr_n, valid, contested)
+			};
+			// (Binary lower, Binary upper)
+			let (mut prev_n_opt, mut prev_sample_contested): (Option<(u128, u128)>, bool) = {
+				let (n, valid, contested) = get_n_and_whether_valid_from_sample(&prev_sample);
+				(
+					match valid {
+						true => Some(n),
+						false => None
+					},
+					contested
+				)
+			};
+			// I Love you Haley
+			// ((Binary lower, Binary upper), X pos of center)
+			let mut bus_labels = Vec::<((u128, u128), f32)>::new();
+			let mut latest_bus_label_start: f32 = 0.0;
+			let mut end = false;
+			// Draw graphics
+			let mut draw_bus_segment = |curr_n: (u128, u128), valid: bool, contested: bool, x: f32, prev_x: f32, end: bool| {
+				let ((y_low, _), (y_high, _)) = (logic_state_to_graph_y_and_color(LogicState::Driven(false)), logic_state_to_graph_y_and_color(LogicState::Driven(true)));
+				let center_pt = graph_pos_to_canvas_pos(x + styles.timing_diagram_bus_half_change_px, (y_high+y_low)/2.0, group_i);
+				let stroke_normal = Stroke::new(1.0, u8_3_to_color32(styles.color_foreground));
+				let mut both_valid_diff = false;
+				let mut diags_from_prev_segment = false;
+				// Diagonals from prev segment
+				if let Some(prev_n) = prev_n_opt {
+					both_valid_diff = (prev_n != curr_n) && valid;
+					if both_valid_diff || !valid {
+						diags_from_prev_segment = true;
+						painter.line_segment(
+							[
+								graph_pos_to_canvas_pos(x, y_high, group_i),
+								center_pt
+							],
+							stroke_normal
+						);
+						painter.line_segment(
+							[
+								center_pt,
+								graph_pos_to_canvas_pos(x, y_low, group_i),
+							],
+							stroke_normal
+						);
+						// Is it weird for guys to name their dicks?
+					}
+					if diags_from_prev_segment || end {
+						// End current bus
+						bus_labels.push((prev_n, (latest_bus_label_start + x)/2.0));
+					}
+				}
+				// Campus is looking really pretty in the fall
+				// Diagonals to this segment
+				let diags_to_this_segment = both_valid_diff || (prev_n_opt.is_none() && valid);
+				if diags_to_this_segment {
+					painter.line_segment(
+						[
+							graph_pos_to_canvas_pos(x + styles.timing_diagram_bus_half_change_px*2.0, y_high, group_i),
+							center_pt
+						],
+						stroke_normal
+					);
+					painter.line_segment(
+						[
+							center_pt,
+							graph_pos_to_canvas_pos(x + styles.timing_diagram_bus_half_change_px*2.0, y_low, group_i),
+						],
+						stroke_normal
+					);
+					latest_bus_label_start = x;
+				}
+				// horiz line(s)
+				if prev_n_opt.is_some() {
+					let start_x = /*(sample_i_f32+DIAGONAL_HALF_WIDTH*2.0)*wavelength;*/match diags_to_this_segment {
+						true => prev_x + styles.timing_diagram_bus_half_change_px*2.0,
+						false => prev_x
+					};
+					painter.line_segment(
+						[
+							graph_pos_to_canvas_pos(start_x, y_high, group_i),
+							graph_pos_to_canvas_pos(x, y_high, group_i)
+						],
+						stroke_normal
+					);
+					painter.line_segment(
+						[
+							graph_pos_to_canvas_pos(start_x, y_low, group_i),
+							graph_pos_to_canvas_pos(x, y_low, group_i)
+						],
+						stroke_normal
+					);
+				}
+				else {
+					let start_x = match diags_from_prev_segment {
+						true => prev_x + styles.timing_diagram_bus_half_change_px,
+						false => prev_x
+					};
+					let color: [u8; 3] = if prev_sample_contested {
+						styles.color_wire_contested
+					}
+					else {
+						styles.color_wire_floating
+					};
+					let (y_mid, _) = logic_state_to_graph_y_and_color(LogicState::Floating);
+					painter.line_segment(
+						[
+							graph_pos_to_canvas_pos(start_x, y_mid, group_i),
+							graph_pos_to_canvas_pos(x, y_mid, group_i)
+						],
+						Stroke::new(1.0, u8_3_to_color32(color))
+					);
+				}
+				if valid {
+					prev_n_opt = Some(curr_n);
+				}
+				else {
+					prev_n_opt = None;
+				}
+				prev_sample_contested = contested;
+			};
+			// Iterate signal samples
+			while !end {
+				// Find first bit to change
+				let mut current_sample: Vec<LogicState> = prev_sample.clone();
+				let mut new_timestamp = timing.current_timestamp;
+				// Fixed by Gemini
+				let next_timestamps: Vec<TimingDiagramTimestamp> = signal_group.iter().enumerate().map(
+					|(bit_line_i, bit_line)| {
+						let current_idx = bit_indices[bit_line_i];
+						if bit_line.is_empty() || current_idx + 1 >= bit_line.len() {
+							// If empty or at the last recorded sample, use the diagram's end time
+							timing.timing_diagram_end() 
+						}
+						else {
+							// Use the timestamp of the NEXT sample
+							bit_line[current_idx + 1].0
+						}
+					}
+				).collect();
+				// Get time of next bit change, closest next change
+				for timestamp in &next_timestamps {
+					if timing.compare_timestamps_for_display(*timestamp, new_timestamp).is_le() {
+						new_timestamp = *timestamp;
+					}
+				}
+				// Fixed by Gemini
+				// Find bit lines to step forward, ones that changed at `new_timestamp`
+				let mut bit_lines_to_advance = Vec::<usize>::new();
+				for (bit_line_i, timestamp) in next_timestamps.iter().enumerate() {
+					// Check if this bit line's NEXT change time is equal to the earliest change time
+					if *timestamp <= new_timestamp { 
+						bit_lines_to_advance.push(bit_line_i);
+					}
+				}
+				// Update current sample and increment index for the bit lines that advance to the new timestamp
+				for bit_line_i in bit_lines_to_advance {
+					let current_idx = bit_indices[bit_line_i];
+					// We only update the current state if it hasn't already reached the last sample
+					if current_idx + 1 < signal_group[bit_line_i].len() {
+						// Increment the index
+						bit_indices[bit_line_i] += 1;
+						// Update current sample using the newly incremented index
+						current_sample[bit_line_i] = signal_group[bit_line_i][bit_indices[bit_line_i]].1;
+					}
+					// If the index was already at the last sample, current_sample is not updated
+				}
+				// End condition: Check if all `bit_indices` are endmaxxing
+				let mut bit_idices_endmaxxing: usize = 0;
+				for (bit_line_i, bit_i) in bit_indices.iter().enumerate() {
+					if *bit_i + 1 == signal_group[bit_line_i].len() {
+						bit_idices_endmaxxing += 1;
+					}
+				}
+				end |= bit_idices_endmaxxing == signal_group.len();
+				let x: f32 = timing.convert_timestamp_to_x_value(&*styles, new_timestamp);
+				assert!(current_sample.len() > 0, "Signal group must have at least one bit");
+				// Compile binary number, quit if any states are floating or contested
+				let (curr_n, valid, contested): ((u128, u128), bool, bool) = get_n_and_whether_valid_from_sample(&current_sample);
+				draw_bus_segment(curr_n, valid, contested, x, prev_x, false);
+				if end {
+					let last_x = timing.convert_timestamp_to_x_value(&*styles, timing.timing_diagram_end());
+					let last_sample: Vec<LogicState> = signal_group.iter().map(|bit_line| match bit_line.last() {
+						Some(t) => t.1,
+						None => LogicState::Floating
+					}).collect();
+					let (last_n, last_valid, last_contested): ((u128, u128), bool, bool) = get_n_and_whether_valid_from_sample(&last_sample);
+					draw_bus_segment(last_n, last_valid, last_contested, last_x, x, true);
+				}
+				prev_sample = current_sample;
+				prev_x = x;
+			}
+			// Bus labels
+			for (n_256, label_center_x) in bus_labels {
+				let mut text = format!("{:X}", n_256.0);
+				if n_256.1 != 0 {
+					text += &format!("{:X}", n_256.1);
+				}
+				let font_id = FontId::new(amplitude*1.5, FontFamily::Monospace);
+				painter.text(
+					graph_pos_to_canvas_pos(label_center_x, logic_state_to_graph_y_and_color(LogicState::Floating).0, group_i),
+					Align2::CENTER_CENTER,
+					text,
+					font_id,
+					u8_3_to_color32(styles.text_color)
+				);
+			}
+		}
 	}
 	pub fn paste(&self, item_set: CopiedItemSet) -> Vec<GraphicSelectableItemRef> {
 		let mut out = Vec::<GraphicSelectableItemRef>::new();
@@ -1607,11 +1645,11 @@ impl LogicCircuitToplevelView {
 					/*if count > 0 {
 						self.circuit.update_timing_diagram(&mut self.circuit.propagation_done.borrow_mut(), &mut self.timing, count == 0);
 					}*/
-					self.circuit.update_timing_diagram(&mut self.circuit.propagation_done.borrow_mut(), &mut self.timing, count == 0);
+					self.circuit.update_timing_diagram_toplevel(&mut self.circuit.propagation_done.borrow_mut(), &mut self.timing, count == 0);
 					self.frame_compute_cycles = count;
 					return false;
 				}
-				self.circuit.update_timing_diagram(&mut self.circuit.propagation_done.borrow_mut(), &mut self.timing, count == 0);
+				self.circuit.update_timing_diagram_toplevel(&mut self.circuit.propagation_done.borrow_mut(), &mut self.timing, count == 0);
 				count += 1;
 			}
 			self.frame_compute_cycles = count;
