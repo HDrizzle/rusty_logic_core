@@ -2561,7 +2561,7 @@ impl LogicCircuit {
 		new_wire_ids
 	}
 	/// Fixes everything, should be run when a new circuit is created or when anything is moved, deleted, or placed
-	pub fn check_wire_geometry_and_connections(&mut self, timing_opt: Option<&mut TimingDiagram>) {
+	pub fn check_wire_geometry_and_connections(&mut self, timing_tree_opt: Option<&mut Vec<TimingDiagramTreeNode>>) {
 		// Find overlapping wires and correct them, connections can be ignored
 		self.merge_overlapping_wires();
 		// Remove all wire connections except to themselves
@@ -2579,8 +2579,8 @@ impl LogicCircuit {
 		// Compute nets, has to be done after all geometry and connection fixes
 		self.bit_width_errors = self.recompute_nets();
 		// Logic probes
-		if let Some(timing) = timing_opt {
-			self.update_probe_net_connections_and_timing(timing);
+		if let Some(timing_tree) = timing_tree_opt {
+			self.update_probe_net_connections_and_timing(timing_tree);
 		}
 		// Last net computation setep
 		self.update_logical_pin_to_wire_connections();
@@ -2792,10 +2792,9 @@ impl LogicCircuit {
 		}
 	}
 	/// Run as part of circuit reconnection process after edit or on load
-	/// Will only be used on toplevel circuit
+	/// Could be run as toplevel or as subcircuit, so `timing_tree` could be the whole timing tree (toplevel) or a subtree (if this is a sub-circuit)
 	/// Does not edit `self.timing_diagram_order`, instead directly modifies timing diagram tree
-	pub fn update_probe_net_connections_and_timing(&self, timing: &mut TimingDiagram) {
-		assert!(self.is_toplevel);
+	pub fn update_probe_net_connections_and_timing(&self, timing_tree: &mut Vec<TimingDiagramTreeNode>) {
 		let mut probes = self.probes.borrow_mut();
 		let components = self.components.borrow();
 		// Set probe connections
@@ -2807,14 +2806,21 @@ impl LogicCircuit {
 		let mut probes_already_in_tree = HashSet::<u64>::new();
 		let mut circuits_already_in_tree = HashSet::<u64>::new();
 		let mut has_clock = false;
-		for node in &timing.tree {
+		for node in &mut *timing_tree {
 			match node {
-				TimingDiagramTreeNode::Leaf(source, _) => {
+				TimingDiagramTreeNode::Leaf(source, signal_group) => {
 					match source {
 						TimingDiagramSignalGroupSource::Probe(probe_id) => {
 							probes_already_in_tree.insert(*probe_id);
 						},
 						TimingDiagramSignalGroupSource::Clk => {
+							// Make sure length is one
+							if signal_group.len() == 0 {
+								signal_group.push(Vec::new());
+							}
+							while signal_group.len() > 1 {
+								signal_group.pop();
+							}
 							has_clock = true;
 						}
 					}
@@ -2827,7 +2833,7 @@ impl LogicCircuit {
 		// Add missing probes
 		for probe_id in probes.keys() {
 			if !probes_already_in_tree.contains(probe_id) {
-				timing.tree.push(TimingDiagramTreeNode::Leaf(TimingDiagramSignalGroupSource::Probe(*probe_id), Vec::new()));
+				timing_tree.push(TimingDiagramTreeNode::Leaf(TimingDiagramSignalGroupSource::Probe(*probe_id), Vec::new()));
 			}
 		}
 		// Add missing sub circuits
@@ -2837,20 +2843,20 @@ impl LogicCircuit {
 				if comp.is_circuit() {// Fail-safe
 					let circuit = comp.get_circuit();
 					if circuit.include_in_timing_diagram {
-						timing.tree.push(TimingDiagramTreeNode::Branch(*comp_id, circuit.build_timing_diagram_tree()));
+						timing_tree.push(TimingDiagramTreeNode::Branch(*comp_id, circuit.build_timing_diagram_tree()));
 					}
 				}
 			}
 		}
 		// Add clock if missing
 		if !has_clock {
-			timing.tree.insert(0, TimingDiagramTreeNode::Leaf(TimingDiagramSignalGroupSource::Clk, Vec::<Vec<(TimingDiagramTimestamp, LogicState)>>::new()));
+			timing_tree.insert(0, TimingDiagramTreeNode::Leaf(TimingDiagramSignalGroupSource::Clk, vec![Vec::<(TimingDiagramTimestamp, LogicState)>::new()]));
 		}
 		// Set timing signal group bit widths according to probes and remove them if the probe is gone
 		let mut i: usize = 0;
-		while i < timing.tree.len() {
+		while i < timing_tree.len() {
 			let mut valid_tree_node = true;
-			match &mut timing.tree[i] {
+			match &mut timing_tree[i] {
 				TimingDiagramTreeNode::Leaf(source, ref mut signal_group) => {
 					if let TimingDiagramSignalGroupSource::Probe(probe_id) = source {
 						if let Some(probe) = probes.get(probe_id) {
@@ -2872,12 +2878,17 @@ impl LogicCircuit {
 					}
 					// Otherwise it is the clock which is always valid
 				},
-				TimingDiagramTreeNode::Branch(comp_id, _) => {
+				TimingDiagramTreeNode::Branch(comp_id,  sub_tree) => {
 					// Sub-circuit, check if it should be in the tree
 					if let Some(comp_cell) = components.get(&comp_id) {
 						let comp = comp_cell.borrow();
 						if comp.is_circuit() {
-							if !comp.get_circuit().include_in_timing_diagram {
+							let circuit = comp.get_circuit();
+							if circuit.include_in_timing_diagram {
+								// Recursively run this function in sub circuit
+								circuit.update_probe_net_connections_and_timing(sub_tree);
+							}
+							else {
 								// Not set to be included in timing diagram
 								valid_tree_node = false;
 							}
@@ -2892,7 +2903,7 @@ impl LogicCircuit {
 				}
 			}
 			if !valid_tree_node {// This tree node is invalid, remove and decrement count to avoid skipping the next item
-				timing.tree.remove(i);
+				timing_tree.remove(i);
 				i -= 1;
 			}
 			i += 1;
@@ -3492,7 +3503,7 @@ impl LogicCircuit {
 		for tree_node in &self.timing_diagram_order {
 			match tree_node {
 				//	i love my boyfriend , love haley <3
-				TimingDiagramTreeRootNodeSave::Clk => {out.push(TimingDiagramTreeNode::Leaf(TimingDiagramSignalGroupSource::Clk, Vec::new()));},
+				TimingDiagramTreeRootNodeSave::Clk => {out.push(TimingDiagramTreeNode::Leaf(TimingDiagramSignalGroupSource::Clk, vec![Vec::<(TimingDiagramTimestamp, LogicState)>::new()]));},
 				TimingDiagramTreeRootNodeSave::Probe(probe_id) => {out.push(TimingDiagramTreeNode::Leaf(TimingDiagramSignalGroupSource::Probe(*probe_id), Vec::new()));},
 				TimingDiagramTreeRootNodeSave::Branch(component_id) => {// Subcircuit branch
 					let components = self.components.borrow();
@@ -3870,7 +3881,8 @@ impl LogicDevice for LogicCircuit {
 	fn device_get_special_select_properties(&self) -> Vec<SelectProperty> {
 		vec![
 			SelectProperty::ReloadCircuit(false, self.self_reload_err_opt.clone()),
-			SelectProperty::IncludeInTimingDiagram(self.include_in_timing_diagram)
+			SelectProperty::IncludeInTimingDiagram(self.include_in_timing_diagram),
+			SelectProperty::Name(self.generic_device.name.clone())
 		]
 	}
 	#[cfg(feature = "using_egui")]
@@ -3889,6 +3901,9 @@ impl LogicDevice for LogicCircuit {
 		}
 		if let SelectProperty::IncludeInTimingDiagram(state) = property {
 			self.include_in_timing_diagram = state;
+		}
+		if let SelectProperty::Name(new_name) = property {
+			self.generic_device.name = new_name;
 		}
 	}
 	fn set_instance_config(&mut self, instance_config_generic: &ComponentInstanceConfig) {

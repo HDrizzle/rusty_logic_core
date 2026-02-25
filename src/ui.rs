@@ -638,49 +638,77 @@ impl LogicCircuit {
 		});
 		ScrollArea::vertical().show(ui, |ui| {
 			ui.horizontal(|ui| {
-				let mut amplitude: f32 = 8.5;
-				let mut vert_spacing: f32 = 25.0;
-				//let mut flattened_signal_groups = Vec::<Option<Vec<Vec<(TimingDiagramTimestamp, LogicState)>>>>::new();
+				let amplitude: f32 = 8.5;
+				let vert_spacing: f32 = 25.0;
+				let mut shown_signal_group_indices = Vec::<bool>::new();
 				// Recursively generate tree UI and flatten vec of signal groups
 				ui.vertical(|ui| {
+					ui.add_space(8.0);
 					Self::show_timing_diagram_ui_recursive(
 						ui,
 						&timing.tree,
 						&*self.probes.borrow(),
 						&*self.components.borrow(),
-						styles,
+						&styles,
 						amplitude,
-						vert_spacing
+						vert_spacing,
+						&mut shown_signal_group_indices
 					);
 				});
-				// Signals, TODO
-				/*if timing.n_samples > 0 {
+				// Includes actual signal groups and blank spaces for headers
+				let mut shown_group_spaces: usize = 0;
+				for shown in &shown_signal_group_indices {
+					if *shown {
+						shown_group_spaces += 1;
+					}
+				}
+				// Signals
+				if timing.n_samples > 0 {
 					ScrollArea::horizontal().stick_to_right(true).show(ui, |ui| {
 						Frame::canvas(ui.style()).show::<()>(ui, |ui| {
-							let canvas_size = Vec2::new(timing.convert_timestamp_to_x_value(&*styles, timing.timing_diagram_end()) + 4.0, timing.signal_groups.len() as f32 * vert_spacing);
+							let canvas_size = Vec2::new(timing.convert_timestamp_to_x_value(&*styles, timing.timing_diagram_end()) + 4.0, shown_group_spaces as f32 * vert_spacing);
 							let (response, painter) = ui.allocate_painter(canvas_size, Sense::empty());
 							let graph_pos_to_canvas_pos = |graph_x: f32, graph_y: f32, group_i: usize| -> Pos2 {
 								Pos2::new(graph_x + response.rect.left() + 2.0, (-graph_y) + (group_i as f32 + 0.5)*vert_spacing + response.rect.top())
 							};
 							// New propagation event vertical marker lines
-							if !timing.running.uses_real_time() && timing.signal_groups.len() > 0 {
+							if !timing.running.uses_real_time() && timing.tree.len() > 0 {
 								for i in 0_u32..(timing.propagation_steps.len() as u32) {
 									let x = timing.convert_timestamp_to_x_value(&*styles, TimingDiagramTimestamp::PropagationAndSimStep(i, 0));
 									painter.line_segment(
 										[
 											graph_pos_to_canvas_pos(x, 0.0, 0),
-											graph_pos_to_canvas_pos(x, 0.0, timing.signal_groups.len() - 1)],
+											graph_pos_to_canvas_pos(x, 0.0, shown_group_spaces - 1)],
 										Stroke::new(0.7, u8_3_to_color32([128, 128, 128]))
 									);
 								}
 							}
-							// Iterate signal groups, each line on the timing diagram
-							for (group_i, (_, signal_group)) in timing.signal_groups.iter().enumerate() {
-								Self::timing_diagram_show_signal_group(signal_group);
+							// DFS through tree
+							let mut dfs_stack = Vec::<&Vec<TimingDiagramTreeNode>>::new();
+							let mut group_i_total: usize = 0;// For indexing into `shown_signal_group_indices`
+							let mut group_i_graphic: usize = 0;// For vertical placement
+							// TODO: Get whether UI is collapsed for given subtree
+							dfs_stack.push(&timing.tree);
+							while !dfs_stack.is_empty() {
+								let sub_tree = dfs_stack.pop().unwrap();
+								for node in sub_tree {
+									if shown_signal_group_indices[group_i_total] {
+										match node {
+											TimingDiagramTreeNode::Leaf(_, signal_group) => {
+												Self::timing_diagram_show_signal_group(signal_group, graph_pos_to_canvas_pos, &styles, timing, amplitude, &painter, group_i_graphic);
+											},
+											TimingDiagramTreeNode::Branch(_, sub_tree) => {
+												dfs_stack.push(sub_tree);
+											}
+										}
+										group_i_graphic += 1;
+									}
+									group_i_total += 1;
+								}
 							}
 						});
 					});
-				}*/
+				}
 			});
 		});
 	}
@@ -689,27 +717,38 @@ impl LogicCircuit {
 		tree: &Vec<TimingDiagramTreeNode>,
 		probes: &HashMap<u64, Probe>,
 		components: &HashMap<u64, RefCell<Box<dyn LogicDevice>>>,
-		styles: Rc<Styles>,
+		styles: &Rc<Styles>,
 		amplitude: f32,
 		vert_spacing: f32,
-		//flattened_signal_groups: &mut Vec<Option<Vec<Vec<(TimingDiagramTimestamp, LogicState)>>>>
+		shown_signal_group_indices: &mut Vec<bool>
 	) {
+		let vert_widget_extra_spacing = ui.style().spacing.item_spacing.y;
 		for node in tree {
 			match node {
 				TimingDiagramTreeNode::Leaf(source, _) => {
-					ui.label(match source {
+					let height = ui.label(match source {
 						TimingDiagramSignalGroupSource::Clk => "CLK",
 						TimingDiagramSignalGroupSource::Probe(probe_id) => &(probes.get(probe_id).unwrap().name)
-					});
+					}).rect.height() + vert_widget_extra_spacing;
+					ui.add_space(vert_spacing - height);
+					shown_signal_group_indices.push(true);
 				},
 				TimingDiagramTreeNode::Branch(comp_id, sub_tree) => {
 					if sub_tree.len() > 0 {
+						shown_signal_group_indices.push(true);// One for the header
+						let prev_outside_index: usize = shown_signal_group_indices.len() - 1;
 						let comp_cell = components.get(comp_id).unwrap();
 						let comp = comp_cell.borrow();
-						ui.collapsing(&comp.get_generic().name, |ui_inner: &mut Ui| {
+						let response = ui.collapsing(&comp.get_generic().name, |ui_inner: &mut Ui| {
 							let circuit = comp.get_circuit();
-							LogicCircuit::show_timing_diagram_ui_recursive(ui_inner, sub_tree, &*circuit.probes.borrow(), &*circuit.components.borrow(), Rc::clone(&styles), amplitude, vert_spacing);
+							LogicCircuit::show_timing_diagram_ui_recursive(ui_inner, sub_tree, &*circuit.probes.borrow(), &*circuit.components.borrow(), &styles, amplitude, vert_spacing, shown_signal_group_indices);
 						});
+						// If closed then set everything inside to false
+						if response.fully_closed() {
+							for i in prev_outside_index..shown_signal_group_indices.len() {
+								shown_signal_group_indices[i] = false;
+							}
+						}
 					}
 				}
 			}
@@ -717,12 +756,12 @@ impl LogicCircuit {
 	}
 	/// Corresponds to a single trace on the timing diagram (single bit or bus state)
 	fn timing_diagram_show_signal_group(
-		signal_group: Vec<Vec<(TimingDiagramTimestamp, LogicState)>>,
+		signal_group: &Vec<Vec<(TimingDiagramTimestamp, LogicState)>>,
 		graph_pos_to_canvas_pos: impl Fn(f32, f32, usize) -> Pos2,
-		styles: Rc<Styles>,
-		timing: &mut TimingDiagram,
+		styles: &Rc<Styles>,
+		timing: &TimingDiagram,
 		amplitude: f32,
-		painter: Painter,
+		painter: &Painter,
 		group_i: usize
 	) {
 		let logic_state_to_graph_y_and_color = |state: LogicState| -> (f32, [u8; 3]) {
@@ -1315,7 +1354,7 @@ impl LogicCircuitToplevelView {
 			timing: TimingDiagram::new(timing_diagram_order),
 			move_popup_opt: None
 		};
-		out.circuit.update_probe_net_connections_and_timing(&mut out.timing);
+		out.circuit.update_probe_net_connections_and_timing(&mut out.timing.tree);
 		// Done
 		out
 	}
@@ -1394,7 +1433,7 @@ impl LogicCircuitToplevelView {
 			// Reconnect wires and thingies if anything was changed
 			if self.recompute_conns_next_frame {
 				self.saved = false;
-				self.circuit.check_wire_geometry_and_connections(Some(&mut self.timing));
+				self.circuit.check_wire_geometry_and_connections(Some(&mut self.timing.tree));
 			}
 			// Update
 			self.logic_loop_error = self.propagate_until_stable(CIRCUIT_MAX_COMPUTE_CYCLES);
