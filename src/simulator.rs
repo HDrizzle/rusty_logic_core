@@ -1889,28 +1889,15 @@ impl TimingDiagram {
 			&TimingDiagramTimestamp::PropagationAndSimStep(_, _) => TimingDiagramTimestamp::PropagationAndSimStep(0, 0)
 		}
 	}
-	/// Not an instance method so that caller can recurse into the tree. Recursive `&mut self` functions will have borrowing issues
-	pub fn push_state_if_different(current_timestamp: TimingDiagramTimestamp, tree: &mut Vec<TimingDiagramTreeNode>, signal_group_i: usize, bit_i: usize, state: LogicState) {
-		// Old
-		/*let bit_line = &mut self.signal_groups[signal_group_i].1[bit_i];
+	// Not an instance method so that caller can recurse into the tree. Recursive `&mut self` functions will have borrowing issues
+	pub fn push_state_if_different(current_timestamp: &TimingDiagramTimestamp, signal_group: &mut Vec<Vec<(TimingDiagramTimestamp, LogicState)>>, bit_i: usize, state: LogicState) {
+		// New
+		let bit_line = &mut signal_group[bit_i];
 		if bit_line.len() == 0 {
-			bit_line.push((self.current_timestamp, state));
+			bit_line.push((*current_timestamp, state));
 		}
 		else if bit_line[bit_line.len() - 1].1 != state {
-			bit_line.push((self.current_timestamp, state));
-		}*/
-		// New
-		match &mut tree[signal_group_i] {
-			TimingDiagramTreeNode::Leaf(_, signl_group) => {
-				let bit_line = &mut signl_group[bit_i];
-				if bit_line.len() == 0 {
-					bit_line.push((current_timestamp, state));
-				}
-				else if bit_line[bit_line.len() - 1].1 != state {
-					bit_line.push((current_timestamp, state));
-				}
-			},
-			TimingDiagramTreeNode::Branch(_, _) => panic!("Cannot update state if node is a branch")
+			bit_line.push((*current_timestamp, state));
 		}
 	}
 	pub fn clear(&mut self) {
@@ -2278,7 +2265,7 @@ impl LogicCircuit {
 			self_reload_err_opt: None,
 			clock: RefCell::new(Clock::default()),
 			probes: RefCell::new(HashMap::new()),
-			timing_diagram_order: Vec::new(),
+			timing_diagram_order: vec![TimingDiagramTreeRootNodeSave::Clk],
 			bit_width_errors: Vec::new(),
 			highlighted_net_opt: None,
 			propagation_done: RefCell::new((false, false)),
@@ -2811,46 +2798,102 @@ impl LogicCircuit {
 	pub fn update_probe_net_connections_and_timing(&self, timing: &mut TimingDiagram) {
 		assert!(self.is_toplevel);
 		let mut probes = self.probes.borrow_mut();
+		let components = self.components.borrow();
 		// Set probe connections
 		for probe in probes.values_mut() {
 			probe.nets_opt = self.is_connection_point(probe.ui_data.position).1;
 		}
 		// Now update timing diagram to match
-		// Check clock
-		if timing.signal_groups.len() == 0 {
-			timing.signal_groups = vec![(0, vec![vec![]])];
-		}
-		// Add new probes
-		let mut probes_in_use = HashSet::<u64>::new();
-		for (group_i, (probe_id, _)) in timing.signal_groups.iter().enumerate() {
-			if group_i > 0 {// Ignore clock
-				probes_in_use.insert(*probe_id);
+		// Add new probes & subcircuits
+		let mut probes_already_in_tree = HashSet::<u64>::new();
+		let mut circuits_already_in_tree = HashSet::<u64>::new();
+		let mut has_clock = false;
+		for node in &timing.tree {
+			match node {
+				TimingDiagramTreeNode::Leaf(source, _) => {
+					match source {
+						TimingDiagramSignalGroupSource::Probe(probe_id) => {
+							probes_already_in_tree.insert(*probe_id);
+						},
+						TimingDiagramSignalGroupSource::Clk => {
+							has_clock = true;
+						}
+					}
+				},
+				TimingDiagramTreeNode::Branch(comp_id, _) => {
+					circuits_already_in_tree.insert(*comp_id);
+				}
 			}
 		}
+		// Add missing probes
 		for probe_id in probes.keys() {
-			if !probes_in_use.contains(probe_id) {
-				timing.signal_groups.push((*probe_id, Vec::new()));
+			if !probes_already_in_tree.contains(probe_id) {
+				timing.tree.push(TimingDiagramTreeNode::Leaf(TimingDiagramSignalGroupSource::Probe(*probe_id), Vec::new()));
 			}
+		}
+		// Add missing sub circuits
+		for (comp_id, comp_cell) in &*components {
+			if !circuits_already_in_tree.contains(comp_id) {
+				let comp = comp_cell.borrow();
+				if comp.is_circuit() {// Fail-safe
+					let circuit = comp.get_circuit();
+					if circuit.include_in_timing_diagram {
+						timing.tree.push(TimingDiagramTreeNode::Branch(*comp_id, circuit.build_timing_diagram_tree()));
+					}
+				}
+			}
+		}
+		// Add clock if missing
+		if !has_clock {
+			timing.tree.insert(0, TimingDiagramTreeNode::Leaf(TimingDiagramSignalGroupSource::Clk, Vec::<Vec<(TimingDiagramTimestamp, LogicState)>>::new()));
 		}
 		// Set timing signal group bit widths according to probes and remove them if the probe is gone
-		let mut i: usize = 1;// Ignore first signal group which is the clock
-		while i < timing.signal_groups.len() {
-			let (probe_id, ref mut signal_group) = &mut timing.signal_groups[i];
-			if let Some(probe) = probes.get(probe_id) {
-				let diff: isize = probe.nets_opt.len() as isize - (signal_group.len() as isize);
-				if diff > 0 {// Probe has more bits than corresponding signal group, make a new one filled with floating states
-					for _ in 0..diff {
-						signal_group.push(Vec::new());
+		let mut i: usize = 0;
+		while i < timing.tree.len() {
+			let mut valid_tree_node = true;
+			match &mut timing.tree[i] {
+				TimingDiagramTreeNode::Leaf(source, ref mut signal_group) => {
+					if let TimingDiagramSignalGroupSource::Probe(probe_id) = source {
+						if let Some(probe) = probes.get(probe_id) {
+							let diff: isize = probe.nets_opt.len() as isize - (signal_group.len() as isize);
+							if diff > 0 {// Probe has more bits than corresponding signal group, make a new one filled with floating states
+								for _ in 0..diff {
+									signal_group.push(Vec::new());
+								}
+							}
+							if diff < 0 {
+								for _ in 0..(-diff) {
+									signal_group.pop();
+								}
+							}
+						}
+						else {
+							valid_tree_node = false;
+						}
 					}
-				}
-				if diff < 0 {
-					for _ in 0..(-diff) {
-						signal_group.pop();
+					// Otherwise it is the clock which is always valid
+				},
+				TimingDiagramTreeNode::Branch(comp_id, _) => {
+					// Sub-circuit, check if it should be in the tree
+					if let Some(comp_cell) = components.get(&comp_id) {
+						let comp = comp_cell.borrow();
+						if comp.is_circuit() {
+							if !comp.get_circuit().include_in_timing_diagram {
+								// Not set to be included in timing diagram
+								valid_tree_node = false;
+							}
+						}
+						else {// Not a circuit
+							valid_tree_node = false;
+						}
+					}
+					else {// Doesn't exist
+						valid_tree_node = false;
 					}
 				}
 			}
-			else {// There is no probe corresponding to this group, so delete it
-				timing.signal_groups.remove(i);
+			if !valid_tree_node {// This tree node is invalid, remove and decrement count to avoid skipping the next item
+				timing.tree.remove(i);
 				i -= 1;
 			}
 			i += 1;
@@ -3362,6 +3405,7 @@ impl LogicCircuit {
 		changed
 	}
 	/// Adds one time increment to the timing diagram data
+	/// Also responsible for updating sub-circuits
 	pub fn update_timing_diagram_toplevel(&self, propagation_states: &mut RefMut<'_, (bool, bool)>, timing: &mut TimingDiagram, mut first_propagation_step: bool) {
 		if timing.running == TimingTiagramRunningState::Off {
 			return;
@@ -3394,23 +3438,53 @@ impl LogicCircuit {
 		// Update timing diagram timestamp, last step for first step of timing so incremental timing diagram looks better
 		timing.update_timestamp(first_propagation_step);// !propagation_states.0);
 		// Update net states
+		self.update_timing_diagram_recursive(timing.current_timestamp, &mut timing.tree, clock.state);
+		timing.n_samples += 1;
+		// Its late in the night I am typing from the light of the keyboard
+		// I can't fall asleep so im working on this. I wonder what I will get up to in the future. I an a nerd and I love computers (obviously because I am writing my own logic simulator
+		// to redisign a computer I built myself in high school because I wanted to). However I also believe that video games are the biggest waste of life and I value being fit and being outside in nature,
+		// or "touching grass" as they would say. I am good at what I do which has gotten me to being an ECE major at WPI, but the more I'm here the more I miss everything which has nothing to do with technology.
+		// There's a fireship video "How to flex as a programmer" and in the end the programmer blows up his (valid gender assumption) computer and becomes a farmer. He notices dew on a spiderweb which reminds him of a silicon wafer which can compute billions of operations per second to run models we don't even understand. But the spider has just been flexing on him.
+		// I want to go bikepacking really far (like across Canada) with some basic supplies, a ham radio (ok this is technology), and no internet.
+		// Rant 2: No matter how advanced technology gets, such as AI, DoorDash, Cities, we will never get away from grass which we will always have to touch
+		// This means that the less you touch grass the less prepared you are for life.
+	}
+	/// Recursive timing diagram tree update, actually does the stuff
+	fn update_timing_diagram_recursive(&self, current_timestamp: TimingDiagramTimestamp, tree: &mut Vec<TimingDiagramTreeNode>, clock_state: bool) {
 		let probes = self.probes.borrow();
 		let nets = self.nets.borrow();
-		timing.push_state_if_different(0, 0, clock.state.into());
-		for (group_i, probe_id) in timing.signal_groups.iter().map(|t| t.0).collect::<Vec<u64>>().iter().enumerate() {
-			if group_i == 0 {// Clock signal
-				continue;
-			}
-			let probe_net_ids = &probes.get(&probe_id).unwrap().nets_opt;
-			for (i, net_opt) in probe_net_ids.iter().enumerate() {
-				let state: LogicState = match net_opt {
-					Some(net_id) => nets.get(net_id).unwrap().borrow().state,
-					None => LogicState::Floating
-				};
-				timing.push_state_if_different(group_i, i, state);
+		for node in tree {
+			match node {
+				TimingDiagramTreeNode::Leaf(source, signal_group) => {
+					match source {
+						TimingDiagramSignalGroupSource::Probe(probe_id) => {
+							let probe_net_ids = &probes.get(&probe_id).unwrap().nets_opt;
+							for (i, net_opt) in probe_net_ids.iter().enumerate() {
+								let state: LogicState = match net_opt {
+									Some(net_id) => nets.get(net_id).unwrap().borrow().state,
+									None => LogicState::Floating
+								};
+								TimingDiagram::push_state_if_different(&current_timestamp, signal_group, i, state);
+							}
+						},
+						TimingDiagramSignalGroupSource::Clk => {
+							assert!(signal_group.len() == 1);
+							TimingDiagram::push_state_if_different(&current_timestamp, signal_group, 0, clock_state.into());
+						}
+					}
+				}
+				TimingDiagramTreeNode::Branch(comp_id, sub_tree) => {
+					let components = self.components.borrow();
+					let comp_cell = components.get(&comp_id).expect("Timing diagram references sub circuit which does not exist");
+					let comp = comp_cell.borrow();
+					assert!(comp.is_circuit(), "Timing diagram references sub circuit which is not actually a circuit");
+					let circuit = comp.get_circuit();
+					let sub_clock_state = circuit.clock.borrow().state;
+					// I love recursion its so confusing and awesome
+					circuit.update_timing_diagram_recursive(current_timestamp, sub_tree, sub_clock_state);
+				}
 			}
 		}
-		timing.n_samples += 1;
 	}
 	/// Creates blank timing recording
 	pub fn build_timing_diagram_tree(&self) -> Vec<TimingDiagramTreeNode> {
