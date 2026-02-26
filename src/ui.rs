@@ -640,10 +640,12 @@ impl LogicCircuit {
 			ui.horizontal(|ui| {
 				let amplitude: f32 = 8.5;
 				let vert_spacing: f32 = 25.0;
+				// Includes actual signal groups and blank spaces for headers
+				// After an item corresponding to a header, there will be one extra item indicating whether that header is being displayed
 				let mut shown_signal_group_indices = Vec::<bool>::new();
+				let mut shown_group_spaces: usize = 0;// Excludes header open flags
 				// Recursively generate tree UI and flatten vec of signal groups
 				ui.vertical(|ui| {
-					ui.add_space(8.0);
 					Self::show_timing_diagram_ui_recursive(
 						ui,
 						&timing.tree,
@@ -652,16 +654,10 @@ impl LogicCircuit {
 						&styles,
 						amplitude,
 						vert_spacing,
-						&mut shown_signal_group_indices
+						&mut shown_signal_group_indices,
+						&mut shown_group_spaces
 					);
 				});
-				// Includes actual signal groups and blank spaces for headers
-				let mut shown_group_spaces: usize = 0;
-				for shown in &shown_signal_group_indices {
-					if *shown {
-						shown_group_spaces += 1;
-					}
-				}
 				// Signals
 				if timing.n_samples > 0 {
 					ScrollArea::horizontal().stick_to_right(true).show(ui, |ui| {
@@ -677,34 +673,40 @@ impl LogicCircuit {
 									let x = timing.convert_timestamp_to_x_value(&*styles, TimingDiagramTimestamp::PropagationAndSimStep(i, 0));
 									painter.line_segment(
 										[
-											graph_pos_to_canvas_pos(x, 0.0, 0),
-											graph_pos_to_canvas_pos(x, 0.0, shown_group_spaces - 1)],
+											graph_pos_to_canvas_pos(x, amplitude, 0),
+											graph_pos_to_canvas_pos(x, -amplitude, shown_group_spaces - 1)],
 										Stroke::new(0.7, u8_3_to_color32([128, 128, 128]))
 									);
 								}
 							}
-							// DFS through tree
-							let mut dfs_stack = Vec::<&Vec<TimingDiagramTreeNode>>::new();
+							// Iterate through tree
+							let mut queue = Vec::<&TimingDiagramTreeNode>::new();
 							let mut group_i_total: usize = 0;// For indexing into `shown_signal_group_indices`
 							let mut group_i_graphic: usize = 0;// For vertical placement
-							// TODO: Get whether UI is collapsed for given subtree
-							dfs_stack.push(&timing.tree);
-							while !dfs_stack.is_empty() {
-								let sub_tree = dfs_stack.pop().unwrap();
-								for node in sub_tree {
-									if shown_signal_group_indices[group_i_total] {
-										match node {
-											TimingDiagramTreeNode::Leaf(_, signal_group) => {
-												Self::timing_diagram_show_signal_group(signal_group, graph_pos_to_canvas_pos, &styles, timing, amplitude, &painter, group_i_graphic);
-											},
-											TimingDiagramTreeNode::Branch(_, sub_tree) => {
-												dfs_stack.push(sub_tree);
+							queue.extend_from_slice(timing.tree.iter().rev().collect::<Vec<&TimingDiagramTreeNode>>().as_slice());
+							while !queue.is_empty() {
+								let node = queue.pop().unwrap();
+								if shown_signal_group_indices[group_i_total] {
+									match node {
+										TimingDiagramTreeNode::Leaf(_, signal_group) => {
+											Self::timing_diagram_show_signal_group(signal_group, graph_pos_to_canvas_pos, &styles, timing, amplitude, &painter, group_i_graphic);
+										},
+										TimingDiagramTreeNode::Branch(_, sub_tree) => {
+											// Test if long enough for sub tree to have contents
+											// Check branch open flag
+											group_i_total += 1;
+											if shown_signal_group_indices[group_i_total] {
+												queue.extend_from_slice(sub_tree.iter().rev().collect::<Vec<&TimingDiagramTreeNode>>().as_slice());
+											}
+											else {
+												// Otherwise skip past hidden sub tree elements
+												//group_i_total += sub_tree.len()
 											}
 										}
-										group_i_graphic += 1;
 									}
-									group_i_total += 1;
+									group_i_graphic += 1;
 								}
+								group_i_total += 1;
 							}
 						});
 					});
@@ -720,8 +722,11 @@ impl LogicCircuit {
 		styles: &Rc<Styles>,
 		amplitude: f32,
 		vert_spacing: f32,
-		shown_signal_group_indices: &mut Vec<bool>
+		shown_signal_group_indices: &mut Vec<bool>,
+		shown_group_spaces: &mut usize
 	) {
+		ui.add_space(8.0);
+		// TODO: Fix order
 		let vert_widget_extra_spacing = ui.style().spacing.item_spacing.y;
 		for node in tree {
 			match node {
@@ -732,24 +737,22 @@ impl LogicCircuit {
 					}).rect.height() + vert_widget_extra_spacing;
 					ui.add_space(vert_spacing - height);
 					shown_signal_group_indices.push(true);
+					*shown_group_spaces += 1;
 				},
 				TimingDiagramTreeNode::Branch(comp_id, sub_tree) => {
-					if sub_tree.len() > 0 {
-						shown_signal_group_indices.push(true);// One for the header
-						let prev_outside_index: usize = shown_signal_group_indices.len() - 1;
-						let comp_cell = components.get(comp_id).unwrap();
-						let comp = comp_cell.borrow();
-						let response = ui.collapsing(&comp.get_generic().name, |ui_inner: &mut Ui| {
-							let circuit = comp.get_circuit();
-							LogicCircuit::show_timing_diagram_ui_recursive(ui_inner, sub_tree, &*circuit.probes.borrow(), &*circuit.components.borrow(), &styles, amplitude, vert_spacing, shown_signal_group_indices);
-						});
-						// If closed then set everything inside to false
-						if response.fully_closed() {
-							for i in prev_outside_index..shown_signal_group_indices.len() {
-								shown_signal_group_indices[i] = false;
-							}
-						}
-					}
+					shown_signal_group_indices.push(true);// Always leave room for header
+					*shown_group_spaces += 1;
+					let open_flag_index = shown_signal_group_indices.len();
+					let comp_cell = components.get(comp_id).unwrap();
+					let comp = comp_cell.borrow();
+					let mut header_open = false;
+					ui.collapsing(&comp.get_generic().name, |ui_inner: &mut Ui| {
+						header_open = true;
+						let circuit = comp.get_circuit();
+						LogicCircuit::show_timing_diagram_ui_recursive(ui_inner, sub_tree, &*circuit.probes.borrow(), &*circuit.components.borrow(), &styles, amplitude, vert_spacing, shown_signal_group_indices, shown_group_spaces);
+					});
+					// If closed then put one false to flag the branch as closed
+					shown_signal_group_indices.insert(open_flag_index, header_open);
 				}
 			}
 		}

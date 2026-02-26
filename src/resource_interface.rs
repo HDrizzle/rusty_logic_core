@@ -183,7 +183,7 @@ mod restore_old_files {
 /// Not great but I can't think of anything else
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EnumAllLogicDevices {
-	/// (Relative path of circuit, Whether to use block diagram, Position, Orientation, Name, Library name, Instance-specific data)
+	/// (Relative path of circuit, Whether to use block diagram, Position, Orientation, Name, Library name)
 	SubCircuit(String, bool, IntV2, FourWayDir, #[serde(default)]String, #[serde(default)]String),
 	GateAnd(LogicDeviceSave),
 	GateNand(LogicDeviceSave),
