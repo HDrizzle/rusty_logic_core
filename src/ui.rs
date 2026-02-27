@@ -1459,7 +1459,7 @@ impl LogicCircuitToplevelView {
 					// Update component search list
 					self.all_logic_devices_search = builtin_components::list_all_basic_components();
 					for (lib_name, file_name) in resource_interface::list_all_circuit_files().unwrap() {
-						self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(file_name, false, IntV2(0, 0), FourWayDir::default(), String::new(), lib_name));
+						self.all_logic_devices_search.push(EnumAllLogicDevices::SubCircuit(file_name, false, IntV2(0, 0), FourWayDir::default(), String::new(), lib_name, true));
 					}
 					self.showing_component_popup = true;
 				}
@@ -1630,7 +1630,7 @@ impl LogicCircuitToplevelView {
 				ui.horizontal(|ui| {
 					if ui.button("Flatten Circuit").clicked() {
 						match self.circuit.flatten(true) {
-							Ok(device_save) => if let EnumAllLogicDevices::SubCircuit(save_path, _, _, _, _, lib_name) = device_save {
+							Ok(device_save) => if let EnumAllLogicDevices::SubCircuit(save_path, _, _, _, _, lib_name, _) = device_save {
 								return_new_circuit_tab = Some((save_path, lib_name));
 								self.showing_flatten_opoup = false;
 							}
@@ -1896,7 +1896,7 @@ impl App {
 		Ok(())
 	}
 	fn load_circuit_tab(&mut self, file_name: &str, lib_name: &str) -> Result<LogicCircuit, String> {
-		resource_interface::load_circuit(file_name, false, true, IntV2(0, 0), FourWayDir::default(), String::new(), lib_name.to_owned())
+		resource_interface::load_circuit(file_name, false, true, IntV2(0, 0), FourWayDir::default(), String::new(), lib_name.to_owned(), false)
 	}
 	fn new_circuit_tab(&mut self, file_name: &str, lib_name: &str) {
 		match self.load_circuit_tab(file_name, lib_name) {

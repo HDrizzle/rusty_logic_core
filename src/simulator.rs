@@ -2295,7 +2295,7 @@ impl LogicCircuit {
 			lib_name
 		).unwrap()
 	}
-	pub fn from_save(save: LogicCircuitSave, save_name: String, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String, lib_name: String) -> Result<Self, String> {
+	pub fn from_save(save: LogicCircuitSave, save_name: String, displayed_as_block: bool, toplevel: bool, pos: IntV2, dir: FourWayDir, name: String, lib_name: String, include_in_timing_diagram: bool) -> Result<Self, String> {
 		// Init compnents
 		let mut components = HashMap::<u64, RefCell<Box<dyn LogicDevice>>>::new();
 		for (ref_, save_comp) in save.components.into_iter() {
@@ -2347,7 +2347,7 @@ impl LogicCircuit {
 			highlighted_net_opt: None,
 			propagation_done: RefCell::new((false, false)),
 			lib_name,
-			include_in_timing_diagram: false,
+			include_in_timing_diagram,
 			save_instance_config: save.save_instance_config
 		};
 		out.setup_external_connection_sources();
@@ -3286,7 +3286,7 @@ impl LogicCircuit {
 		save.type_name = format!("{} (flattened)", save.type_name);
 		let raw_string: String = to_string_err(serde_json::to_string(&save))?;
 		to_string_err(fs::write(resource_interface::get_circuit_file_path(&save_path, &self.lib_name)?, &raw_string))?;
-		Ok(EnumAllLogicDevices::SubCircuit(save_path, self.displayed_as_block, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone(), self.lib_name.clone()))
+		Ok(EnumAllLogicDevices::SubCircuit(save_path, self.displayed_as_block, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone(), self.lib_name.clone(), self.include_in_timing_diagram))
 	}
 	/// Recursively extracts all sub-circuits that don't have a fixed sub-cycle count
 	#[cfg(feature = "using_filesystem")]
@@ -3653,7 +3653,6 @@ impl LogicCircuit {
 	}
 	/// Most functionality is here, `LogicDevice::set_instance_config()` is a wrapper
 	pub fn set_instance_config_circuit(&mut self, instance_config: &CircuitInstanceConfig) {
-		self.include_in_timing_diagram = instance_config.include_in_timing_diagram;
 		// Set component pin states
 		let components = self.components.borrow();
 		for (comp_id, pin_states) in &instance_config.component_pin_states {
@@ -3698,7 +3697,6 @@ impl LogicCircuit {
 		}
 		// Get component generic config
 		CircuitInstanceConfig {
-			include_in_timing_diagram: self.include_in_timing_diagram,
 			component_pin_states,
 			component_save_states
 		}
@@ -3719,7 +3717,7 @@ impl LogicDevice for LogicCircuit {
 	/// The actual save is done with `LogicCircuit::save_circuit()`
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		// Path to save file
-		Ok(EnumAllLogicDevices::SubCircuit(self.save_name.clone(), self.displayed_as_block, self.get_ui_data().position, self.get_ui_data().direction, self.generic_device.name.clone(), self.lib_name.clone()))
+		Ok(EnumAllLogicDevices::SubCircuit(self.save_name.clone(), self.displayed_as_block, self.get_ui_data().position, self.get_ui_data().direction, self.generic_device.name.clone(), self.lib_name.clone(), self.include_in_timing_diagram))
 	}
 	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>) {
 		if self.displayed_as_block {
@@ -3889,7 +3887,7 @@ impl LogicDevice for LogicCircuit {
 	fn device_set_special_select_property(&mut self, property: SelectProperty) {
 		if let SelectProperty::ReloadCircuit(reload, _) = property {
 			if reload {
-				match resource_interface::load_circuit(&self.save_name, self.displayed_as_block, false, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone(), self.lib_name.clone()) {
+				match resource_interface::load_circuit(&self.save_name, self.displayed_as_block, false, self.generic_device.ui_data.position, self.generic_device.ui_data.direction, self.generic_device.name.clone(), self.lib_name.clone(), self.include_in_timing_diagram) {
 					Ok(new) => {
 						*self = new;
 					},
@@ -3940,7 +3938,6 @@ impl LogicDevice for LogicCircuit {
 ///       |- Memory contents
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct CircuitInstanceConfig {
-	pub include_in_timing_diagram: bool,
 	/// Internal states, {Comp ID: {Logical pin ID: State}}
 	/// There are no global pin states because the higher-up will have this circuit as a component anyway
 	pub component_pin_states: HashMap<u64, HashMap<u64, LogicState>>,
