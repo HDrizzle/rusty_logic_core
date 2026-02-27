@@ -726,7 +726,6 @@ impl LogicCircuit {
 		shown_group_spaces: &mut usize
 	) {
 		ui.add_space(8.0);
-		// TODO: Fix order
 		let vert_widget_extra_spacing = ui.style().spacing.item_spacing.y;
 		for node in tree {
 			match node {
@@ -753,6 +752,9 @@ impl LogicCircuit {
 					});
 					// If closed then put one false to flag the branch as closed
 					shown_signal_group_indices.insert(open_flag_index, header_open);
+					if !header_open {
+						ui.add_space(4.0);
+					}
 				}
 			}
 		}
@@ -1389,7 +1391,7 @@ impl LogicCircuitToplevelView {
 			);
 			// Scrolling
 			let scroll = input_state.raw_scroll_delta.y;
-			if scroll != 0.0 {
+			if scroll != 0.0 && response.contains_pointer() {
 				// Set mouse position to center of screen and move grid offset along with it, inspired by KiCad
 				#[cfg(feature = "kicad_scrolling")]
 				if let Some(og_mouse_pos) = response.hover_pos() {
