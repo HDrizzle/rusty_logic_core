@@ -668,15 +668,17 @@ impl LogicCircuit {
 								Pos2::new(graph_x + response.rect.left() + 2.0, (-graph_y) + (group_i as f32 + 0.5)*vert_spacing + response.rect.top())
 							};
 							// New propagation event vertical marker lines
-							if !timing.running.uses_real_time() && timing.tree.len() > 0 {
-								for i in 0_u32..(timing.propagation_steps.len() as u32) {
-									let x = timing.convert_timestamp_to_x_value(&*styles, TimingDiagramTimestamp::PropagationAndSimStep(i, 0));
-									painter.line_segment(
-										[
-											graph_pos_to_canvas_pos(x, amplitude, 0),
-											graph_pos_to_canvas_pos(x, -amplitude, shown_group_spaces - 1)],
-										Stroke::new(0.7, u8_3_to_color32([128, 128, 128]))
-									);
+							if let TimingDiagramTimestamp::PropagationAndSimStep(_, _) = &timing.current_timestamp {
+								if timing.tree.len() > 0 {
+									for i in 0_u32..(timing.propagation_steps.len() as u32) {
+										let x = timing.convert_timestamp_to_x_value(&*styles, TimingDiagramTimestamp::PropagationAndSimStep(i, 0));
+										painter.line_segment(
+											[
+												graph_pos_to_canvas_pos(x, amplitude, 0),
+												graph_pos_to_canvas_pos(x, -amplitude, shown_group_spaces - 1)],
+											Stroke::new(0.7, u8_3_to_color32([128, 128, 128]))
+										);
+									}
 								}
 							}
 							// Iterate through tree

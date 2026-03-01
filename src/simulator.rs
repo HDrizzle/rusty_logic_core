@@ -1964,6 +1964,10 @@ impl TimingDiagram {
 		}
 	}
 	pub fn set_running_state(&mut self, new_state: TimingTiagramRunningState) {
+		if new_state == TimingTiagramRunningState::Off {
+			self.running = new_state;
+			return;
+		}
 		let current_ts_real = self.current_timestamp.is_real_time();
 		if current_ts_real && new_state.uses_incremental_time() {
 			self.current_timestamp = TimingDiagramTimestamp::PropagationAndSimStep(0, 0);
