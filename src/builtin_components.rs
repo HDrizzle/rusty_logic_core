@@ -1189,12 +1189,7 @@ impl LogicDevice for Memory {
 		}
 	}
 	fn get_instance_config_opt(&self) -> Option<ComponentInstanceConfig> {
-		if self.nonvolatile {
-			Some(ComponentInstanceConfig::Memory(self.data.clone()))
-		}
-		else {
-			None
-		}
+		Some(ComponentInstanceConfig::Memory(self.data.clone()))
 	}
 }
 
@@ -2201,5 +2196,19 @@ impl LogicDevice for LED32Square {
 			self.layout.set_property(property);
 		}
 		*self = Self::from_save(self.generic.save(), self.layout.save(), self.px_grid_size)
+	}
+	fn get_instance_config_opt(&self) -> Option<ComponentInstanceConfig> {
+		Some(ComponentInstanceConfig::PxDisplayState(self.address_latch, self.data_latch, self.px.to_vec()))
+	}
+	fn set_instance_config(&mut self, instance_config: &ComponentInstanceConfig) {
+		if let ComponentInstanceConfig::PxDisplayState(addr, data, px) = instance_config {
+			self.address_latch = *addr;
+			self.data_latch = *data;
+			for (i, byte) in px.iter().enumerate() {
+				if i < 128 {
+					self.px[i] = *byte;
+				}
+			}
+		}
 	}
 }

@@ -3957,5 +3957,7 @@ pub enum ComponentInstanceConfig {
 	/// Up to 256 bits for a latch
 	Latch(u128, u128),
 	/// Nonvolatile memory contents
-	Memory(Vec<u8>)
+	Memory(Vec<u8>),
+	/// Address, Data, Pixel data
+	PxDisplayState(u8, u8, Vec<u8>)
 }
