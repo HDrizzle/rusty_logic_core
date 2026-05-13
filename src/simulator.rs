@@ -1,6 +1,6 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{cell::{Ref, RefCell, RefMut}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, cmp::{PartialOrd, Ordering}, rc::Rc};
+use std::{cell::{Ref, RefCell, RefMut}, cmp::{Ordering, PartialOrd}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, pin, rc::Rc};
 use serde::{Deserialize, Serialize};
 use crate::{circuit_net_computation::NotAWire, prelude::*, resource_interface};
 use resource_interface::LogicCircuitSave;
@@ -1485,13 +1485,19 @@ impl LogicDeviceGeneric {
 			name: self.name.clone()
 		}
 	}
+	/// PINS SHOULD ALWAYS BE SET USING THIS FUNCTION DURING SIMULATION
+	/// Records pin changes for simulation update tree
+	pub fn set_pin_state_panic(&self, logic_pin_id: u64, state: LogicState) {
+		// TODO
+	}
 }
 
 /// Could be a simple gate, or something more complicated like an adder, or another circuit, or maybe even a whole computer
 pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn get_generic(&self) -> &LogicDeviceGeneric;
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric;
-	fn compute_step(&mut self, ancestors: &AncestryStack, self_component_id: u64, clock_state: bool, first_propagation_step: bool);
+	/// One compute step, Returns: Vec of nets that have been changed
+	fn compute_step(&mut self, ancestors: &AncestryStack, self_component_id: u64, clock_state: bool, first_propagation_step: bool) -> Vec<u64>;
 	fn save(&self) -> Result<EnumAllLogicDevices, String>;
 	fn draw_except_pins<'a>(&self, draw: &Box<dyn DrawInterface>);
 	/// In CircuitVerse there can be, for example, one AND gate that acts like 8 gates, with 8-bit busses going in and out of it
@@ -1519,11 +1525,6 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 			None => None
 		}
 	}
-	fn compute(&mut self, ancestors: &AncestryStack, self_component_id: u64, clock_state: bool, first_propagation_step: bool) {
-		//for _ in 0..self.get_generic().sub_compute_cycles {
-			self.compute_step(ancestors, self_component_id, clock_state, first_propagation_step);
-		//}
-	}
 	fn get_circuit(&self) -> &LogicCircuit {
 		panic!("LogicDevice::get_circuit only works on the LogicCircuit class which overrides it");
 	}
@@ -1545,13 +1546,6 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn get_logic_pins_cell(&self) -> &RefCell<HashMap<u64, RefCell<LogicConnectionPin>>> {
 		&self.get_generic().logic_pins
 	}
-	/*fn query_pin_mut(&mut self, pin_id: &str) -> Option<&mut LogicConnectionPin> {
-		let generic = self.get_generic_mut();
-		match generic.pins.get_mut(pin_id) {
-			Some(pin_cell) => ,
-			None => None
-		}
-	}*/
 	fn set_all_logic_pin_states(&mut self, states: Vec<(u64, LogicState, LogicDriveSource)>) -> Result<(), String> {
 		for (pin_query, state, _source) in states {
 			self.set_logic_pin_external_state(pin_query, state)?;
@@ -1561,8 +1555,19 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	fn get_pin_state_panic(&self, pin_query: u64) -> LogicState {
 		self.get_logic_pins_cell().borrow().get(&pin_query).expect(&format!("Pin query {:?} for logic device \"{}\" not valid", &pin_query, &self.get_generic().name)).borrow().state()
 	}
-	fn set_pin_internal_state_panic(&mut self, pin_query: u64, state: LogicState) {
-		self.get_logic_pins_cell().borrow_mut().get_mut(&pin_query).expect(&format!("Pin query {:?} not valid", &pin_query)).borrow_mut().internal_state = state;
+	/// `changed_pins` is part of a data structure kept by the main simulation function to update the simulation tree
+	fn set_pin_internal_state_panic(&mut self, pin_query: u64, new_state: LogicState, changed_nets: &mut Vec<u64>) {
+		let mut binding = self.get_logic_pins_cell().borrow_mut();
+		let pin = &mut binding.get_mut(&pin_query).expect(&format!("Pin query {:?} not valid", &pin_query)).borrow_mut();
+		let state = &mut pin.internal_state;
+		if new_state != *state {
+			*state = new_state;
+			if let Some(ext_source) = &pin.external_source {
+				if let LogicConnectionPinExternalSource::Net(net_id) = ext_source {
+					changed_nets.push(*net_id);
+				}
+			}
+		}
 	}
 	fn into_box(self: Box<Self>) -> Box<dyn LogicDevice> where Self: Sized {
 		self as Box<dyn LogicDevice>
@@ -1570,6 +1575,9 @@ pub trait LogicDevice: Debug + GraphicSelectableItem where Self: 'static {
 	#[allow(unused)]
 	fn set_instance_config(&mut self, instance_config: &ComponentInstanceConfig) {}
 	fn get_instance_config_opt(&self) -> Option<ComponentInstanceConfig> {None}
+	/// Whether to start a new propagation event which starts because of this device changing its output
+	/// This should not modify self, since `compute()` will be called soon after
+	fn start_of_propagation(&self) -> bool {false}
 }
 
 /// Everything that implements `Component` also automatically works with the graphics
@@ -2201,8 +2209,6 @@ pub struct LogicCircuit {
 	pub circuit_internals_bb: (V2, V2),
 	/// For example, "D Latch", not "Register #7"
 	pub type_name: String,
-	/// For something like a flip flop that might oscillate without ever being stable, use this to fix the sub compute cycles of that circuit so it will ALWAYS be run that many times per cycle of the parent circuit and it's changed state will be ignored
-	pub fixed_sub_cycles_opt: Option<usize>,
 	self_reload_err_opt: Option<String>,
 	pub clock: RefCell<Clock>,
 	/// Timing diagram probes
@@ -2229,7 +2235,6 @@ impl LogicCircuit {
 		components_not_celled: HashMap<u64, Box<dyn LogicDevice>>,
 		external_graphic_pin_config: Vec<(IntV2, FourWayDir, f32, String, Vec<u64>)>,
 		type_name: String,
-		fixed_sub_cycles_opt: Option<usize>,
 		wires: HashMap<u64, Wire>,
 		save_name: String,
 		displayed_as_block: bool,
@@ -2264,7 +2269,6 @@ impl LogicCircuit {
 			is_toplevel,
 			circuit_internals_bb: (V2::zeros(), V2::zeros()),
 			type_name,
-			fixed_sub_cycles_opt,
 			self_reload_err_opt: None,
 			clock: RefCell::new(Clock::default()),
 			probes: RefCell::new(HashMap::new()),
@@ -2291,7 +2295,6 @@ impl LogicCircuit {
 			HashMap::new(),
 			Vec::new(),
 			type_name,
-			None,
 			HashMap::new(),
 			save_name,
 			false,
@@ -2342,7 +2345,6 @@ impl LogicCircuit {
 			is_toplevel: toplevel,
 			circuit_internals_bb: (V2::zeros(), V2::zeros()),
 			type_name: save.type_name,
-			fixed_sub_cycles_opt: save.fixed_sub_cycles_opt,
 			self_reload_err_opt: None,
 			clock: RefCell::new(Clock::load(save.clock_enabled, save.clock_freq, save.clock_state)),
 			probes: RefCell::new(probes),
@@ -3307,14 +3309,9 @@ impl LogicCircuit {
 			let comp = comp_cell.borrow();
 			if comp.is_circuit() {
 				let circuit: &LogicCircuit = comp.get_circuit();
-				if circuit.fixed_sub_cycles_opt.is_some() {
-					components.push(circuit.flatten(false)?);
-				}
-				else {
-					let (mut sub_wires, mut sub_comps) = circuit.flatten_recursive(true)?;
-					wire_geometry.append(&mut sub_wires);
-					components.append(&mut sub_comps);
-				}
+				let (mut sub_wires, mut sub_comps) = circuit.flatten_recursive(true)?;
+				wire_geometry.append(&mut sub_wires);
+				components.append(&mut sub_comps);
 			}
 			else {
 				components.push(comp.save().unwrap());
@@ -3339,8 +3336,30 @@ impl LogicCircuit {
 		}
 		Ok((wire_geometry, components))
 	}
+	/// Toplevel compute function, keeps track of what needs to be updated to avoid wasting time
 	/// Returns: Whether anything changed
-	pub fn compute_immutable(&self, ancestors_above: &AncestryStack, self_component_id: u64, first_propagation_step: bool) -> bool {
+	pub fn compute_toplevel(&self, first_propagation_step: bool, component_update_tree: &mut Vec<ComponentUpdateTreeNode>) -> bool {
+		assert!(self.is_toplevel);
+		self.compute_immutable(&AncestryStack::new(), 0, first_propagation_step, component_update_tree).0
+	}
+	/// Main simulation function
+	/// TODO: Toplevel pin input issue
+	/// TODO: Implement this:
+	/// 1. Get components to update, If `first_propagation_step`:
+	///        Check all components if `component.start_of_propagation()` returns true
+	///    else:
+	///        Use `self.components_to_update_next_step`
+	/// 2. Update each component that needs updating and record the nets of their pins that were internally changed
+	/// 3. Update nets attached to the changed pins
+	/// 4. For each net that was changed, update all connections to it and make new hash set of components to be updated, save that to `self.components_to_update_next_step`
+	/// Returns: (Whether anything changed, Vec of changed output nets)
+	pub fn compute_immutable(
+		&self,
+		ancestors_above: &AncestryStack,
+		self_component_id: u64,
+		first_propagation_step: bool,
+		component_update_tree: &mut Vec<ComponentUpdateTreeNode>
+	) -> (bool, Vec<u64>) {
 		let mut propagation_states = self.propagation_done.borrow_mut();
 		let mut changed = false;
 		// Update clock, only if propagation is done
@@ -3348,8 +3367,84 @@ impl LogicCircuit {
 			changed |= self.clock.borrow_mut().update();
 		}
 		let clock_state: bool = self.clock.borrow().state;
+		// ------------------------------ NEW ------------------------------
+		let components = self.components.borrow();
+		// 1. Get components to update
+		if first_propagation_step {
+			component_update_tree.clear();
+			for (id, comp_cell) in &*components {
+				let comp = comp_cell.borrow();
+				if comp.start_of_propagation() {
+					component_update_tree.push(ComponentUpdateTreeNode{component_id: *id, sub_nodes: None});
+				}
+			}
+		}
+		// 2. Update components and record changed nets
+		let mut changed_nets = HashSet::<u64>::new();
+		let mut component_update_tree_indices_to_delete = Vec::<usize>::new();// Only delete component update nodes that are not sub circuits
 		let ancestors = ancestors_above.push((&self, self_component_id));
+		for (i, node_to_update) in component_update_tree.iter_mut().enumerate() {
+			let comp_id = &node_to_update.component_id;
+			let comp_cell = components.get(comp_id).unwrap();
+			let is_circuit = comp_cell.borrow().is_circuit();
+			let changed_nets_this_comp: Vec<u64> = if is_circuit {
+				let comp = comp_cell.borrow();
+				let circuit: &LogicCircuit = comp.get_circuit();
+				// Add sub nodes to this node if it is `None`
+				if node_to_update.sub_nodes.is_none() {
+					(*node_to_update).sub_nodes = Some(Vec::new());
+				}
+				let (sub_circuit_changed, out) = circuit.compute_immutable(&ancestors, *comp_id, first_propagation_step, &mut node_to_update.sub_nodes.as_mut().unwrap());
+				changed |= sub_circuit_changed;
+				out
+			}
+			else {
+				let out = comp_cell.borrow_mut().compute_step(&ancestors, *comp_id, clock_state, first_propagation_step);
+				component_update_tree_indices_to_delete.push(i);
+				out
+			};
+			changed_nets.extend(changed_nets_this_comp);
+		}
+		// Clear component update tree
+		for i_to_delete in component_update_tree_indices_to_delete.iter().rev() {
+			component_update_tree.remove(*i_to_delete);
+		}
+		// 3. Update nets attached to the changed pins, the current code that uses the net's deep searching feature maybe outdated and overkill, TODO
+		let nets = self.nets.borrow();
+		let mut new_net_states = HashMap::<u64, (LogicState, Vec<GlobalSourceReference>)>::new();
+		for net_id in &changed_nets {
+			let net = nets.get(&net_id).unwrap();
+			new_net_states.insert(*net_id, net.borrow().update_state(&ancestors, *net_id));
+		}
+		drop(ancestors);
+		for (net_id, (state, sources)) in new_net_states.into_iter() {
+			let binding = self.nets.borrow();
+			let mut net_mut_ref = binding.get(&net_id).unwrap().borrow_mut();
+			changed |= net_mut_ref.state != state;
+			net_mut_ref.state = state;
+			net_mut_ref.sources = sources;
+		}
+		// 4. Update connections from nets (components and circuit outputs)
+		let mut changed_parent_nets = Vec::<u64>::new();
+		for net_id in changed_nets {
+			let net_cell = nets.get(&net_id).unwrap();
+			let net = net_cell.borrow();
+			for net_conn in &net.connections {
+				match net_conn {
+					CircuitWideLogicPinReference::ComponentPin(comp_pin_ref) => {
+						component_update_tree.push(ComponentUpdateTreeNode::new(comp_pin_ref.component_id, None));
+					},
+					CircuitWideLogicPinReference::ExternalConnection(parent_net_id) => {
+						changed_parent_nets.push(*parent_net_id);
+					}
+				}
+			}
+		}
+		// ------------------------------ /NEW ------------------------------
+		/*
+		// ------------------------------ OLD ------------------------------
 		// Update net states
+		let ancestors = ancestors_above.push((&self, self_component_id));
 		let mut new_net_states = HashMap::<u64, (LogicState, Vec<GlobalSourceReference>)>::new();
 		for (net_id, net) in self.nets.borrow().iter() {
 			new_net_states.insert(*net_id, net.borrow().update_state(&ancestors, *net_id));
@@ -3393,30 +3488,13 @@ impl LogicCircuit {
 				}
 			}
 		}
-		// THIS GOES LAST, has to be seperate loop then before
-		let ancestors = ancestors_above.push((&self, self_component_id));
-		for (comp_id, comp_cell) in self.components.borrow().iter() {
-			let is_circuit = comp_cell.borrow().is_circuit();
-			if is_circuit {
-				let comp = comp_cell.borrow();
-				let circuit: &LogicCircuit = comp.get_circuit();
-				if let Some(compute_cycles) = circuit.fixed_sub_cycles_opt {
-					for _ in 0..compute_cycles {
-						circuit.compute_immutable(&ancestors, *comp_id, first_propagation_step);
-					}
-				}
-				else {
-					changed |= circuit.compute_immutable(&ancestors, *comp_id, first_propagation_step);
-				}
-			}
-			else {
-				comp_cell.borrow_mut().compute(&ancestors, *comp_id, clock_state, first_propagation_step);
-			}
-		}
 		// Update propagation states
 		(*propagation_states).0 = changed;
 		// Done
 		changed
+		// ------------------------------ /OLD ------------------------------
+		*/
+		(changed, changed_parent_nets)
 	}
 	/// Adds one time increment to the timing diagram data
 	/// Also responsible for updating sub-circuits
@@ -3582,7 +3660,6 @@ impl LogicCircuit {
 			labels: HashMap::from_iter(self.labels.borrow().iter().map(|t| (*t.0, t.1.save()))),
 			block_pin_positions: self.block_pin_positions.clone(),
 			type_name: self.type_name.clone(),
-			fixed_sub_cycles_opt: self.fixed_sub_cycles_opt,
 			clock_enabled: clock.enabled,
 			clock_freq: clock.freq,
 			clock_state: clock.state,
@@ -3714,8 +3791,9 @@ impl LogicDevice for LogicCircuit {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic_device
 	}
-	fn compute_step(&mut self, ancestors_above: &AncestryStack, self_component_id: u64, _: bool, first_propagation_step: bool) {
-		self.compute_immutable(ancestors_above, self_component_id, first_propagation_step);
+	fn compute_step(&mut self, ancestors_above: &AncestryStack, self_component_id: u64, _: bool, first_propagation_step: bool) -> Vec<u64> {
+		panic!("Logic circuit `compute_step()` method should not be used, instead directly call `compute_immutable()` or `compute_toplevel()`");
+		//self.compute_immutable(ancestors_above, self_component_id, first_propagation_step).1
 	}
 	/// Returns handle to file for inclusion in other circuits
 	/// The actual save is done with `LogicCircuit::save_circuit()`
@@ -3960,4 +4038,21 @@ pub enum ComponentInstanceConfig {
 	Memory(Vec<u8>),
 	/// Address, Data, Pixel data
 	PxDisplayState(u8, u8, Vec<u8>)
+}
+
+/// For keeping track of what components/components in sub-circuits need to be updated for each propagation step
+#[derive(Debug, Clone)]
+pub struct ComponentUpdateTreeNode {
+	pub component_id: u64,
+	/// In case this is a sub circuit
+	pub sub_nodes: Option<Vec<ComponentUpdateTreeNode>>
+}
+
+impl ComponentUpdateTreeNode {
+	pub fn new(component_id: u64, sub_nodes: Option<Vec<ComponentUpdateTreeNode>>) -> Self {
+		Self {
+			component_id,
+			sub_nodes
+		}
+	}
 }

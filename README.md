@@ -66,10 +66,6 @@ Under "Circuit Settings" there is a button that says "Edit block layout...". Thi
 
 Also under Circuit Settings there is a feature to extract the components of all sub-circuits in the circuit and build a new "flattened" circuit. Flattened circuits are faster to simulate yet can be very slow and annoying to edit, similar to Photoshop.
 
-### Fixed sub-cycles
-
-The fixed sub cycles is a feature I implemented after running into a specific problem: When a NOR (or also NAND) flip-flop is connected to a NOT-AND edge detector, the edge pulse is too short for the flip flop to become properly stable and it will oscillate. To fix this a flip-flop sub-circuit should be created with 2 fixed sub-cycles so that the flip-flop will be simulated twice as fast as the outer logic.
-
 ### Timing diagram
 
 The timing diagram in the top-right displays the state of the circuit's clock alongside all the probes with respect to time. There are two main modes for the timing diagram to record the times of signal changes: Real time and Per-Event. Real time is the simplest which records the times of signal changes. However when checking circuit timing in reference to the clock it is better to have the timing diagram also reference the clock. The modes "CLK Only" and "Any Change" update on clock edges and any change in the circuit respectively. For each "event" (clock edge or user input or etc) there will be a time increment for the timing diagram. When the "Show propagation steps" checkbox is enabled the timing diagram will be further broken down to show the individual propagation steps of the simulation during each event. An event is considered over when nothing changes during a propagation step. Keep in mind that this is a simulation using discrete steps where every component has the same propagation delay which is not realistic.

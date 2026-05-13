@@ -344,7 +344,7 @@ impl LogicDevice for GateAnd {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> { -> Vec<u64>
 		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() && self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -391,7 +391,7 @@ impl LogicDevice for GateNand {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
 		let and: bool = self.get_pin_state_panic(0).to_bool() && self.get_pin_state_panic(1).to_bool();
 		self.set_pin_internal_state_panic(2, (!and).into());
 	}
@@ -439,7 +439,7 @@ impl LogicDevice for GateNot {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
 		self.set_pin_internal_state_panic(1, (!self.get_pin_state_panic(0).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -485,7 +485,7 @@ impl LogicDevice for GateNotNew {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
 		self.set_pin_internal_state_panic(1, (!self.get_pin_state_panic(0).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -531,7 +531,7 @@ impl LogicDevice for GateOr {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
 		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() || self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -581,7 +581,7 @@ impl LogicDevice for GateNor {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
 		self.set_pin_internal_state_panic(2, (!(self.get_pin_state_panic(0).to_bool() || self.get_pin_state_panic(1).to_bool())).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -632,7 +632,7 @@ impl LogicDevice for GateXor {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
 		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() != self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -683,7 +683,7 @@ impl LogicDevice for GateXnor {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
 		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() == self.get_pin_state_panic(1).to_bool()).into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -803,7 +803,7 @@ impl LogicDevice for FixedSource {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
 		self.set_pin_internal_state_panic(0, self.state.into());
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
@@ -912,7 +912,7 @@ impl LogicDevice for EncoderOrDecoder {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
 		if self.is_encoder {
 			let input = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("D", self.get_address() as u16)).to_bool();
 			self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Enable", 0), input.into());
@@ -1084,7 +1084,7 @@ impl LogicDevice for Memory {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
 		let ce: bool = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("CE", 0)).to_bool();
 		let we: bool = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("WE", 0)).to_bool();
 		let re: bool = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("RE", 0)).to_bool();
@@ -1269,7 +1269,7 @@ impl LogicDevice for TriStateBufferOld {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
 		if self.get_pin_state_panic(2).to_bool() {
 			self.set_pin_internal_state_panic(1, self.get_pin_state_panic(0).to_bool().into());
 		}
@@ -1332,7 +1332,7 @@ impl LogicDevice for TriStateBuffer {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
 		let enable: bool = self.get_pin_state_panic(self.1.get_logic_pin_id_panic("En", 0)).to_bool();
 		for bit_i in 0..self.2 {
 			let state: LogicState = if enable {

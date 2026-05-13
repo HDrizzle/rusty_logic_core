@@ -1507,23 +1507,6 @@ impl LogicCircuitToplevelView {
 					self.move_popup_opt = Some(MoveCircuitPopup::new(self.circuit.save_name.clone(), self.circuit.lib_name.clone()));
 				}
 				ui.checkbox(&mut self.circuit.save_instance_config, "Save state (increases file size)");
-				ui.horizontal(|ui| {
-					let mut fixed_cycles_enabled = self.circuit.fixed_sub_cycles_opt.is_some();
-					ui.checkbox(&mut fixed_cycles_enabled, "Fixed sub cycles");
-					if fixed_cycles_enabled {
-						if let Some(cycles) = &mut self.circuit.fixed_sub_cycles_opt {
-							let mut cycles_i32 = *cycles as i32;
-							ui_drag_value_with_arrows(ui, &mut cycles_i32, Some((1, 1000)));
-							*cycles = cycles_i32 as usize;
-						}
-						else {
-							self.circuit.fixed_sub_cycles_opt = Some(1);
-						}
-					}
-					else {
-						self.circuit.fixed_sub_cycles_opt = None;
-					}
-				});
 				// Clock
 				ui.label("Clock");
 				let mut clock = self.circuit.clock.borrow_mut();
@@ -1686,8 +1669,9 @@ impl LogicCircuitToplevelView {
 		let start_t = Instant::now();
 		loop {
 			let mut count: usize = 0;
+			let mut comp_update_tree = Vec::<ComponentUpdateTreeNode>::new();
 			while count < propagation_limit {
-				if !self.circuit.compute_immutable(&AncestryStack::new(), 0, count == 0) {
+				if !self.circuit.compute_toplevel(count == 0, &mut comp_update_tree) {
 					/*if count > 0 {
 						self.circuit.update_timing_diagram(&mut self.circuit.propagation_done.borrow_mut(), &mut self.timing, count == 0);
 					}*/

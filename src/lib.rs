@@ -38,7 +38,7 @@ pub mod prelude {
 	#[cfg(feature = "using_egui")]
 	pub use ui::{LogicCircuitToplevelView, App, SelectProperty, CopiedGraphicItem, CopiedItemSet};
 	pub use graphics::{UIData, GraphicSelectableItem, DrawInterface, Styles, DrawData};
-	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, GraphicPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection, LogicDeviceSave, GraphicLabel, GraphicLabelSave, Splitter, SplitterSave, Probe, ProbeSave, CircuitInstanceConfig, ComponentInstanceConfig, TimingDiagramSignalGroupSource};
+	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, GraphicPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection, LogicDeviceSave, GraphicLabel, GraphicLabelSave, Splitter, SplitterSave, Probe, ProbeSave, CircuitInstanceConfig, ComponentInstanceConfig, TimingDiagramSignalGroupSource, ComponentUpdateTreeNode};
 	pub use resource_interface::{EnumAllLogicDevices, TimingDiagramTreeRootNodeSave};
 	#[cfg(feature = "using_filesystem")]
 	pub use resource_interface::load_file_with_better_error;
@@ -569,7 +569,6 @@ pub mod prelude {
 				(IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), vec![2]),
 			],
 			"test-circuit".to_string(),
-			None,
 			vec_to_u64_keyed_hashmap(vec![
 				Wire::new(IntV2(-4, -1), 1, FourWayDir::E, vec![0], Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new()))),
 				Wire::new(IntV2(-4, 1), 1, FourWayDir::E, vec![1], Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new()))),
