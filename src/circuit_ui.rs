@@ -1,12 +1,11 @@
 //! Only UI stuff
 
-use crate::{builtin_components, prelude::*, resource_interface, simulator::{AncestryStack, GraphicSelectableItemRef, SelectionState, TimingDiagram, TimingDiagramTimestamp, TimingDiagramTreeNode, TimingTiagramRunningState, Tool}};
-use eframe::{egui::{self, containers::Popup, response::Response, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, Color32, DragValue, FontFamily, FontId, Frame, Galley, Key, KeyboardShortcut, Modifiers, Painter, PointerButton, PopupCloseBehavior, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2, Window}, emath, epaint::{PathStroke, TextShape}};
-use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+use crate::{builtin_components, prelude::*, resource_interface, simulator::GraphicSelectableItemRef};
+use eframe::{egui::{self, containers::Popup, response::Response, scroll_area::ScrollBarVisibility, text::LayoutJob, Align2, Button, Color32, DragValue, FontFamily, FontId, Frame, Galley, Key, KeyboardShortcut, Modifiers, Painter, PointerButton, Pos2, Rect, RectAlign, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextEdit, TextFormat, Ui, Vec2, Window}, emath, epaint::{PathStroke, TextShape}};
 use nalgebra::ComplexField;
 use serde::{Serialize, Deserialize};
 use serde_json;
-use std::{cell::RefCell, collections::{HashSet, HashMap}, f32::consts::TAU, ops::{AddAssign, DerefMut, RangeInclusive, SubAssign}, rc::Rc, sync::Arc, time::Instant};
+use std::{cell::RefCell, collections::{HashSet, HashMap}, f32::consts::TAU, ops::{AddAssign, RangeInclusive, SubAssign}, rc::Rc, sync::Arc, time::Instant};
 #[cfg(feature = "kicad_scrolling")]
 use mouse_rs;
 
@@ -366,7 +365,7 @@ impl DrawInterface for EguiDrawInterface {
 
 impl LogicCircuit {
 	/// Returns: Whether to recompute the circuit connections
-	pub fn toplevel_ui_interact<'a, F: Fn(Pos2) -> V2>(&mut self, response: Response, context: &egui::Context, /*draw: &dyn DrawInterface<'a>,*/ mut input_state: egui::InputState, grid_size: f32, mouse_pos2_to_grid: F) -> bool {
+	pub fn toplevel_ui_interact<'a, F: Fn(Pos2) -> V2>(&mut self, response: Response, context: &egui::Context, /*draw: &dyn DrawInterface<'a>,*/ mut input_state: egui::InputState, grid_size: f32, mouse_pos2_to_grid: F, tool: &mut Tool) -> bool {
 		let mut return_recompute_connections = false;
 		let mut new_tool_opt = Option::<Tool>::None;
 		let mut recompute_pin_block_positions = false;
@@ -375,7 +374,7 @@ impl LogicCircuit {
 			Some(pos_px) => Some(mouse_pos2_to_grid(pos_px)),
 			None => None
 		};
-		match self.tool.borrow_mut().deref_mut() {
+		match tool {
 			Tool::Select{selected_graphics, selected_graphics_state} => {
 				match selected_graphics_state {
 					SelectionState::Fixed => {
@@ -602,7 +601,7 @@ impl LogicCircuit {
 			}
 		}
 		if let Some(new_tool) = new_tool_opt {
-			*self.tool.borrow_mut() = new_tool;
+			*tool = new_tool;
 		}
 		if recompute_pin_block_positions {
 			self.update_pin_block_positions();
@@ -691,7 +690,7 @@ impl LogicCircuit {
 								if shown_signal_group_indices[group_i_total] {
 									match node {
 										TimingDiagramTreeNode::Leaf(_, signal_group) => {
-											Self::timing_diagram_show_signal_group(signal_group, graph_pos_to_canvas_pos, &styles, timing, amplitude, &painter, group_i_graphic);
+											timing.show_signal_group(signal_group, graph_pos_to_canvas_pos, &styles, amplitude, &painter, group_i_graphic);
 										},
 										TimingDiagramTreeNode::Branch(_, sub_tree) => {
 											// Test if long enough for sub tree to have contents
@@ -758,312 +757,6 @@ impl LogicCircuit {
 						ui.add_space(4.0);
 					}
 				}
-			}
-		}
-	}
-	/// Corresponds to a single trace on the timing diagram (single bit or bus state)
-	fn timing_diagram_show_signal_group(
-		signal_group: &Vec<Vec<(TimingDiagramTimestamp, LogicState)>>,
-		graph_pos_to_canvas_pos: impl Fn(f32, f32, usize) -> Pos2,
-		styles: &Rc<Styles>,
-		timing: &TimingDiagram,
-		amplitude: f32,
-		painter: &Painter,
-		group_i: usize
-	) {
-		let logic_state_to_graph_y_and_color = |state: LogicState| -> (f32, [u8; 3]) {
-			match state {
-				LogicState::Floating => (0.0, styles.color_wire_floating),
-				LogicState::Contested => (0.0, styles.color_wire_contested),
-				LogicState::Driven(bit) => match bit {
-					true => (amplitude, styles.color_foreground),
-					false => (-amplitude, styles.color_foreground)
-				}
-			}
-		};
-		let mut prev_x: f32 = 0.0;
-		let (mut prev_y, color) = logic_state_to_graph_y_and_color(LogicState::Floating);
-		let mut prev_stroke = Stroke::new(1.0, u8_3_to_color32(color));
-		if signal_group.len() == 0 {
-			panic!("Cannot have empty signal group")
-		} else if signal_group.len() == 1 {// Single bit, code here can be simplified
-			let bit_line = &signal_group[0];
-			let mut prev_sample: LogicState = if bit_line.len() == 0 {
-				LogicState::Floating
-			}
-			else {
-				bit_line[0].1
-			};
-			for (i, (timestamp, state)) in bit_line.iter().enumerate() {
-				let x: f32 = timing.convert_timestamp_to_x_value(&*styles, *timestamp);
-				let (y, color) = logic_state_to_graph_y_and_color(*state);
-				let stroke = Stroke::new(1.0, u8_3_to_color32(color));
-				if i == 0 {
-					// Save numbers
-					prev_y = y;
-					prev_stroke = stroke;
-				}
-				else {
-					// Vertical connection line if states are different
-					if *state != prev_sample {
-						painter.line_segment([graph_pos_to_canvas_pos(x, prev_y, group_i), graph_pos_to_canvas_pos(x, y, group_i)], stroke);
-					}
-				}
-				// Horizontal line
-				painter.line_segment([graph_pos_to_canvas_pos(prev_x, prev_y, group_i), graph_pos_to_canvas_pos(x, prev_y, group_i)], prev_stroke);
-				// Last sample until the end
-				if *timestamp < timing.current_timestamp && i + 1 == bit_line.len() {
-					let last_x: f32 = timing.convert_timestamp_to_x_value(&*styles, timing.timing_diagram_end());
-					let (last_y, last_color) = logic_state_to_graph_y_and_color(*state);
-					let last_stroke = Stroke::new(1.0, u8_3_to_color32(last_color));
-					// Vertical
-					painter.line_segment([graph_pos_to_canvas_pos(x, prev_y, group_i), graph_pos_to_canvas_pos(x, last_y, group_i)], last_stroke);
-					// Horizontal
-					painter.line_segment([graph_pos_to_canvas_pos(x, last_y, group_i), graph_pos_to_canvas_pos(last_x, last_y, group_i)], last_stroke);
-				}
-				// Save numbers
-				prev_sample = *state;
-				prev_x = x;
-				prev_y = y;
-				prev_stroke = stroke;
-			}
-		}
-		else {// Multiple bits, complicated
-			// Current index of each bit line, they won't all be updated the same amount so each needs its own index
-			let mut bit_indices: Vec<usize> = (0..signal_group.len()).map(|_| 0).collect();// Splat 0
-			// Get first recorded state of each bit
-			let mut prev_sample: Vec<LogicState> = signal_group.iter().map(|bit_line| if bit_line.len() == 0 {
-				LogicState::Floating
-			}
-			else {
-				bit_line[0].1
-			}).collect();
-			// Returns: ((N lower, N upper), valid, is contested)
-			let get_n_and_whether_valid_from_sample = |sample: &Vec<LogicState>| -> ((u128, u128), bool, bool) {
-				let mut valid = true;
-				let mut contested = false;
-				let mut curr_n: (u128, u128) = (0, 0);
-				for (i, state) in sample.iter().enumerate() {
-					if state.is_valid() {
-						if state.to_bool() {
-							if i < 128 {
-								curr_n.0 += 1 << i;
-							}
-							else {
-								curr_n.1 += 1 << (i - 128);
-							}
-						}
-					}
-					else {
-						valid = false;
-						contested |= state.is_contested();
-					}
-				}
-				(curr_n, valid, contested)
-			};
-			// (Binary lower, Binary upper)
-			let (mut prev_n_opt, mut prev_sample_contested): (Option<(u128, u128)>, bool) = {
-				let (n, valid, contested) = get_n_and_whether_valid_from_sample(&prev_sample);
-				(
-					match valid {
-						true => Some(n),
-						false => None
-					},
-					contested
-				)
-			};
-			// I Love you Haley
-			// ((Binary lower, Binary upper), X pos of center)
-			let mut bus_labels = Vec::<((u128, u128), f32)>::new();
-			let mut latest_bus_label_start: f32 = 0.0;
-			let mut end = false;
-			// Draw graphics
-			let mut draw_bus_segment = |curr_n: (u128, u128), valid: bool, contested: bool, x: f32, prev_x: f32, end: bool| {
-				let ((y_low, _), (y_high, _)) = (logic_state_to_graph_y_and_color(LogicState::Driven(false)), logic_state_to_graph_y_and_color(LogicState::Driven(true)));
-				let center_pt = graph_pos_to_canvas_pos(x + styles.timing_diagram_bus_half_change_px, (y_high+y_low)/2.0, group_i);
-				let stroke_normal = Stroke::new(1.0, u8_3_to_color32(styles.color_foreground));
-				let mut both_valid_diff = false;
-				let mut diags_from_prev_segment = false;
-				// Diagonals from prev segment
-				if let Some(prev_n) = prev_n_opt {
-					both_valid_diff = (prev_n != curr_n) && valid;
-					if both_valid_diff || !valid {
-						diags_from_prev_segment = true;
-						painter.line_segment(
-							[
-								graph_pos_to_canvas_pos(x, y_high, group_i),
-								center_pt
-							],
-							stroke_normal
-						);
-						painter.line_segment(
-							[
-								center_pt,
-								graph_pos_to_canvas_pos(x, y_low, group_i),
-							],
-							stroke_normal
-						);
-						// Is it weird for guys to name their dicks?
-					}
-					if diags_from_prev_segment || end {
-						// End current bus
-						bus_labels.push((prev_n, (latest_bus_label_start + x)/2.0));
-					}
-				}
-				// Campus is looking really pretty in the fall
-				// Diagonals to this segment
-				let diags_to_this_segment = both_valid_diff || (prev_n_opt.is_none() && valid);
-				if diags_to_this_segment {
-					painter.line_segment(
-						[
-							graph_pos_to_canvas_pos(x + styles.timing_diagram_bus_half_change_px*2.0, y_high, group_i),
-							center_pt
-						],
-						stroke_normal
-					);
-					painter.line_segment(
-						[
-							center_pt,
-							graph_pos_to_canvas_pos(x + styles.timing_diagram_bus_half_change_px*2.0, y_low, group_i),
-						],
-						stroke_normal
-					);
-					latest_bus_label_start = x;
-				}
-				// horiz line(s)
-				if prev_n_opt.is_some() {
-					let start_x = /*(sample_i_f32+DIAGONAL_HALF_WIDTH*2.0)*wavelength;*/match diags_to_this_segment {
-						true => prev_x + styles.timing_diagram_bus_half_change_px*2.0,
-						false => prev_x
-					};
-					painter.line_segment(
-						[
-							graph_pos_to_canvas_pos(start_x, y_high, group_i),
-							graph_pos_to_canvas_pos(x, y_high, group_i)
-						],
-						stroke_normal
-					);
-					painter.line_segment(
-						[
-							graph_pos_to_canvas_pos(start_x, y_low, group_i),
-							graph_pos_to_canvas_pos(x, y_low, group_i)
-						],
-						stroke_normal
-					);
-				}
-				else {
-					let start_x = match diags_from_prev_segment {
-						true => prev_x + styles.timing_diagram_bus_half_change_px,
-						false => prev_x
-					};
-					let color: [u8; 3] = if prev_sample_contested {
-						styles.color_wire_contested
-					}
-					else {
-						styles.color_wire_floating
-					};
-					let (y_mid, _) = logic_state_to_graph_y_and_color(LogicState::Floating);
-					painter.line_segment(
-						[
-							graph_pos_to_canvas_pos(start_x, y_mid, group_i),
-							graph_pos_to_canvas_pos(x, y_mid, group_i)
-						],
-						Stroke::new(1.0, u8_3_to_color32(color))
-					);
-				}
-				if valid {
-					prev_n_opt = Some(curr_n);
-				}
-				else {
-					prev_n_opt = None;
-				}
-				prev_sample_contested = contested;
-			};
-			// Iterate signal samples
-			while !end {
-				// Find first bit to change
-				let mut current_sample: Vec<LogicState> = prev_sample.clone();
-				let mut new_timestamp = timing.current_timestamp;
-				// Fixed by Gemini
-				let next_timestamps: Vec<TimingDiagramTimestamp> = signal_group.iter().enumerate().map(
-					|(bit_line_i, bit_line)| {
-						let current_idx = bit_indices[bit_line_i];
-						if bit_line.is_empty() || current_idx + 1 >= bit_line.len() {
-							// If empty or at the last recorded sample, use the diagram's end time
-							timing.timing_diagram_end() 
-						}
-						else {
-							// Use the timestamp of the NEXT sample
-							bit_line[current_idx + 1].0
-						}
-					}
-				).collect();
-				// Get time of next bit change, closest next change
-				for timestamp in &next_timestamps {
-					if timing.compare_timestamps_for_display(*timestamp, new_timestamp).is_le() {
-						new_timestamp = *timestamp;
-					}
-				}
-				// Fixed by Gemini
-				// Find bit lines to step forward, ones that changed at `new_timestamp`
-				let mut bit_lines_to_advance = Vec::<usize>::new();
-				for (bit_line_i, timestamp) in next_timestamps.iter().enumerate() {
-					// Check if this bit line's NEXT change time is equal to the earliest change time
-					if *timestamp <= new_timestamp { 
-						bit_lines_to_advance.push(bit_line_i);
-					}
-				}
-				// Update current sample and increment index for the bit lines that advance to the new timestamp
-				for bit_line_i in bit_lines_to_advance {
-					let current_idx = bit_indices[bit_line_i];
-					// We only update the current state if it hasn't already reached the last sample
-					if current_idx + 1 < signal_group[bit_line_i].len() {
-						// Increment the index
-						bit_indices[bit_line_i] += 1;
-						// Update current sample using the newly incremented index
-						current_sample[bit_line_i] = signal_group[bit_line_i][bit_indices[bit_line_i]].1;
-					}
-					// If the index was already at the last sample, current_sample is not updated
-				}
-				// End condition: Check if all `bit_indices` are endmaxxing
-				let mut bit_idices_endmaxxing: usize = 0;
-				for (bit_line_i, bit_i) in bit_indices.iter().enumerate() {
-					if *bit_i + 1 == signal_group[bit_line_i].len() {
-						bit_idices_endmaxxing += 1;
-					}
-				}
-				end |= bit_idices_endmaxxing == signal_group.len();
-				let x: f32 = timing.convert_timestamp_to_x_value(&*styles, new_timestamp);
-				assert!(current_sample.len() > 0, "Signal group must have at least one bit");
-				// Compile binary number, quit if any states are floating or contested
-				let (curr_n, valid, contested): ((u128, u128), bool, bool) = get_n_and_whether_valid_from_sample(&current_sample);
-				draw_bus_segment(curr_n, valid, contested, x, prev_x, false);
-				if end {
-					let last_x = timing.convert_timestamp_to_x_value(&*styles, timing.timing_diagram_end());
-					let last_sample: Vec<LogicState> = signal_group.iter().map(|bit_line| match bit_line.last() {
-						Some(t) => t.1,
-						None => LogicState::Floating
-					}).collect();
-					let (last_n, last_valid, last_contested): ((u128, u128), bool, bool) = get_n_and_whether_valid_from_sample(&last_sample);
-					draw_bus_segment(last_n, last_valid, last_contested, last_x, x, true);
-				}
-				prev_sample = current_sample;
-				prev_x = x;
-			}
-			// Bus labels
-			for (n_256, label_center_x) in bus_labels {
-				let mut text = format!("{:X}", n_256.0);
-				if n_256.1 != 0 {
-					text += &format!("{:X}", n_256.1);
-				}
-				let font_id = FontId::new(amplitude*1.5, FontFamily::Monospace);
-				painter.text(
-					graph_pos_to_canvas_pos(label_center_x, logic_state_to_graph_y_and_color(LogicState::Floating).0, group_i),
-					Align2::CENTER_CENTER,
-					text,
-					font_id,
-					u8_3_to_color32(styles.text_color)
-				);
 			}
 		}
 	}
@@ -1318,9 +1011,74 @@ impl MoveCircuitPopup {
 	}
 }
 
+
+
+#[derive(Debug, Default, Clone)]
+pub enum SelectionState {
+	/// Just there
+	#[default]
+	Fixed,
+	/// Being dragged by mouse, keeps track of where it started (wrt grid). If there aren't any selected items, then use this to drag a rectangle to select stuff
+	/// (
+	/// 	Start,
+	/// 	Delta,
+	/// 	Vector of wires being dragged: (
+	/// 		Wire ID,
+	/// 		Whether start is selected,
+	/// 		Initial position of either start or end based on field 1
+	/// 	)
+	/// )
+	Dragging(V2, V2),
+	/// After Paste operation, the pasted stuff will remain selected and following the mouse until a left click
+	/// (Current or most recent mouse pos)
+	FollowingMouse(V2)
+}
+
+#[derive(Debug, Clone)]
+pub enum Tool {
+	Select {
+		selected_graphics: HashSet<GraphicSelectableItemRef>,
+		selected_graphics_state: SelectionState
+	},
+	HighlightNet,
+	/// Wire initially horizontal/vertical rules:
+	/// When the firt perpindicular pair is placed it defauts to Horizontal (horiz), meaning the first segment is horizontal and then a vertical one from the end of that to the mouse
+	/// Whenever the most recent pair is completely horiz or vert, its initial direction is set to that direction
+	PlaceWire {
+		/// Each of these represents two perpindicular segments (if the difference between this one's position and the next one's position is perfectly horizontal or vertical then one of the straight segments will just be length zero)
+		/// [(Starting pos, Initial direction to get to next position)]
+		/// When the actual wires are created, consecutive segments in the same direction will be combined
+		perp_pairs: Vec<(IntV2, FourWayDir)>
+	}
+}
+
+impl Tool {
+	/// The tool buttons side bar cannot always be enabled, for example when the component placement ui is active
+	pub fn tool_select_allowed(&self) -> bool {
+		match &self {
+			Self::Select{selected_graphics: _, selected_graphics_state} => match selected_graphics_state {
+				SelectionState::Fixed => true,
+				SelectionState::Dragging(_, _) => false,
+				SelectionState::FollowingMouse(_) => false
+			},
+			Self::HighlightNet => false,
+			Self::PlaceWire{perp_pairs: _} => false,
+		}
+	}
+	pub fn tool_select_ui(&self, _draw: &dyn DrawInterface) {
+		// TODO
+	}
+}
+
+impl Default for Tool {
+	fn default() -> Self {
+		Self::Select{selected_graphics: HashSet::new(), selected_graphics_state: SelectionState::default()}
+	}
+}
+
 pub struct LogicCircuitToplevelView {
 	/// The top-level circuit of this view, its pins are rendered as interactive I/O pins
-	circuit: LogicCircuit,
+	pub circuit: LogicCircuit,
 	/// Location of center of screen with respect to the grid, it is this way so that it will not have to adjusted when the grid is zoomed in/out
 	screen_center_wrt_grid: V2,
 	/// Pixels per grid increment
@@ -1330,7 +1088,7 @@ pub struct LogicCircuitToplevelView {
 	showing_block_edit_popup: bool,
 	component_search_text: String,
 	all_logic_devices_search: Vec<EnumAllLogicDevices>,
-	saved: bool,
+	pub saved: bool,
 	recompute_conns_next_frame: bool,
 	/// 1 Less than actual number of times the compute function was called because the last call doesn't change anything and ends the loop
 	frame_compute_cycles: usize,
@@ -1338,7 +1096,8 @@ pub struct LogicCircuitToplevelView {
 	flatten_error: Option<String>,
 	/// Not owned by the circuit itself because its only used for the toplevel circuit and would use more memory if subcircuits had it
 	timing: TimingDiagram,
-	move_popup_opt: Option<MoveCircuitPopup>
+	move_popup_opt: Option<MoveCircuitPopup>,
+	tool: Tool
 }
 
 impl LogicCircuitToplevelView {
@@ -1359,7 +1118,8 @@ impl LogicCircuitToplevelView {
 			showing_flatten_opoup: false,
 			flatten_error: None,
 			timing: TimingDiagram::new(timing_diagram_order),
-			move_popup_opt: None
+			move_popup_opt: None,
+			tool: Tool::default()
 		};
 		out.circuit.update_probe_net_connections_and_timing(&mut out.timing.tree);
 		// Done
@@ -1434,7 +1194,8 @@ impl LogicCircuitToplevelView {
 					self.grid_size,
 					|pos_px: Pos2| -> V2 {
 						DrawData::mouse_pos2_to_grid_unattached(V2::new(pos_px.x, pos_px.y), FourWayDir::default(), rect_center, IntV2(0, 0), self.screen_center_wrt_grid, emath_vec2_to_v2(canvas_size), self.grid_size)
-					}
+					},
+					&mut self.tool
 				);
 			}
 			// Reconnect wires and thingies if anything was changed
@@ -1447,9 +1208,9 @@ impl LogicCircuitToplevelView {
 			self.recompute_conns_next_frame = false;
 			// graphics help from https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/painting.rs
 			// Right side toolbar
-			self.circuit.tool.borrow().tool_select_ui(&draw_info);
+			self.tool.tool_select_ui(&draw_info);
 			// Draw circuit
-			self.circuit.draw(&(Box::new(draw_info) as Box<dyn DrawInterface>));
+			self.circuit.draw_toplevel(&(Box::new(draw_info) as Box<dyn DrawInterface>), &mut self.tool);
 			(canvas_size, rect_center)
 		});
 		// Top: general controls
@@ -1458,7 +1219,7 @@ impl LogicCircuitToplevelView {
 				self.circuit.save_circuit_toplevel(Some(&self.timing)).unwrap();
 				self.saved = true;
 			}
-			if self.circuit.tool.borrow().tool_select_allowed() {
+			if self.tool.tool_select_allowed() {
 				if ui.button("+ Component / Subcircuit").clicked() {
 					// Update component search list
 					self.all_logic_devices_search = builtin_components::list_all_basic_components();
@@ -1469,17 +1230,17 @@ impl LogicCircuitToplevelView {
 				}
 				if ui.button("+ I/O Pin").clicked() {
 					let graphic_pin_id = self.circuit.insert_graphic_pin(IntV2(0, 0), FourWayDir::default(), String::new(), true, 1);
-					self.circuit.set_graphic_item_following_mouse(GraphicSelectableItemRef::Pin(graphic_pin_id));
+					self.circuit.set_graphic_item_following_mouse(GraphicSelectableItemRef::Pin(graphic_pin_id), &mut self.tool);
 					self.circuit.update_pin_block_positions();
 				}
 				if ui.button("+ Splitter").clicked() {
-					self.circuit.set_graphic_item_following_mouse(self.circuit.insert_splitter(Splitter::new().save()));
+					self.circuit.set_graphic_item_following_mouse(self.circuit.insert_splitter(Splitter::new().save()), &mut self.tool);
 				}
 				if ui.button("+ Label").clicked() {
-					self.circuit.set_graphic_item_following_mouse(self.circuit.insert_label(GraphicLabel::new().save()));
+					self.circuit.set_graphic_item_following_mouse(self.circuit.insert_label(GraphicLabel::new().save()), &mut self.tool);
 				}
 				if ui.button("+ Probe").clicked() {
-					self.circuit.set_graphic_item_following_mouse(self.circuit.insert_probe(Probe::default().save()));
+					self.circuit.set_graphic_item_following_mouse(self.circuit.insert_probe(Probe::default().save()), &mut self.tool);
 				}
 			}
 			// Compute cycles text
@@ -1531,7 +1292,7 @@ impl LogicCircuitToplevelView {
 				}
 			});
 			// Active selection features
-			if let Tool::Select{selected_graphics, selected_graphics_state: _} = &*self.circuit.tool.borrow() {
+			if let Tool::Select{selected_graphics, selected_graphics_state: _} = &self.tool {
 				if !selected_graphics.is_empty() {
 					// Properties list
 					ui.separator();
@@ -1594,7 +1355,7 @@ impl LogicCircuitToplevelView {
 							if ui.button(device_save.type_name()).clicked() {
 								self.showing_component_popup = false;
 								let handle = self.circuit.insert_component(device_save, None);
-								*self.circuit.tool.borrow_mut() = Tool::Select{
+								self.tool = Tool::Select{
 									selected_graphics: HashSet::from_iter(vec![handle].into_iter()),
 									selected_graphics_state: SelectionState::FollowingMouse(V2::zeros())
 								};
@@ -1766,257 +1527,6 @@ impl LogicCircuitToplevelView {
 				self.showing_block_edit_popup = false;
 			}
 		});
-	}
-}
-
-#[cfg(feature = "using_filesystem")]
-struct NewCircuitWindow {
-	lib_name: String,
-	name: String,
-	file_name: String
-}
-
-#[cfg(feature = "using_filesystem")]
-impl NewCircuitWindow {
-	pub fn new() -> Self {
-		Self {
-			lib_name: DEFAULT_CIRCUIT_LIB.to_owned(),
-			name: String::new(),
-			file_name: String::new()
-		}
-	}
-	pub fn clear(&mut self) {
-		self.lib_name = DEFAULT_CIRCUIT_LIB.to_owned();
-		self.name = String::new();
-		self.file_name = String::new();
-	}
-	/// Returns: (Whether to close, Option<New circuit>)
-	pub fn show(&mut self, ui: &mut Ui, circuit_libs_ordered: &Vec<String>) -> (bool, Option<LogicCircuit>) {
-		let mut error_opt: Option<String> = None;
-		let mut out: (bool, Option<LogicCircuit>) = (false, None);
-		ui.label("Create New Circuit");
-		ui.horizontal(|ui| {
-			ui.label("Name: ");
-			ui.text_edit_singleline(&mut self.name);
-		});
-		ui.horizontal(|ui| {
-			ui.label("Save file name: ");
-			ui.text_edit_singleline(&mut self.file_name);
-			ui.label(".json");
-		});
-		// Check
-		for char in self.file_name.chars() {
-			if !REASONABLE_FILENAME_CHARS.contains(char) {
-				error_opt = Some(format!("File name contains disallowed char \"{}\"", char));
-			}
-		}
-		ui.horizontal(|ui| {
-			ui.label("Circuit library: ");
-			egui::ComboBox::new("New circuit library select", "")
-				.selected_text(&self.lib_name)
-				.show_ui(ui, |ui| {
-					for lib_option in circuit_libs_ordered {
-						ui.selectable_value(&mut self.lib_name, lib_option.clone(), lib_option);
-					}
-				});
-		});
-		ui.horizontal(|ui| {
-			let create_button = Button::new("Create Circuit");
-			if ui.add_enabled(error_opt.is_none(), create_button).clicked() {
-				out.0 = true;
-				out.1 = Some(LogicCircuit::new_mostly_default(self.name.clone(), self.file_name.clone(), true, self.lib_name.clone()));
-			}
-			if ui.button("Cancel").clicked() {
-				out.0 = true;
-			}
-		});
-		if let Some(error) = error_opt {
-			ui.colored_label(u8_3_to_color32([255, 0, 0]), error);
-		}
-		out
-	}
-}
-
-pub struct App {
-	styles: Rc<Styles>,
-	circuit_tabs: Vec<LogicCircuitToplevelView>,
-	/// 0 is for the home tab, so indexing for `circuit_tabs` starts at 1
-	current_tab_index: usize,
-	load_circuit_err_opt: Option<String>,
-	readme_file: String,
-	/// Vec<(Library, File)>
-	circuits_ordered: Vec<(String, String)>,
-	circuit_libs_ordered: Vec<String>,
-	#[cfg(feature = "using_filesystem")]
-	new_circuit_window: NewCircuitWindow,
-	#[cfg(feature = "using_filesystem")]
-	showing_new_circuit_popup: bool
-}
-
-impl App {
-	pub fn new() -> Self {
-		// Load styles
-		let styles: Styles = match Styles::load() {
-			Ok(styles) => styles,
-			Err(e) => {
-				println!("Could not load styles: {}, resorting to default", e);
-				Styles::default()
-			}
-		};
-		let mut out = Self {
-			styles: Rc::new(styles),
-			circuit_tabs: Vec::new(),//vec![LogicCircuitToplevelView::new(create_simple_circuit(), false)],
-			current_tab_index: 0,
-			load_circuit_err_opt: None,
-			readme_file: resource_interface::load_file_with_better_error("README.md").unwrap(),
-			circuits_ordered: Vec::new(),
-			circuit_libs_ordered: Vec::new(),
-			#[cfg(feature = "using_filesystem")]
-			new_circuit_window: NewCircuitWindow::new(),
-			showing_new_circuit_popup: false
-		};
-		out.load_circuit_names_and_libs().unwrap();
-		out
-	}
-	fn load_circuit_names_and_libs(&mut self) -> Result<(), String> {
-		self.circuits_ordered = resource_interface::list_all_circuit_files()?;
-		self.circuit_libs_ordered = resource_interface::load_circuit_libraries()?.1;
-		Ok(())
-	}
-	fn load_circuit_tab(&mut self, file_name: &str, lib_name: &str) -> Result<LogicCircuit, String> {
-		resource_interface::load_circuit(file_name, false, true, IntV2(0, 0), FourWayDir::default(), String::new(), lib_name.to_owned(), false)
-	}
-	fn new_circuit_tab(&mut self, file_name: &str, lib_name: &str) {
-		match self.load_circuit_tab(file_name, lib_name) {
-			Ok(circuit) => {
-				// RIP Joe Sullivan, You did a lot for Haley
-				self.circuit_tabs.push(LogicCircuitToplevelView::new(circuit, true, &self.styles));
-				self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
-			},
-			Err(e) => {
-				self.load_circuit_err_opt = Some(e);
-			}
-		}
-	}
-	fn reload_tab(&mut self, tab_index: usize) {
-		let actual_tab_index = tab_index - 1;
-		let circuit = &self.circuit_tabs[actual_tab_index].circuit;
-		match self.load_circuit_tab(&circuit.save_name.clone(), &circuit.lib_name.clone()) {
-			Ok(new_circuit) => {
-				self.circuit_tabs[actual_tab_index] = LogicCircuitToplevelView::new(new_circuit, true, &self.styles);
-			},
-			Err(e) => {
-				self.load_circuit_err_opt = Some(e);
-			}
-		}
-	}
-}
-
-impl eframe::App for App {
-	fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-		let circuit_names: Vec<String> = self.circuit_tabs.iter().map(|toplevel| toplevel.circuit.type_name.clone()).collect();
-		let mut i_to_delete_opt: Option<usize> = None;
-		egui::CentralPanel::default().show(ctx, |ui: &mut Ui| {
-			// This function by default is only run upon user interaction, so copied this from https://users.rust-lang.org/t/issues-while-writing-a-clock-with-egui/102752
-			ui.ctx().request_repaint();
-			ScrollArea::horizontal().scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
-				ui.horizontal(|ui| {
-					if ui.add_enabled(self.current_tab_index != 0, Button::new("Home")).clicked() {
-						if self.current_tab_index != 0 {
-							self.current_tab_index = 0;
-						}
-					}
-					for (i, circuit_name) in circuit_names.iter().enumerate() {
-						let name_for_ui: &str = match self.circuit_tabs[i].saved {
-							true => circuit_name,
-							false => &format!("{} *", circuit_name)
-						};
-						let is_current_tab: bool = self.current_tab_index == i + 1;
-						if ui.add_enabled(!is_current_tab, Button::new(name_for_ui)).clicked() {
-							self.current_tab_index = i + 1;
-						}
-						// Tab close button
-						if is_current_tab {
-							if ui.button("x").clicked() {
-								i_to_delete_opt = Some(i);
-							}
-						}
-					}
-					let new_button_response = ui.button("+");
-					if new_button_response.clicked() {
-						self.load_circuit_err_opt = None;
-						self.load_circuit_names_and_libs().unwrap();
-					}
-					Popup::menu(&new_button_response).close_behavior(PopupCloseBehavior::CloseOnClickOutside).align(RectAlign::RIGHT_START).align_alternatives(&[RectAlign::LEFT_START]).show(|ui| {
-						if ui.button("New Circuit...").clicked() {
-							self.showing_new_circuit_popup = true;
-							self.new_circuit_window.clear();
-						}
-						ui.menu_button("Load Circuit", |ui| {
-							if self.circuits_ordered.len() == 0 {
-								ui.label(format!("No circuit files found across all libraries"));
-							}
-							ScrollArea::vertical().show(ui, |ui| {
-								let mut load_info_opt: Option<(String, String)> = None;
-								for (lib_name, file_name) in &self.circuits_ordered {
-									if ui.selectable_label(false, &format!("{}/{}", lib_name, file_name)).clicked() {
-										load_info_opt = Some((lib_name.clone(), file_name.clone()));
-									}
-								}
-								if let Some(load_info) = load_info_opt {
-									self.new_circuit_tab(&load_info.1, &load_info.0);
-								}
-								if let Some(load_error) = &self.load_circuit_err_opt {
-									ui.colored_label(u8_3_to_color32([255, 0, 0]), format!("Loading error: {}", load_error));
-								}
-							});
-						});
-					});
-				});
-			});
-			let response_for_popups: Response = if self.current_tab_index == 0 {// Home tab
-				ui.vertical(|ui| {
-					ScrollArea::vertical().show(ui, |ui| {
-						CommonMarkViewer::new().show(ui, &mut CommonMarkCache::default(), &self.readme_file);
-					});
-				}).response
-			}
-			else {
-				let circuit_toplevel: &mut LogicCircuitToplevelView = &mut self.circuit_tabs[self.current_tab_index - 1];
-				#[allow(unused)]
-				let (new_mouse_pos_opt, new_circuit_tab_opt, response, reload_tab): (Option<Pos2>, Option<(String, String)>, Response, bool) = circuit_toplevel.draw(ui, Rc::clone(&self.styles), ctx.screen_rect().min);// TODO: Get actual window top-left position
-				#[cfg(feature = "kicad_scrolling")]
-				if let Some(new_pos) = new_mouse_pos_opt {
-					let mouse = mouse_rs::Mouse::new();
-					mouse.move_to(new_pos.x as i32, new_pos.y as i32).unwrap();
-				}
-				if let Some(new_circuit_tab) = new_circuit_tab_opt {
-					self.new_circuit_tab(&new_circuit_tab.0, &new_circuit_tab.1);
-				}
-				if reload_tab {
-					self.reload_tab(self.current_tab_index);
-				}
-				response
-			};
-			if self.showing_new_circuit_popup {
-				Popup::from_response(&response_for_popups).align(RectAlign{parent: Align2::CENTER_CENTER, child: Align2::CENTER_CENTER}).show(|ui| {
-					let (close, new_circuit_opt) = self.new_circuit_window.show(ui, &self.circuit_libs_ordered);
-					if close {
-						self.showing_new_circuit_popup = false;
-						if let Some(new_circuit) = new_circuit_opt {
-							self.circuit_tabs.push(LogicCircuitToplevelView::new(new_circuit, false, &self.styles));
-							self.current_tab_index = self.circuit_tabs.len();// Not an OBOE
-						}
-					}
-				});
-			}
-		});
-		if let Some(i_to_delete) = i_to_delete_opt {
-			self.circuit_tabs.remove(i_to_delete);
-			if self.current_tab_index >= i_to_delete + 1 {
-				self.current_tab_index -= 1;
-			}
-		}
 	}
 }
 

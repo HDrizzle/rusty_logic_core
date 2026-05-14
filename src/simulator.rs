@@ -1,11 +1,10 @@
 //! Heavily based off of the logic simulation I wrote in TS for use w/ MotionCanvas, found at https://github.com/HDrizzle/stack_machine/blob/main/presentation/src/logic_sim.tsx
 
-use std::{cell::{Ref, RefCell, RefMut}, cmp::{Ordering, PartialOrd}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, pin, rc::Rc};
+use std::{cell::{RefCell, RefMut}, collections::{HashMap, HashSet}, default::Default, fmt::Debug, fs, ops::{Deref, DerefMut}, rc::Rc};
 use serde::{Deserialize, Serialize};
-use crate::{circuit_net_computation::NotAWire, prelude::*, resource_interface};
+use crate::{circuit_net_computation::NotAWire, prelude::*, resource_interface, clock::Clock};
 use resource_interface::LogicCircuitSave;
 use common_macros::hash_map;
-use web_time::{Duration, Instant};
 
 fn logic_device_to_graphic_item(x: &dyn LogicDevice) -> &dyn GraphicSelectableItem {
 	x
@@ -359,270 +358,6 @@ pub enum LogicConnectionPinInternalSource {
 	ComponentInternal
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct LogicConnectionPin {
-	pub internal_source: Option<LogicConnectionPinInternalSource>,
-	internal_state: LogicState,
-	pub external_source: Option<LogicConnectionPinExternalSource>,
-	pub external_state: LogicState,
-	
-}
-
-impl LogicConnectionPin {
-	pub fn new(
-		internal_source: Option<LogicConnectionPinInternalSource>,
-		external_source: Option<LogicConnectionPinExternalSource>
-	) -> Self {
-		Self {
-			internal_source,
-			internal_state: LogicState::Floating,
-			external_source,
-			external_state: LogicState::Floating
-		}
-	}
-	pub fn set_drive_internal(&mut self, state: LogicState) {
-		self.internal_state = state;
-	}
-	pub fn set_drive_external(&mut self, state: LogicState) {
-		self.external_state = state;
-	}
-	pub fn state(&self) -> LogicState {
-		merge_logic_states(self.internal_state, self.external_state)
-	}
-	fn is_connected_to_net(&self, net_id: u64) -> bool {
-		match &self.internal_source {
-			Some(source) => match source {
-				LogicConnectionPinInternalSource::ComponentInternal => false,
-				LogicConnectionPinInternalSource::Net(test_net_id) => *test_net_id == net_id
-			},
-			None => false
-		}
-	}
-}
-
-#[derive(Clone, Debug)]
-pub struct GraphicPin {
-	/// Each graphic pin has a reference to all external conection logic pins so that they can be added/removed when the graphic bit width is changed
-	pub component_all_logic_pins: Rc<RefCell<HashMap<u64, RefCell<LogicConnectionPin>>>>,
-	/// Vec of keys to `component_all_logic_pins`, order is important
-	pub owned_pins: Vec<u64>,
-	/// Usually 1, may be something else if theres a curve on an OR input or something
-	pub length: f32,
-	pub ui_data: UIData,
-	/// Only for user, defaults to ""
-	pub name: String,
-	pub show_name: bool,
-	pub wire_connections: Option<Rc<RefCell<HashSet<WireConnection>>>>
-}
-
-impl GraphicPin {
-	pub fn new(
-		component_all_logic_pins: Rc<RefCell<HashMap<u64, RefCell<LogicConnectionPin>>>>,
-		owned_pins: Vec<u64>,
-		relative_end_grid: IntV2,
-		direction: FourWayDir,
-		length: f32,
-		name: String,
-		show_name: bool
-	) -> Self {
-		let bw: usize = owned_pins.len();
-		Self {
-			component_all_logic_pins,
-			owned_pins,
-			length,
-			ui_data: UIData::new(relative_end_grid, direction, Self::get_local_bb(bw as u16)),
-			name,
-			show_name,
-			wire_connections: Some(Rc::new(RefCell::new(HashSet::new())))
-		}
-	}
-	pub fn iter_owned_pins<T, U: FnMut(Ref<'_, LogicConnectionPin>) -> T>(&self, mut f: U) -> Vec<T> {
-		let mut out = Vec::<T>::new();
-		let logic_pins = self.component_all_logic_pins.borrow();
-		for logic_pin_id in &self.owned_pins {
-			let pin_cell = logic_pins.get(logic_pin_id).unwrap();
-			out.push(f(pin_cell.borrow()));
-		}
-		out
-	}
-	pub fn iter_owned_pins_mut<T, U: FnMut(RefMut<'_, LogicConnectionPin>) -> T>(&self, mut f: U) -> Vec<T> {
-		let mut out = Vec::<T>::new();
-		let logic_pins = self.component_all_logic_pins.borrow();
-		for logic_pin_id in &self.owned_pins {
-			let pin_cell = logic_pins.get(logic_pin_id).unwrap();
-			out.push(f(pin_cell.borrow_mut()));
-		}
-		out
-	}
-	pub fn states(&self) -> Vec<LogicState> {
-		self.iter_owned_pins(|pin| pin.state())
-	}
-	pub fn internal_sources(&self) -> Vec<Option<LogicConnectionPinInternalSource>> {
-		self.iter_owned_pins(|pin| {pin.internal_source.clone()})
-	}
-	pub fn external_sources(&self) -> Vec<Option<LogicConnectionPinExternalSource>> {
-		self.iter_owned_pins(|pin| {pin.external_source.clone()})
-	}
-	pub fn get_color(&self, styles: &Styles) -> [u8; 3] {
-		if self.owned_pins.len() == 1 {
-			styles.color_from_logic_state(self.component_all_logic_pins.borrow().get(&self.owned_pins[0]).unwrap().borrow().state())
-		}
-		else {
-			styles.color_from_logic_states(&self.states())
-		}
-	}
-	fn get_local_bb(bw: u16) -> (V2, V2) {
-		(V2::new(1.0, -1.0), V2::new(1.0 + (bw as f32 * 2.0), 1.0))
-	}
-}
-
-/// ONLY meant to be used on external pins on the toplevel circuit, all other pins are just rendered as part of the component
-impl GraphicSelectableItem for GraphicPin {
-	fn draw<'a>(&self, draw_parent: &Box<dyn DrawInterface>) {
-		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
-		let external_and_combined_states: Vec<(LogicState, LogicState)> = self.iter_owned_pins(|pin| (pin.external_state.clone(), pin.state()));
-		let color = draw.styles().color_from_logic_states(&external_and_combined_states.iter().map(|t|t.1.clone()).collect());
-		for i in 0..self.owned_pins.len() {
-			draw.draw_polyline(
-				vec![
-					V2::new(1.1, -0.9),
-					V2::new(1.1, 0.9),
-					V2::new(2.9, 0.9),
-					V2::new(2.9, -0.9),
-					V2::new(1.1, -0.9)
-				].iter().map(|v| v + V2::new((i*2) as f32, 0.0)).collect(),
-				draw.styles().color_from_logic_state(external_and_combined_states[i].1)
-			);
-			if let Some(value) = external_and_combined_states[i].0.to_bool_opt() {
-				draw.text(match value {true => "1", false => "0"}, V2::new((i*2) as f32 + 2.0, 0.0), GenericAlign2::CENTER_CENTER, draw.styles().text_color, 1.5, false);
-			}
-		}
-		draw.draw_polyline(
-			vec![
-				V2::zeros(),
-				V2::new(1.0, 0.0)
-			],
-			color
-		);
-	}
-	fn get_ui_data(&self) -> &UIData {
-		&self.ui_data
-	}
-	fn get_ui_data_mut(&mut self) -> &mut UIData {
-		&mut self.ui_data
-	}
-	/*fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
-		let half_diagonal = V2::new(1.0, 1.0);
-		let box_center = (self.ui_data.direction.to_unit() * 2.0) + self.ui_data.position.to_v2();
-		let global_offset = grid_offset + box_center;
-		(global_offset - half_diagonal, global_offset + half_diagonal)
-	}*/
-	fn is_connected_to_net(&self, net_id: u64) -> bool {
-		let mut out = false;
-		self.iter_owned_pins(|pin| {
-			out |= pin.is_connected_to_net(net_id);
-		});
-		out
-	}
-	#[cfg(feature = "using_egui")]
-	fn get_properties(&self) -> Vec<SelectProperty> {
-		vec![
-			SelectProperty::BitWidth(self.owned_pins.len() as u16),
-			SelectProperty::PositionX(self.ui_data.position.0),
-			SelectProperty::PositionY(self.ui_data.position.1),
-			SelectProperty::GlobalConnectionState(self.iter_owned_pins(|pin| pin.external_state.to_bool_opt())),
-			SelectProperty::Direction(self.ui_data.direction),
-			SelectProperty::Name(self.name.clone())
-		]
-	}
-	#[cfg(feature = "using_egui")]
-	fn set_property(&mut self, property: SelectProperty) {
-		match property {
-			SelectProperty::BitWidth(bit_width) => {
-				assert!(bit_width > 0, "Bit width cannot be 0");
-				self.ui_data.local_bb = Self::get_local_bb(bit_width);
-				let diff: isize = bit_width as isize - (self.owned_pins.len() as isize);
-				if diff > 0 {
-					// Add logic pins
-					let mut all_pins = self.component_all_logic_pins.borrow_mut();
-					for _ in 0..diff {
-						let new_logic_pin_id: u64 = lowest_unused_key(&*all_pins);
-						all_pins.insert(new_logic_pin_id, RefCell::new(LogicConnectionPin::new(None, Some(LogicConnectionPinExternalSource::Global))));
-						self.owned_pins.push(new_logic_pin_id);
-					}
-				}
-				if diff < 0 {
-					// Remove logic pins
-					let mut all_pins = self.component_all_logic_pins.borrow_mut();
-					for _ in 0..(-diff) {
-						let logic_pin_id: u64 = self.owned_pins.pop().expect("There should always be at least 1 owned pin");
-						all_pins.remove(&logic_pin_id);
-					}
-				}
-			},
-			SelectProperty::PositionX(x) => {
-				self.ui_data.position.0 = x;
-			},
-			SelectProperty::PositionY(y) => {
-				self.ui_data.position.1 = y;
-			},
-			SelectProperty::GlobalConnectionState(driven_opts) => {
-				let all_pins = self.component_all_logic_pins.borrow();
-				for (i, pin_id) in self.owned_pins.iter().enumerate() {
-					let pin_cell = all_pins.get(pin_id).unwrap();
-					if i < driven_opts.len() {// In case multiple pins with different bit widths are selected and this one is longer than the one setting the property
-						pin_cell.borrow_mut().external_state = driven_opts[i].into();
-					}
-				}
-			},
-			SelectProperty::Direction(direction) => {
-				self.ui_data.direction = direction;
-			},
-			SelectProperty::Name(name) => {
-				self.name = name;
-			}
-			_ => {}
-		}
-	}
-	#[cfg(feature = "using_egui")]
-	fn copy(&self) -> CopiedGraphicItem {
-		CopiedGraphicItem::ExternalConnection(self.ui_data.position, self.ui_data.direction, self.name.clone(), self.show_name, self.owned_pins.len() as u16)
-	}
-	#[cfg(feature = "using_egui")]
-	fn accept_click(&mut self, local_pos: V2) -> bool {
-		let bit_index = ((local_pos.x - 1.0) / 2.0) as isize;
-		if bit_index >= 0 && bit_index < self.owned_pins.len() as isize {
-			let comp_pins = self.component_all_logic_pins.borrow();
-			let mut pin_mut = comp_pins.get(&self.owned_pins[bit_index as usize]).unwrap().borrow_mut();
-			match pin_mut.external_source.clone().expect("Pin being used as a graphic item must have an external source") {
-				LogicConnectionPinExternalSource::Global => {
-					if pin_mut.external_state.is_valid() {
-						pin_mut.external_state = (!pin_mut.external_state.to_bool()).into();
-						true
-					}
-					else {
-						false
-					}
-				},
-				LogicConnectionPinExternalSource::Net(_) => panic!("Pin being used as a graphic item cannot have external net source")
-			}
-		}
-		else {
-			false
-		}
-	}
-}
-
-/// Custom implementation to get rid of logic pins owned by this graphic pin
-impl Drop for GraphicPin {
-	fn drop(&mut self) {
-		let mut all_pins = self.component_all_logic_pins.borrow_mut();
-		for pin_id in &self.owned_pins {
-			all_pins.remove(&pin_id);
-		}
-	}
-}
-
 /// Any Logic pin within a circuit
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum CircuitWideLogicPinReference {
@@ -691,715 +426,6 @@ impl ComponentGraphicPinReference {
 		}
 	}
 }
-
-#[derive(Debug, Clone)]
-pub struct GraphicLabel {
-	ui_data: UIData,
-	text: String,
-	/// Relative to parent circuit
-	vertical: bool,
-	text_size: RefCell<V2>
-}
-
-impl GraphicLabel {
-	pub fn new() -> Self {
-		Self {
-			ui_data: UIData::new(IntV2(0, 0), FourWayDir::default(), (V2::zeros(), V2::zeros())),
-			text: "New Label".to_owned(),
-			vertical: false,
-			text_size: RefCell::new(V2::zeros())
-		}
-	}
-	pub fn save(&self) -> GraphicLabelSave {
-		GraphicLabelSave {
-			pos: self.ui_data.position,
-			dir: self.ui_data.direction,
-			text: self.text.clone(),
-			vertical: self.vertical
-		}
-	}
-	pub fn load(save: GraphicLabelSave) -> Self {
-		Self {
-			ui_data: UIData::new(save.pos, save.dir, (V2::zeros(), V2::zeros())),
-			text: save.text,
-			vertical: save.vertical,
-			text_size: RefCell::new(V2::zeros())
-		}
-	}
-}
-
-impl GraphicSelectableItem for GraphicLabel {
-	fn draw<'a>(&self, draw_parent: &Box<dyn DrawInterface>) {
-		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
-		let text_size_grid: f32 = draw.styles().text_size_grid;
-		draw.text(&self.text, V2::zeros(), GenericAlign2::CENTER_CENTER, draw.styles().text_color, text_size_grid, false);
-		{
-			*self.text_size.borrow_mut() = V2::new(draw.text_size(&self.text, text_size_grid).x, text_size_grid);
-		}
-	}
-	fn get_ui_data(&self) -> &UIData {
-		&self.ui_data
-	}
-	fn get_ui_data_mut(&mut self) -> &mut UIData {
-		&mut self.ui_data
-	}
-	#[cfg(feature = "using_egui")]
-	fn get_properties(&self) -> Vec<SelectProperty> {
-		vec![
-			SelectProperty::PositionX(self.ui_data.position.0),
-			SelectProperty::PositionY(self.ui_data.position.1),
-			SelectProperty::Direction(self.ui_data.direction),
-			SelectProperty::Name(self.text.clone())
-		]
-	}
-	#[cfg(feature = "using_egui")]
-	fn set_property(&mut self, property: SelectProperty) {
-		match property {
-			SelectProperty::PositionX(x) => {
-				self.ui_data.position.0 = x;
-			},
-			SelectProperty::PositionY(y) => {
-				self.ui_data.position.1 = y;
-			},
-			SelectProperty::Direction(direction) => {
-				self.ui_data.direction = direction;
-			},
-			SelectProperty::Name(new_text) => {
-				self.text = new_text;
-			}
-			_ => {}
-		}
-	}
-	#[cfg(feature = "using_egui")]
-	fn copy(&self) -> CopiedGraphicItem {
-		CopiedGraphicItem::GraphicLabel(self.save())
-	}
-	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
-		let text_half_size: V2 = *self.text_size.borrow() / 2.0;
-		let local_bb = (-text_half_size, text_half_size);
-		merge_points_to_bb(vec![grid_offset + self.ui_data.pos_to_parent_coords_float(local_bb.0), grid_offset + self.ui_data.pos_to_parent_coords_float(local_bb.1)])
-	}
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GraphicLabelSave {
-	pos: IntV2,
-	dir: FourWayDir,
-	text: String,
-	/// Relative to parent circuit
-	vertical: bool
-}
-
-/// Bus splitter with exact same functionality as in CircuitVerse
-/// Not implemented as a component so that both ends can share the same net and make computation faster
-/// Example Geometry/layout, note that graphical fanout pins can each have any number of logical pins as long as they all add up to the total bit width
-/// Every logical pin on the splitter will be "attatched" to exactly 2 graphical pins: The base pin and one fanout pin (the splits do not overlap)
-///     |- 4:7
-///     |- 0:3
-/// 0:7-|
-///+ <- (0, 0)
-#[derive(Debug, Clone)]
-pub struct Splitter {
-	ui_data: UIData,
-	/// Total bit width
-	pub bit_width: u16,
-	/// Each entry represents a fanout graphic pin: Vec<(bit width, Option<(Grahic wire connection set, Vec of nets corresponding to bit width)>)>
-	pub splits: Vec<(u16, Option<Rc<RefCell<HashSet<WireConnection>>>>)>,
-	/// Graphical connections option for base pin, base pin is always graphical pin #0
-	pub base_connections_opt: Option<Rc<RefCell<HashSet<WireConnection>>>>
-}
-
-impl Splitter {
-	pub fn new() -> Self {
-		Self {
-			ui_data: UIData::new(IntV2(0, 0), FourWayDir::default(), Self::calculate_local_bb(8)),
-			bit_width: 8,
-			splits: vec![(1, None), (1, None), (1, None), (1, None), (1, None), (1, None), (1, None), (1, None)],
-			base_connections_opt: None
-		}
-	}
-	pub fn save(&self) -> SplitterSave {
-		SplitterSave {
-			pos: self.ui_data.position,
-			dir: self.ui_data.direction,
-			bit_width: self.bit_width,
-			split_sizes: self.splits.iter().map(|t| t.0).collect()
-		}
-	}
-	pub fn load(save: SplitterSave) -> Self {
-		Self {
-			ui_data: UIData::new(save.pos, save.dir, Self::calculate_local_bb(save.split_sizes.len())),
-			bit_width: save.bit_width,
-			splits: save.split_sizes.iter().map(|bw| (*bw, None)).collect(),
-			base_connections_opt: None
-		}
-	}
-	/// pin #0 is the full-bit-width pin and from 1... its the fanout pins
-	pub fn graphic_pin_bit_width(&self, pin: u16) -> u16 {
-		if pin == 0 {
-			self.bit_width
-		}
-		else {
-			self.splits[pin as usize - 1].0
-		}
-	}
-	/// gets this splitters bit index (logical) from graphical split and logical bit index of a wire connected to that graphical split
-	/// Returns: Splitter bit index
-	pub fn get_bit_index_from_pin_i_and_wire_bit_index(&self, pin_i: u16, wire_bit_index: u16) -> u16 {
-		assert!(pin_i as usize <= self.splits.len());
-		assert!(wire_bit_index < self.bit_width);
-		if pin_i == 0 {
-			return wire_bit_index;
-		}
-		else {
-			let mut prev_bits_count: u16 = 0;
-			for (curr_split_index, split) in self.splits.iter().enumerate() {
-				if curr_split_index as u16 == pin_i - 1 {
-					return wire_bit_index + prev_bits_count;
-				}
-				prev_bits_count += split.0;
-			}
-		}
-		panic!("Splitter::get_bit_index_from_split_and_wire_index() given too large split index")
-		// That one time in summer 2025 when i biked to gardner, along the kennebec, to brunswick (got drinks at the hannies by the train station), along route 1, the co-op in damariscotta (I had the kleen kanteen water bottle with me, so it ended up back to where it was bought over a decade ago), to the DRA (super nostalgic), then my bike broke and
-		// i waited in that random guy's garage and him and his friend were both ultra runners. I then got picked up by my dad. I got just over 100 miles that day.
-		// It was misty and cold that whole day and rained when i was on the bath bridge
-		// I miss that.
-	}
-	/// the bit index of a wire connected to a split connection
-	pub fn get_wire_bit_index_from_pin_i_and_bit_index(&self, pin_i: u16, splitter_bit_index: u16) -> u16 {
-		if pin_i == 0 {
-			return splitter_bit_index;
-		}
-		else {
-			let mut prev_bits_count: u16 = 0;
-			for (curr_split_index, split) in self.splits.iter().enumerate() {
-				if curr_split_index as u16 == pin_i - 1 {
-					return splitter_bit_index - prev_bits_count;
-				}
-				prev_bits_count += split.0;
-			}
-		}
-		panic!("Splitter::get_bit_index_from_split_and_wire_index() given too large split index")
-	}
-	pub fn pin_pos_local(pin_i: u16) -> IntV2 {
-		if pin_i == 0 {
-			IntV2(-2, -1)
-		}
-		else {
-			IntV2(2, pin_i as i32)
-		}
-	}
-	/// Point must be relative to this splitter
-	pub fn is_connection_point(&self, point: IntV2) -> Option<(Vec<Option<u64>>, Option<Rc<RefCell<HashSet<WireConnection>>>>)> {
-		if point == IntV2(-2, -1) {
-			return Some((
-				(0..self.bit_width).into_iter().map(|_| None).collect(),
-				match &self.base_connections_opt {
-					Some(conns_rc) => Some(Rc::clone(conns_rc)),
-					None => None
-				}
-			));
-		}
-		else {
-			for (split_i, split) in self.splits.iter().enumerate() {
-				let split_pos = IntV2(2, split_i as i32 + 1);
-				if split_pos == point {
-					return Some((
-						(0..self.bit_width).into_iter().map(|_| None).collect(),
-						match &split.1 {
-							Some(conns_rc) => Some(Rc::clone(conns_rc)),
-							None => None
-						}
-					));
-				}
-			}
-		}
-		None
-	}
-	pub fn set_pin_wire_conns(&mut self, pin_i: u16, conns: &Option<Rc<RefCell<HashSet<WireConnection>>>>) {
-		let new_conns = match conns {
-			Some(borrowed_rc) => Some(Rc::clone(borrowed_rc)),
-			None => None
-		};
-		if pin_i == 0 {
-			self.base_connections_opt = new_conns;
-		}
-		else {
-			self.splits[pin_i as usize - 1].1 = new_conns;
-		}
-	}
-	/// From Gemini
-	/// Given a logical bit index for the whole splitter, find which split pin it
-	/// corresponds to and what the local bit index on a wire connected to that pin would be.
-	/// Returns `(pin_i, wire_bit_index)`. `pin_i` is the 1-based graphical pin ID.
-	pub fn get_pin_and_wire_bit_from_splitter_bit(&self, splitter_bit_index: u16) -> Option<(u16, u16)> {
-		if splitter_bit_index >= self.bit_width {
-			return None;
-		}
-
-		let mut prev_bits_count: u16 = 0;
-		for (split_i, split) in self.splits.iter().enumerate() {
-			let pin_i = split_i as u16 + 1;
-			let split_bit_width = split.0;
-			
-			// Check if the target bit falls within the range of the current split
-			if splitter_bit_index >= prev_bits_count && splitter_bit_index < prev_bits_count + split_bit_width {
-				// This is the correct split pin.
-				let wire_bit_index = splitter_bit_index - prev_bits_count;
-				return Some((pin_i, wire_bit_index));
-			}
-			prev_bits_count += split_bit_width;
-		}
-		None// Should not be reached if splitter bit widths sum up correctly
-	}
-	fn calculate_local_bb(split_len: usize) -> (V2, V2) {
-		(V2::new(-2.0, -1.0), V2::new(2.0, split_len as f32))
-	}
-}
-
-impl GraphicSelectableItem for Splitter {
-	fn draw<'a>(&self, draw_parent: &Box<dyn DrawInterface>) {
-		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
-		draw.draw_polyline(
-			vec![
-				V2::new(-2.0, -1.0),
-				V2::new(-1.0, -1.0),
-				V2::new(0.0, 0.0),
-				V2::new(0.0, self.splits.len() as f32 - 1.0)
-			],
-			draw.styles().color_foreground
-		);
-		let mut beginning_index: u16 = 0;
-		for (i_usize, split) in self.splits.iter().enumerate() {
-			let i_f32 = i_usize as f32;
-			draw.draw_polyline(
-				vec![
-					V2::new(0.0, i_f32),
-					V2::new(1.0, i_f32 + 1.0),
-					V2::new(2.0, i_f32 + 1.0)
-				],
-				draw.styles().color_foreground
-			);
-			let text: String = match split.0 == 1 {
-				true => beginning_index.to_string(),
-				false => format!("{}:{}", beginning_index, beginning_index + split.0 - 1)
-			};
-			draw.text(&text, V2::new(2.0, i_f32 + 0.5), GenericAlign2::CENTER_CENTER, draw.styles().text_color, 0.8, !draw.get_draw_data().direction.is_horizontal());
-			beginning_index += split.0;
-		}
-	}
-	fn get_ui_data(&self) -> &UIData {
-		&self.ui_data
-	}
-	fn get_ui_data_mut(&mut self) -> &mut UIData {
-		&mut self.ui_data
-	}
-	/*fn is_connected_to_net(&self, net_id: u64) -> bool {
-		for split in &self.splits {
-			if let Some(split) = &split.1 {
-				for net in &split.1 {
-					if *net == net_id {
-						return true;
-					}
-				}
-			}
-		}
-		return false;
-	}*/
-	#[cfg(feature = "using_egui")]
-	fn get_properties(&self) -> Vec<SelectProperty> {
-		vec![
-			SelectProperty::BitWidth(self.bit_width),
-			SelectProperty::PositionX(self.ui_data.position.0),
-			SelectProperty::PositionY(self.ui_data.position.1),
-			SelectProperty::Direction(self.ui_data.direction),
-			SelectProperty::SplitterSplits(self.splits.iter().map(|t| t.0).collect())
-		]
-	}
-	#[cfg(feature = "using_egui")]
-	fn set_property(&mut self, property: SelectProperty) {
-		match property {
-			SelectProperty::BitWidth(bit_width) => {
-				let diff = bit_width as i16 - (self.bit_width as i16);
-				self.bit_width = bit_width;
-				if diff > 0 {
-					for _ in 0..diff {
-						self.splits.push((0, None));
-					}
-				}
-				if diff < 0 {
-					let mut removed_count: i16 = 0;
-					let mut curr_split_index = self.splits.len() - 1;
-					// Haley & Ethan </3
-					while removed_count < (-diff) {
-						if self.splits[curr_split_index].0 == 1 {
-							self.splits.pop();
-							curr_split_index -= 1;
-						}
-						else {
-							self.splits[curr_split_index].0 -= 1;
-						}
-						removed_count += 1;
-					}
-				}
-			},
-			SelectProperty::PositionX(x) => {
-				self.ui_data.position.0 = x;
-			},
-			SelectProperty::PositionY(y) => {
-				self.ui_data.position.1 = y;
-			},
-			SelectProperty::Direction(direction) => {
-				self.ui_data.direction = direction;
-			},
-			SelectProperty::SplitterSplits(new_splits) => {
-				let diff = new_splits.len() as isize - (self.splits.len() as isize);
-				if diff > 0 {
-					for _ in 0..diff {
-						self.splits.push((1, None));
-					}
-				}
-				if diff < 0 {
-					for _ in 0..(-diff) {
-						self.splits.pop();
-					}
-				}
-				// Set sizes
-				let mut bw: u16 = 0;
-				for (i, s) in new_splits.iter().enumerate() {
-					self.splits[i].0 = *s;
-					bw += *s;
-				}
-				self.bit_width = bw;
-				self.ui_data.local_bb = Self::calculate_local_bb(new_splits.len());
-			}
-			_ => {}
-		}
-	}
-	#[cfg(feature = "using_egui")]
-	fn copy(&self) -> CopiedGraphicItem {
-		CopiedGraphicItem::Splitter(self.save())
-	}
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SplitterSave {
-	pos: IntV2,
-	dir: FourWayDir,
-	bit_width: u16,
-	split_sizes: Vec<u16>
-}
-
-/*#[derive(Debug, Clone)]
-pub struct Resistor {
-	ui_data: UIData,
-	bit_width: u16
-}
-
-impl Resistor {
-	pub fn new() -> Self {
-		Self {
-			ui_data: UIData::new(position, direction, local_bb)
-		}
-	}
-}*/
-
-/// Just a straight segment, either horizontal or vertical
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct Wire {
-	ui_data: UIData,
-	length: u32,
-	/// Vec<Net ID>, Each logical net/wire that is represented by this graphical wire. Length is equal to this wire's bit width
-	pub nets: Vec<u64>,
-	color: [u8; 3],
-	pub start_connections: Rc<RefCell<HashSet<WireConnection>>>,
-	pub end_connections: Rc<RefCell<HashSet<WireConnection>>>,
-	start_selected: bool,
-	end_selected: bool,
-	position_before_dragging: IntV2
-}
-
-impl Wire {
-	pub fn new(
-		pos: IntV2,
-		length: u32,
-		direction: FourWayDir,
-		nets: Vec<u64>,
-		start_connections: Rc<RefCell<HashSet<WireConnection>>>,
-		end_connections: Rc<RefCell<HashSet<WireConnection>>>
-	) -> Self {
-		Self {
-			ui_data: UIData::new(pos, direction, Self::bb_from_len(length)),
-			length,
-			nets,
-			color: [0, 0, 0],
-			start_connections,
-			end_connections,
-			start_selected: false,
-			end_selected: false,
-			position_before_dragging: pos
-		}
-	}
-	pub fn bit_width(&self) -> u16 {
-		self.nets.len() as u16
-	}
-	fn bb_from_len(length: u32) -> (V2, V2) {
-		(V2::new(0.25, -0.25), V2::new(length as f32 - 0.25, 0.25))
-	}
-	/// Returns: (Start, Middle, End)
-	pub fn contains_point(&self, point: IntV2) -> ((bool, bool, bool), Option<Rc<RefCell<HashSet<WireConnection>>>>) {
-		// Start
-		if point == self.ui_data.position {
-			return ((true, false, false), Some(Rc::clone(&self.start_connections)));
-		}
-		// End
-		if point == self.ui_data.position + self.ui_data.direction.to_unit_int().mult(self.length as i32) {
-			return ((false, false, true), Some(Rc::clone(&self.end_connections)));
-		}
-		// Middle
-		let this_to_point_v = point - self.ui_data.position;
-		if let Some(test_dir) = this_to_point_v.is_along_axis() {
-			if test_dir == self.ui_data.direction && this_to_point_v.to_v2().magnitude() < self.length as f32 {
-				return ((false, true, false), None);
-			}
-		}
-		// None
-		((false, false, false), None)
-	}
-	pub fn perpindicular_pair_to_segments(perp_pair: &(IntV2, FourWayDir), end_pos: IntV2) -> Vec<(IntV2, FourWayDir, u32)> {
-		// Check if along straight line
-		let v = end_pos - perp_pair.0;
-		if v.taxicab() == 0 {
-			return vec![];
-		}
-		if let Some(_) = v.is_along_axis() {
-			return vec![(
-				perp_pair.0,
-				perp_pair.1,
-				v.taxicab()
-			)];
-		}
-		let pair: [(IntV2, FourWayDir, u32); 2] = match perp_pair.1.is_horizontal() {
-			true => if v.0 > 0 {
-				let first: (IntV2, FourWayDir, u32) = (perp_pair.0, perp_pair.1, v.0 as u32);
-				let second: (IntV2, FourWayDir, u32) = if v.1 > 0 {
-					(perp_pair.0 + IntV2(v.0, 0), FourWayDir::N, v.1 as u32)
-				}
-				else {
-					(perp_pair.0 + IntV2(v.0, 0), FourWayDir::S, -v.1 as u32)
-				};
-				[first, second]
-			}
-			else {
-				let first: (IntV2, FourWayDir, u32) = (perp_pair.0, perp_pair.1, -v.0 as u32);
-				let second: (IntV2, FourWayDir, u32) = if v.1 > 0 {
-					(perp_pair.0 + IntV2(v.0, 0), FourWayDir::N, v.1 as u32)
-				}
-				else {
-					(perp_pair.0 + IntV2(v.0, 0), FourWayDir::S, -v.1 as u32)
-				};
-				[first, second]
-			},
-			false => if v.1 > 0 {
-				let first: (IntV2, FourWayDir, u32) = (perp_pair.0, perp_pair.1, v.1 as u32);
-				let second: (IntV2, FourWayDir, u32) = if v.0 > 0 {
-					(perp_pair.0 + IntV2(0, v.1), FourWayDir::E, v.0 as u32)
-				}
-				else {
-					(perp_pair.0 + IntV2(0, v.1), FourWayDir::W, -v.0 as u32)
-				};
-				[first, second]
-			}
-			else {
-				let first: (IntV2, FourWayDir, u32) = (perp_pair.0, perp_pair.1, -v.1 as u32);
-				let second: (IntV2, FourWayDir, u32) = if v.0 > 0 {
-					(perp_pair.0 + IntV2(0, v.1), FourWayDir::E, v.0 as u32)
-				}
-				else {
-					(perp_pair.0 + IntV2(0, v.1), FourWayDir::W, -v.0 as u32)
-				};
-				[first, second]
-			}
-		};
-		vec![pair[0], pair[1]]
-	}
-	pub fn end_pos(&self) -> IntV2 {
-		self.ui_data.position + (self.ui_data.direction.to_unit_int().mult(self.length as i32))
-	}
-	pub fn set_length(&mut self, new_len: u32) {
-		self.length = new_len;
-		self.ui_data.local_bb = Self::bb_from_len(new_len);
-	}
-	pub fn get_len(&self) -> u32 {
-		self.length
-	}
-}
-
-impl GraphicSelectableItem for Wire {
-	fn draw<'a>(&self, draw: &Box<dyn DrawInterface>) {
-		let start_pos = self.ui_data.position.to_v2();
-		let end_pos = self.end_pos().to_v2();
-		draw.draw_polyline(
-			vec![
-				start_pos,
-				end_pos
-			],
-			self.color
-		);
-		if self.start_connections.borrow().len() >= 3 {
-			draw.draw_circle_filled(start_pos, draw.get_draw_data().styles.connection_dot_grid_size, self.color);
-		}
-		if self.end_connections.borrow().len() >= 3 {
-			draw.draw_circle_filled(end_pos, draw.get_draw_data().styles.connection_dot_grid_size, self.color);
-		}
-	}
-	fn get_ui_data(&self) -> &UIData {
-		&self.ui_data
-	}
-	fn get_ui_data_mut(&mut self) -> &mut UIData {
-		&mut self.ui_data
-	}
-	/// Excludes end BBs which are special and for dragging the ends around or extruding at right angles
-	/*fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
-		let local_bb_unrectified: (V2, V2) = match self.ui_data.direction {
-			FourWayDir::E => (V2::new(0.25, -0.25), V2::new(self.length as f32 - 0.25, 0.25)),
-			FourWayDir::N => (V2::new(-0.25, 0.25 - (self.length as f32)), V2::new(0.25, -0.25)),
-			FourWayDir::W => (V2::new(0.25 - self.length as f32, -0.25), V2::new(-0.25, 0.25)),
-			FourWayDir::S => (V2::new(-0.25, -0.25), V2::new(0.25, 0.25 - (self.length as f32)))
-		};
-		let local_bb: (V2, V2) = merge_points_to_bb(vec![local_bb_unrectified.0, local_bb_unrectified.1]);
-		let offset = grid_offset + self.ui_data.position.to_v2();
-		(local_bb.0 + offset, local_bb.1 + offset)
-	}*/
-	fn is_connected_to_net(&self, net_id: u64) -> bool {
-		for test_net_id in &self.nets {
-			if *test_net_id == net_id {
-				return true;
-			}
-		}
-		return false;
-	}
-	#[cfg(feature = "using_egui")]
-	fn get_properties(&self) -> Vec<SelectProperty> {
-		Vec::new()
-	}
-	#[cfg(feature = "using_egui")]
-	fn set_property(&mut self, _property: SelectProperty) {}
-	#[cfg(feature = "using_egui")]
-	fn copy(&self) -> CopiedGraphicItem {
-		CopiedGraphicItem::Wire((self.ui_data.position, self.ui_data.direction, self.length))
-	}
-}
-
-/// What could the end of a be wire connected to?
-/// Up to 3 of these
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum WireConnection {
-	/// Component or external pin
-	Pin(CircuitWideGraphicPinReference),
-	/// Another straight wire segment
-	Wire(u64),
-	/// (Splitter ID, splitter graphic pin #)
-	Splitter(u64, u16)
-}
-
-/// Read-only probe, used for the timing diagram
-#[derive(Debug, Default, Clone)]
-pub struct Probe {
-	ui_data: UIData,
-	pub name: String,
-	nets_opt: Vec<Option<u64>>,
-	/// Wrt grid
-	text_len: RefCell<f32>
-}
-
-impl Probe {
-	pub fn load(save: ProbeSave) -> Self {
-		Self {
-			ui_data: UIData::new(save.0, save.1, (V2::zeros(), V2::zeros())),
-			name: save.2,
-			nets_opt: vec![None],
-			text_len: RefCell::new(save.3)
-		}
-	}
-	pub fn save(&self) -> ProbeSave {
-		(self.ui_data.position, self.ui_data.direction, self.name.clone(), *self.text_len.borrow())
-	}
-}
-
-impl GraphicSelectableItem for Probe {
-	fn get_ui_data(&self) -> &UIData {
-		&self.ui_data
-	}
-	fn get_ui_data_mut(&mut self) -> &mut UIData {
-		&mut self.ui_data
-	}
-	fn draw<'a>(&self, draw_parent: &Box<dyn DrawInterface>) {
-		let draw = draw_parent.add_grid_pos_and_direction(self.ui_data.position, self.ui_data.direction);
-		let text_length: f32 = draw.text_size(&self.name, 1.0).x;
-		let half_height: f32 = 0.7;
-		draw.draw_polyline(
-			vec![
-				V2::new(0.0, 0.0),
-				V2::new(1.0, 0.0),
-				V2::new(1.0 + half_height, -half_height),
-				V2::new(1.0 + text_length + half_height, -half_height),
-				V2::new(1.0 + text_length + half_height*2.0, 0.0),
-				V2::new(1.0 + text_length + half_height, half_height),
-				V2::new(1.0 + half_height, half_height),
-				V2::new(1.0, 0.0),
-			],
-			draw.styles().color_foreground
-		);
-		let probe_text_start: f32 = match draw.get_draw_data().direction {
-			FourWayDir::E => text_length/2.0,
-			FourWayDir::N => text_length,
-			FourWayDir::W => text_length/2.0,
-			FourWayDir::S => 0.0
-		};
-		draw.text(&self.name, V2::new(1.0 + half_height + probe_text_start, 0.0), GenericAlign2::CENTER_CENTER, draw.styles().text_color, 1.0, !self.ui_data.direction.is_horizontal());
-		*self.text_len.borrow_mut() = text_length;
-	}
-	#[cfg(feature = "using_egui")]
-	fn get_properties(&self) -> Vec<SelectProperty> {
-		vec![
-			SelectProperty::PositionX(self.ui_data.position.0),
-			SelectProperty::PositionY(self.ui_data.position.1),
-			SelectProperty::Direction(self.ui_data.direction),
-			SelectProperty::Name(self.name.clone())
-		]
-	}
-	#[cfg(feature = "using_egui")]
-	fn set_property(&mut self, property: SelectProperty) {
-		match property {
-			SelectProperty::PositionX(x) => {
-				self.ui_data.position.0 = x;
-			},
-			SelectProperty::PositionY(y) => {
-				self.ui_data.position.1 = y;
-			},
-			SelectProperty::Direction(direction) => {
-				self.ui_data.direction = direction;
-			},
-			SelectProperty::Name(new_name) => {
-				self.name = new_name;
-			}
-			_ => {}
-		}
-	}
-	#[cfg(feature = "using_egui")]
-	fn copy(&self) -> CopiedGraphicItem {
-		CopiedGraphicItem::Probe(self.save())
-	}
-	fn bounding_box(&self, grid_offset: V2) -> (V2, V2) {
-		let local_bb = (V2::new(1.0, -1.0), V2::new(2.0 + *self.text_len.borrow(), 1.0));
-		merge_points_to_bb(vec![grid_offset + self.ui_data.pos_to_parent_coords_float(local_bb.0), grid_offset + self.ui_data.pos_to_parent_coords_float(local_bb.1)])
-	}
-}
-
-/// (Position, Direction, Name, Name length wrt grid)
-pub type ProbeSave = (IntV2, FourWayDir, String, f32);
 
 /// Only essential things like position/orientation, logic state
 /// Not used for saving circuits
@@ -1485,11 +511,6 @@ impl LogicDeviceGeneric {
 			bit_width: self.bit_width,
 			name: self.name.clone()
 		}
-	}
-	/// PINS SHOULD ALWAYS BE SET USING THIS FUNCTION DURING SIMULATION
-	/// Records pin changes for simulation update tree
-	pub fn set_pin_state_panic(&self, logic_pin_id: u64, state: LogicState) {
-		// TODO
 	}
 }
 
@@ -1770,425 +791,6 @@ pub enum GraphicSelectableItemRef {
 	Probe(u64)
 }
 
-#[derive(Debug, Clone)]
-pub struct Clock {
-	pub enabled: bool,
-	/// If set to 0 then clock will change state as fast a spossible
-	pub freq: f32,
-	pub last_change: Instant,
-	pub state: bool
-}
-
-impl Clock {
-	pub fn load(enabled: bool, freq: f32, state: bool) -> Self {
-		let last_change = Instant::now();
-		Self {
-			enabled,
-			freq,
-			last_change,
-			state
-		}
-	}
-	/// If the clock is able to update, returns Some(new last_change time)
-	pub fn would_update(&self) -> Option<Instant> {
-		if self.enabled {
-			if self.freq == 0.0 {
-				Some(Instant::now())
-			}
-			else if self.last_change.elapsed() > Duration::from_secs_f32(0.5 / self.freq) {// The frequency is based on a whole period, it must change twice per period, so 0.5/f not 1/f
-				Some(Instant::now())
-			}
-			else {
-				None
-			}
-		}
-		else {
-			None
-		}
-	}
-	/// Returns: Whether it changed
-	pub fn update(&mut self) -> bool {
-		if let Some(new_last_change) = self.would_update() {
-			self.last_change = new_last_change;
-			self.state = !self.state;
-			true
-		}
-		else {
-			false
-		}
-	}
-}
-
-impl Default for Clock {
-	fn default() -> Self {
-		Self {
-			enabled: true,
-			freq: 1.0,
-			last_change: Instant::now(),
-			state: false
-		}
-	}
-}
-
-/// A "Signal Group" is one graphical section of the timing diagram, can be one logical wire or a bus
-#[derive(Debug, Clone)]
-pub enum TimingDiagramSignalGroupSource {
-	Clk,
-	/// Probe ID
-	Probe(u64)
-}
-
-#[derive(Debug, Clone)]
-pub enum TimingDiagramTreeNode {
-	/// (Component ID of sub circuit, It's list of tree elements)
-	/// The toplevel timing diagram will collect all timing data, the sub circuit won't do anything
-	Branch(u64, Vec<TimingDiagramTreeNode>),
-	/// Actual signal group
-	Leaf(TimingDiagramSignalGroupSource, Vec<Vec<(TimingDiagramTimestamp, LogicState)>>)
-}
-
-#[derive(Debug, Clone)]
-pub struct TimingDiagram {
-	/// List of signal groups and corresponding probe IDs (CLK probe ID is ignored and set to 0), each signal group contains list of signals (one signal per bit width of probe), each signal contains list of samples
-	pub tree: Vec<TimingDiagramTreeNode>,
-	pub n_samples: usize,
-	pub running: TimingTiagramRunningState,
-	pub current_timestamp: TimingDiagramTimestamp,
-	pub real_start_time: Instant,
-	/// Cumulative Number of steps BEFORE each propagation event (clk edges, etc)
-	/// Should always have at least one element, first one is zero
-	pub propagation_steps: Vec<u64>,
-	pub show_sim_steps: bool,
-	pub current_event_started_by_clock: bool
-}
-
-impl TimingDiagram {
-	pub fn new(tree: Vec<TimingDiagramTreeNode>) -> Self {
-		Self {
-			tree,
-			n_samples: 0,
-			running: TimingTiagramRunningState::Off,
-			current_timestamp: TimingDiagramTimestamp::default(),
-			real_start_time: Instant::now(),
-			propagation_steps: vec![0],
-			show_sim_steps: false,
-			current_event_started_by_clock: false
-		}
-	}
-	pub fn update_timestamp(&mut self, first_propagation_step: bool) {
-		match &mut self.current_timestamp {
-			TimingDiagramTimestamp::Real(ts) => {
-				*ts = Instant::now();// TS is PMO
-			},
-			TimingDiagramTimestamp::PropagationAndSimStep(event_count, sim_step) => {
-				if first_propagation_step {
-					self.propagation_steps.push((*sim_step as u64) + self.propagation_steps.last().unwrap());
-					*event_count += 1;
-					*sim_step = 0;
-				}
-				else {
-					*sim_step += 1;
-				}
-			}
-		}
-	}
-	pub fn timestamp_zero(&self) -> TimingDiagramTimestamp {
-		match &self.current_timestamp {
-			&TimingDiagramTimestamp::Real(_) => TimingDiagramTimestamp::Real(self.real_start_time),
-			&TimingDiagramTimestamp::PropagationAndSimStep(_, _) => TimingDiagramTimestamp::PropagationAndSimStep(0, 0)
-		}
-	}
-	// Not an instance method so that caller can recurse into the tree. Recursive `&mut self` functions will have borrowing issues
-	pub fn push_state_if_different(current_timestamp: &TimingDiagramTimestamp, signal_group: &mut Vec<Vec<(TimingDiagramTimestamp, LogicState)>>, bit_i: usize, state: LogicState) {
-		let bit_line = &mut signal_group[bit_i];
-		if bit_line.len() == 0 {// If first sample put there anyway
-			bit_line.push((*current_timestamp, state));
-		}// Otherwise only if different from previous sample
-		else if bit_line[bit_line.len() - 1].1 != state {
-			bit_line.push((*current_timestamp, state));
-		}
-	}
-	pub fn clear(&mut self) {
-		// Clear recording in tree, using DFS
-		let mut tree_stack = Vec::<&mut Vec<TimingDiagramTreeNode>>::new();
-		tree_stack.push(&mut self.tree);
-		while !tree_stack.is_empty() {
-			let nodes: &mut Vec<TimingDiagramTreeNode> = tree_stack.pop().expect("Shouldn't be empty");
-			for node in nodes {
-				match node {
-					TimingDiagramTreeNode::Leaf(_, signal_group) => {
-						for bit_line in signal_group.iter_mut() {
-							bit_line.clear();
-						}
-					},
-					TimingDiagramTreeNode::Branch(_, branch_nodes) => {tree_stack.push(branch_nodes);}
-				}
-			}
-		}
-		// Counts & timing
-		self.n_samples = 0;
-		self.real_start_time = Instant::now();
-		match &mut self.current_timestamp {
-			TimingDiagramTimestamp::Real(ts) => {
-				*ts = Instant::now();// TS is PMO
-			},
-			TimingDiagramTimestamp::PropagationAndSimStep(event_count, sim_step) => {
-				*event_count = 0;
-				*sim_step = 0;
-			}
-		}
-		self.propagation_steps.clear();
-		// Number of simulation steps BEFORE current event step
-		self.propagation_steps.push(0);
-	}
-	pub fn convert_timestamp_to_x_value(&self, styles: &Styles, other_timestamp: TimingDiagramTimestamp) -> f32 {
-		const ERROR: &str = "convert_timestamp_to_x_value called on wrong variant of `TimingDiagramTimestamp`";
-		match self.current_timestamp {
-			TimingDiagramTimestamp::Real(_) => {
-				if let TimingDiagramTimestamp::Real(other_instant) = other_timestamp {
-					styles.timing_diagram_real_time_resolution_px * (other_instant - self.real_start_time).as_secs_f32()
-				}
-				else {
-					panic!("{}", ERROR);
-				}
-			},
-			TimingDiagramTimestamp::PropagationAndSimStep(_, _) => {
-				if let TimingDiagramTimestamp::PropagationAndSimStep(other_prop, other_sim_step) = other_timestamp {
-					let mut out = (other_prop as f32 - 1.0) * styles.timing_diagram_event_resolution_px;
-					if self.show_sim_steps {
-						let event_index: usize = if other_prop as usize >= self.propagation_steps.len() {
-							self.propagation_steps.len() - 1
-						}
-						else {
-							other_prop as usize
-						};
-						out += (self.propagation_steps[event_index] + (other_sim_step as u64)) as f32 * styles.timing_diagram_prop_step_resolution_px;
-					}
-					out
-				}
-				else {
-					panic!("{}", ERROR);
-				}
-			}
-		}
-	}
-	pub fn set_running_state(&mut self, new_state: TimingTiagramRunningState) {
-		if new_state == TimingTiagramRunningState::Off {
-			self.running = new_state;
-			return;
-		}
-		let current_ts_real = self.current_timestamp.is_real_time();
-		if current_ts_real && new_state.uses_incremental_time() {
-			self.current_timestamp = TimingDiagramTimestamp::PropagationAndSimStep(0, 0);
-			self.running = new_state;
-			self.clear();
-		}
-		if (!current_ts_real) && new_state.uses_real_time() {
-			self.current_timestamp = TimingDiagramTimestamp::Real(Instant::now());
-			self.running = new_state;
-			self.clear();
-		}
-		self.running = new_state;
-	}
-	pub fn timing_diagram_end(&self) -> TimingDiagramTimestamp {
-		match self.current_timestamp {
-			TimingDiagramTimestamp::Real(_) => self.current_timestamp,
-			TimingDiagramTimestamp::PropagationAndSimStep(event_count, prop_count) => TimingDiagramTimestamp::PropagationAndSimStep(event_count + 1, prop_count)
-		}
-	}
-	/// Very similar to the timestamps own comparison imlementation, EXCEPT when not showing substeps, substeps are ignored and discrete timestamps with the same event count are considered equal
-	pub fn compare_timestamps_for_display(&self, ts0: TimingDiagramTimestamp, other: TimingDiagramTimestamp) -> Ordering {
-		match ts0 {
-			TimingDiagramTimestamp::Real(this_instant) => {
-				if let TimingDiagramTimestamp::Real(other_instant) = &other {
-					this_instant.partial_cmp(other_instant).unwrap()
-				}
-				else {
-					panic!("Comparing different variants of `TimingDiagramTimestamp`");
-				}
-			},
-			TimingDiagramTimestamp::PropagationAndSimStep(this_prop, this_sim_step) => {
-				if let TimingDiagramTimestamp::PropagationAndSimStep(other_prop, other_sim_step) = other {
-					if this_prop < other_prop {
-						Ordering::Less
-					}
-					else if this_prop > other_prop {
-						Ordering::Greater
-					}
-					else if self.show_sim_steps {// ==
-						this_sim_step.partial_cmp(&other_sim_step).unwrap()
-					} else {
-						Ordering::Equal
-					}
-				}
-				else {
-					panic!("Comparing different variants of `TimingDiagramTimestamp`");
-				}
-			}
-		}
-	}
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TimingDiagramTimestamp {
-	/// Real time
-	Real(Instant),
-	/// (Event count, sim step)
-	PropagationAndSimStep(u32, u32)
-}
-
-impl TimingDiagramTimestamp {
-	fn is_real_time(&self) -> bool {
-		match self {
-			Self::Real(_) => true,
-			Self::PropagationAndSimStep(_, _) => false
-		}
-	}
-}
-
-impl Default for TimingDiagramTimestamp {
-	fn default() -> Self {
-		Self::PropagationAndSimStep(0, 0)
-	}
-}
-
-impl PartialOrd for TimingDiagramTimestamp {
-	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-		match self {
-			Self::Real(this_instant) => {
-				if let Self::Real(other_instant) = other {
-					this_instant.partial_cmp(other_instant)
-				}
-				else {
-					panic!("Comparing different variants of `TimingDiagramTimestamp`");
-				}
-			},
-			Self::PropagationAndSimStep(this_prop, this_sim_step) => {
-				if let Self::PropagationAndSimStep(other_prop, other_sim_step) = other {
-					if this_prop < other_prop {
-						Some(Ordering::Less)
-					}
-					else if this_prop > other_prop {
-						Some(Ordering::Greater)
-					}
-					else {// ==
-						this_sim_step.partial_cmp(other_sim_step)
-					}
-				}
-				else {
-					panic!("Comparing different variants of `TimingDiagramTimestamp`");
-				}
-			}
-		}
-	}
-}
-
-/// Manual control or whenever the clock is running
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub enum TimingTiagramRunningState {
-	/// Never updates
-	Off,
-	/// Only on clock edges
-	#[default]
-	Clk,
-	/// Whenever anything changes
-	AnyChange,
-	/// Always, uses TimingDiagramTimestamp::Real
-	RealTime
-}
-
-impl TimingTiagramRunningState {
-	pub fn to_str(&self) -> &'static str {
-		match &self {
-			Self::Off => "Off",
-			Self::Clk => "CLK Only",
-			Self::AnyChange => "Any Change",
-			Self::RealTime => "Real Time"
-		}
-	}
-	/// What variant of `TimingDiagramTimestamp` this uses
-	pub fn uses_real_time(&self) -> bool {
-		match &self {
-			Self::Off => false,
-			Self::Clk => false,
-			Self::AnyChange => false,
-			Self::RealTime => true
-		}
-	}
-	/// What variant of `TimingDiagramTimestamp` this uses
-	pub fn uses_incremental_time(&self) -> bool {
-		match &self {
-			Self::Off => false,
-			Self::Clk => true,
-			Self::AnyChange => true,
-			Self::RealTime => false
-		}
-	}
-}
-
-#[derive(Debug, Default, Clone)]
-pub enum SelectionState {
-	/// Just there
-	#[default]
-	Fixed,
-	/// Being dragged by mouse, keeps track of where it started (wrt grid). If there aren't any selected items, then use this to drag a rectangle to select stuff
-	/// (
-	/// 	Start,
-	/// 	Delta,
-	/// 	Vector of wires being dragged: (
-	/// 		Wire ID,
-	/// 		Whether start is selected,
-	/// 		Initial position of either start or end based on field 1
-	/// 	)
-	/// )
-	Dragging(V2, V2),
-	/// After Paste operation, the pasted stuff will remain selected and following the mouse until a left click
-	/// (Current or most recent mouse pos)
-	FollowingMouse(V2)
-}
-
-#[derive(Debug, Clone)]
-pub enum Tool {
-	Select {
-		selected_graphics: HashSet<GraphicSelectableItemRef>,
-		selected_graphics_state: SelectionState
-	},
-	HighlightNet,
-	/// Wire initially horizontal/vertical rules:
-	/// When the firt perpindicular pair is placed it defauts to Horizontal (horiz), meaning the first segment is horizontal and then a vertical one from the end of that to the mouse
-	/// Whenever the most recent pair is completely horiz or vert, its initial direction is set to that direction
-	PlaceWire {
-		/// Each of these represents two perpindicular segments (if the difference between this one's position and the next one's position is perfectly horizontal or vertical then one of the straight segments will just be length zero)
-		/// [(Starting pos, Initial direction to get to next position)]
-		/// When the actual wires are created, consecutive segments in the same direction will be combined
-		perp_pairs: Vec<(IntV2, FourWayDir)>
-	}
-}
-
-impl Tool {
-	/// The tool buttons side bar cannot always be enabled, for example when the component placement ui is active
-	pub fn tool_select_allowed(&self) -> bool {
-		match &self {
-			Self::Select{selected_graphics: _, selected_graphics_state} => match selected_graphics_state {
-				SelectionState::Fixed => true,
-				SelectionState::Dragging(_, _) => false,
-				SelectionState::FollowingMouse(_) => false
-			},
-			Self::HighlightNet => false,
-			Self::PlaceWire{perp_pairs: _} => false,
-		}
-	}
-	pub fn tool_select_ui(&self, _draw: &dyn DrawInterface) {
-		// TODO
-	}
-}
-
-impl Default for Tool {
-	fn default() -> Self {
-		Self::Select{selected_graphics: HashSet::new(), selected_graphics_state: SelectionState::default()}
-	}
-}
-
 #[derive(Debug)]
 pub struct LogicCircuit {
 	pub generic_device: LogicDeviceGeneric,
@@ -2202,8 +804,6 @@ pub struct LogicCircuit {
 	/// {pin ID: (relative position (ending), direction, whether to show name)}
 	pub block_pin_positions: HashMap<u64, (IntV2, FourWayDir, bool)>,
 	displayed_as_block: bool,
-	/// For UI
-	pub tool: RefCell<Tool>,
 	is_toplevel: bool,
 	/// Bounding box for the circuit, not the block diagram, relative to this circuit
 	/// The block diagram BB can be found at `self.generic_device.bounding_box`
@@ -2211,6 +811,7 @@ pub struct LogicCircuit {
 	/// For example, "D Latch", not "Register #7"
 	pub type_name: String,
 	self_reload_err_opt: Option<String>,
+	pub highlighted_net_opt: Option<u64>,
 	pub clock: RefCell<Clock>,
 	/// Timing diagram probes
 	pub probes: RefCell<HashMap<u64, Probe>>,
@@ -2219,7 +820,6 @@ pub struct LogicCircuit {
 	/// When saved (only toplevel circuit's actually get saved), use the timing diagram tree, NOT this
 	pub timing_diagram_order: Vec<TimingDiagramTreeRootNodeSave>,
 	pub bit_width_errors: Vec<BitWidthError>,
-	pub highlighted_net_opt: Option<u64>,
 	/// Prevents clock changes when circuit propagation from something else (such as previous clock edge) isn't complete yet
 	/// (Any change (propagation in progress), last clock state when timing diagram was updated)
 	pub propagation_done: RefCell<(bool, bool)>,
@@ -2266,16 +866,15 @@ impl LogicCircuit {
 			save_name,
 			block_pin_positions: HashMap::new(),
 			displayed_as_block,
-			tool: RefCell::new(Tool::default()),
 			is_toplevel,
 			circuit_internals_bb: (V2::zeros(), V2::zeros()),
 			type_name,
 			self_reload_err_opt: None,
+			highlighted_net_opt: None,
 			clock: RefCell::new(Clock::default()),
 			probes: RefCell::new(HashMap::new()),
 			timing_diagram_order: vec![TimingDiagramTreeRootNodeSave::Clk],
 			bit_width_errors: Vec::new(),
-			highlighted_net_opt: None,
 			propagation_done: RefCell::new((false, false)),
 			lib_name: lib_name,
 			include_in_timing_diagram: false,
@@ -2342,16 +941,15 @@ impl LogicCircuit {
 			save_name,
 			block_pin_positions: save.block_pin_positions,
 			displayed_as_block,
-			tool: RefCell::new(Tool::default()),
 			is_toplevel: toplevel,
 			circuit_internals_bb: (V2::zeros(), V2::zeros()),
 			type_name: save.type_name,
 			self_reload_err_opt: None,
+			highlighted_net_opt: None,
 			clock: RefCell::new(Clock::load(save.clock_enabled, save.clock_freq, save.clock_state)),
 			probes: RefCell::new(probes),
 			timing_diagram_order: save.timing_diagram_order,
 			bit_width_errors: Vec::new(),
-			highlighted_net_opt: None,
 			propagation_done: RefCell::new((false, false)),
 			lib_name,
 			include_in_timing_diagram,
@@ -2378,6 +976,7 @@ impl LogicCircuit {
 			pin.internal_source = None;// Will be automatically assigned from wire geometry, remove because of invalid net references
 		}
 	}
+	/// Makes sure the the block layout stays valid
 	fn recompute_default_layout(&mut self) {
 		// Bounding box & layout, like in CircuitVerse
 		let mut count_pins_not_clock: i32 = 0;
@@ -2455,8 +1054,8 @@ impl LogicCircuit {
 		probes.insert(new_id, Probe::load(probe));
 		GraphicSelectableItemRef::Probe(new_id)
 	}
-	pub fn set_graphic_item_following_mouse(&self, item_ref: GraphicSelectableItemRef) {
-		*self.tool.borrow_mut() = Tool::Select{
+	pub fn set_graphic_item_following_mouse(&self, item_ref: GraphicSelectableItemRef, tool: &mut Tool) {
+		*tool = Tool::Select{
 			selected_graphics: HashSet::from_iter(vec![item_ref].into_iter()),
 			selected_graphics_state: SelectionState::FollowingMouse(V2::zeros())
 		};
@@ -3427,7 +2026,7 @@ impl LogicCircuit {
 			net_mut_ref.state = state;
 			net_mut_ref.sources = sources;
 		}
-		// 4 & 5. Updatecomponent pins and external pins, update connections from nets (components and circuit outputs)
+		// 4 & 5. Update component pins and external pins, update connections from nets (components and circuit outputs)
 		// TODO
 		let mut changed_parent_nets = Vec::<u64>::new();
 		let ext_pins = self.generic_device.logic_pins.borrow_mut();
@@ -3803,6 +2402,114 @@ impl LogicCircuit {
 			component_save_states
 		}
 	}
+	/// The only thing special is it uses the tool to draw what the user is doing (drawing a new wire, selecting items, etc), and draws bit width errors
+	pub fn draw_toplevel<'a>(&self, draw: &Box<dyn DrawInterface>, tool: &mut Tool) {
+		let mouse_pos_grid_opt: Option<V2> = match draw.get_draw_data().mouse_pos {
+			Some(pos_px) => Some(draw.get_draw_data().mouse_pos2_to_grid(pos_px)),
+			None => None
+		};
+		match &tool {
+			Tool::Select{selected_graphics, selected_graphics_state} => {
+				match selected_graphics_state {
+					SelectionState::Fixed => {},
+					SelectionState::Dragging(start_grid, delta_grid) => {
+						if selected_graphics.is_empty() {
+							draw.draw_rect(*start_grid, *start_grid + *delta_grid, draw.styles().select_rect_color, draw.styles().select_rect_edge_color);
+						}
+					},
+					SelectionState::FollowingMouse(_) => {}
+				}
+				// Draw selected items BB
+				#[cfg(feature = "using_egui")]
+				if selected_graphics.len() >= 1 {
+					let mut points = Vec::<V2>::new();
+					for item_ref in selected_graphics.iter() {
+						self.run_function_on_graphic_item(item_ref.clone(), |graphic_item| {
+							let new_bb = graphic_item.bounding_box(V2::zeros());
+							points.push(new_bb.0);
+							points.push(new_bb.1);
+						});
+					}
+					let bb = merge_points_to_bb(points);
+					draw.draw_rect(bb.0, bb.1, [0, 0, 0, 0], draw.styles().select_rect_edge_color);
+				}
+			},
+			Tool::HighlightNet => {},
+			Tool::PlaceWire{perp_pairs} => {
+				if let Some(mouse_pos_grid) = mouse_pos_grid_opt {
+					let mouse_pos_grid_rounded: IntV2 = round_v2_to_intv2(mouse_pos_grid);
+					let n_pairs = perp_pairs.len();
+					// Wire has been started
+					if n_pairs >= 1 {
+						// Display in-progress wire
+						for (i, pair) in perp_pairs.iter().enumerate() {
+							let end_pos = if i == perp_pairs.len() - 1 {
+								mouse_pos_grid_rounded
+							}
+							else {
+								perp_pairs[i+1].0
+							};
+							let segments = Wire::perpindicular_pair_to_segments(pair, end_pos);
+							for segment in segments {
+								draw.draw_polyline(vec![
+									segment.0.to_v2(),
+									segment.0.to_v2() + (segment.1.to_unit() * (segment.2 as f32))
+								], draw.styles().color_wire_in_progress);
+							}
+						}
+					}
+				}
+			}
+		}
+		for bit_width_error in &self.bit_width_errors {
+			// Get positions of all connections involved in the error
+			let mut connection_positions_and_bws = Vec::<(IntV2, u16)>::new();
+			// if the mouse position is hovering
+			let mut connection_hover_index = Option::<usize>::None;
+			for (not_wire_conn, bw) in &bit_width_error.0 {
+				let pos: IntV2 = match not_wire_conn {
+					NotAWire::Pin(graphic_pin_id) => match graphic_pin_id {
+						CircuitWideGraphicPinReference::ComponentPin(comp_pin_ref) => {
+							let components = self.components.borrow();
+							let comp = components.get(&comp_pin_ref.component_id).unwrap().borrow();
+							let comp_local_pos: IntV2 = comp.get_pin_position_override(comp_pin_ref.pin_id).unwrap().0;
+							comp.get_ui_data().pos_to_parent_coords(comp_local_pos)
+						},
+						CircuitWideGraphicPinReference::ExternalConnection(ext_conn_graphic_id) => self.generic_device.graphic_pins.borrow().get(&ext_conn_graphic_id).unwrap().ui_data.position
+					},
+					NotAWire::Splitter(splitter_id, splitter_pin_index) => {
+						let splitters = self.splitters.borrow();
+						let splitter = splitters.get(&splitter_id).unwrap();
+						splitter.ui_data.pos_to_parent_coords(Splitter::pin_pos_local(*splitter_pin_index))
+					}
+				};
+				if let Some(mouse_pos) = mouse_pos_grid_opt {
+					if (pos.to_v2() - mouse_pos).magnitude() < 0.707 {
+						connection_hover_index = Some(connection_positions_and_bws.len());
+					}
+				}
+				connection_positions_and_bws.push((pos, *bw));
+			}
+			// Display them
+			for (i, (pos, bw)) in connection_positions_and_bws.iter().enumerate() {
+				let pos_v2 = pos.to_v2();
+				draw.draw_polyline(vec![IntV2(-1, -1), IntV2(1, 1)].iter().map(|intv| pos_v2 + intv.to_v2() / 2.0).collect(), draw.styles().color_error_x);
+				draw.draw_polyline(vec![IntV2(1, -1), IntV2(-1, 1)].iter().map(|intv| pos_v2 + intv.to_v2() / 2.0).collect(), draw.styles().color_error_x);
+				draw.text(&format!("{} Bits", bw), pos.to_v2() + V2::new(0.7, 0.0), GenericAlign2::LEFT_CENTER, draw.styles().text_color, draw.styles().text_size_grid, false);
+				if let Some(hovered_conn_i) = connection_hover_index {
+					if hovered_conn_i == i {
+						for (i2, (pos2, _)) in connection_positions_and_bws.iter().enumerate() {
+							if i2 != i {
+								draw.draw_polyline(vec![pos.to_v2(), pos2.to_v2()], draw.styles().color_error_x);
+							}
+						}
+					}
+				}
+			}
+		}
+		// Everything else
+		self.draw(draw);
+	}
 }
 
 impl LogicDevice for LogicCircuit {
@@ -3812,7 +2519,7 @@ impl LogicDevice for LogicCircuit {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic_device
 	}
-	fn compute_step(&mut self, ancestors_above: &AncestryStack, self_component_id: u64, _: bool, first_propagation_step: bool) -> Vec<u64> {
+	fn compute_step(&mut self, _: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
 		panic!("Logic circuit `compute_step()` method should not be used, instead directly call `compute_immutable()` or `compute_toplevel()`");
 		//self.compute_immutable(ancestors_above, self_component_id, first_propagation_step).1
 	}
@@ -3847,111 +2554,6 @@ impl LogicDevice for LogicCircuit {
 				}
 				// TODO: Tell thingy if it is connected to a highlighted net
 				self.run_function_on_graphic_item(ref_, |graphic_item| graphic_item.draw(draw));
-			}
-		}
-		if self.is_toplevel {
-			let mouse_pos_grid_opt: Option<V2> = match draw.get_draw_data().mouse_pos {
-				Some(pos_px) => Some(draw.get_draw_data().mouse_pos2_to_grid(pos_px)),
-				None => None
-			};
-			match self.tool.borrow().deref() {
-				Tool::Select{selected_graphics, selected_graphics_state} => {
-					match selected_graphics_state {
-						SelectionState::Fixed => {},
-						SelectionState::Dragging(start_grid, delta_grid) => {
-							if selected_graphics.is_empty() {
-								draw.draw_rect(*start_grid, *start_grid + *delta_grid, draw.styles().select_rect_color, draw.styles().select_rect_edge_color);
-							}
-						},
-						SelectionState::FollowingMouse(_) => {}
-					}
-					// Draw selected items BB
-					#[cfg(feature = "using_egui")]
-					if selected_graphics.len() >= 1 {
-						let mut points = Vec::<V2>::new();
-						for item_ref in selected_graphics.iter() {
-							self.run_function_on_graphic_item(item_ref.clone(), |graphic_item| {
-								let new_bb = graphic_item.bounding_box(V2::zeros());
-								points.push(new_bb.0);
-								points.push(new_bb.1);
-							});
-						}
-						let bb = merge_points_to_bb(points);
-						draw.draw_rect(bb.0, bb.1, [0, 0, 0, 0], draw.styles().select_rect_edge_color);
-					}
-				},
-				Tool::HighlightNet => {},
-				Tool::PlaceWire{perp_pairs} => {
-					if let Some(mouse_pos_grid) = mouse_pos_grid_opt {
-						let mouse_pos_grid_rounded: IntV2 = round_v2_to_intv2(mouse_pos_grid);
-						let n_pairs = perp_pairs.len();
-						// Wire has been started
-						if n_pairs >= 1 {
-							// Display in-progress wire
-							for (i, pair) in perp_pairs.iter().enumerate() {
-								let end_pos = if i == perp_pairs.len() - 1 {
-									mouse_pos_grid_rounded
-								}
-								else {
-									perp_pairs[i+1].0
-								};
-								let segments = Wire::perpindicular_pair_to_segments(pair, end_pos);
-								for segment in segments {
-									draw.draw_polyline(vec![
-										segment.0.to_v2(),
-										segment.0.to_v2() + (segment.1.to_unit() * (segment.2 as f32))
-									], draw.styles().color_wire_in_progress);
-								}
-							}
-						}
-					}
-				}
-			}
-			for bit_width_error in &self.bit_width_errors {
-				// Get positions of all connections involved in the error
-				let mut connection_positions_and_bws = Vec::<(IntV2, u16)>::new();
-				// if the mouse position is hovering
-				let mut connection_hover_index = Option::<usize>::None;
-				for (not_wire_conn, bw) in &bit_width_error.0 {
-					let pos: IntV2 = match not_wire_conn {
-						NotAWire::Pin(graphic_pin_id) => match graphic_pin_id {
-							CircuitWideGraphicPinReference::ComponentPin(comp_pin_ref) => {
-								let components = self.components.borrow();
-								let comp = components.get(&comp_pin_ref.component_id).unwrap().borrow();
-								let comp_local_pos: IntV2 = comp.get_pin_position_override(comp_pin_ref.pin_id).unwrap().0;
-								comp.get_ui_data().pos_to_parent_coords(comp_local_pos)
-							},
-							CircuitWideGraphicPinReference::ExternalConnection(ext_conn_graphic_id) => self.generic_device.graphic_pins.borrow().get(&ext_conn_graphic_id).unwrap().ui_data.position
-						},
-						NotAWire::Splitter(splitter_id, splitter_pin_index) => {
-							let splitters = self.splitters.borrow();
-							let splitter = splitters.get(&splitter_id).unwrap();
-							splitter.ui_data.pos_to_parent_coords(Splitter::pin_pos_local(*splitter_pin_index))
-						}
-					};
-					if let Some(mouse_pos) = mouse_pos_grid_opt {
-						if (pos.to_v2() - mouse_pos).magnitude() < 0.707 {
-							connection_hover_index = Some(connection_positions_and_bws.len());
-						}
-					}
-					connection_positions_and_bws.push((pos, *bw));
-				}
-				// Display them
-				for (i, (pos, bw)) in connection_positions_and_bws.iter().enumerate() {
-					let pos_v2 = pos.to_v2();
-					draw.draw_polyline(vec![IntV2(-1, -1), IntV2(1, 1)].iter().map(|intv| pos_v2 + intv.to_v2() / 2.0).collect(), draw.styles().color_error_x);
-					draw.draw_polyline(vec![IntV2(1, -1), IntV2(-1, 1)].iter().map(|intv| pos_v2 + intv.to_v2() / 2.0).collect(), draw.styles().color_error_x);
-					draw.text(&format!("{} Bits", bw), pos.to_v2() + V2::new(0.7, 0.0), GenericAlign2::LEFT_CENTER, draw.styles().text_color, draw.styles().text_size_grid, false);
-					if let Some(hovered_conn_i) = connection_hover_index {
-						if hovered_conn_i == i {
-							for (i2, (pos2, _)) in connection_positions_and_bws.iter().enumerate() {
-								if i2 != i {
-									draw.draw_polyline(vec![pos.to_v2(), pos2.to_v2()], draw.styles().color_error_x);
-								}
-							}
-						}
-					}
-				}
 			}
 		}
 	}
