@@ -627,6 +627,7 @@ impl Drop for GraphicPin {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum CircuitWideLogicPinReference {
 	ComponentPin(ComponentLogicPinReference),
+	/// External logical pin ID
 	ExternalConnection(u64)
 }
 
@@ -3338,27 +3339,28 @@ impl LogicCircuit {
 	}
 	/// Toplevel compute function, keeps track of what needs to be updated to avoid wasting time
 	/// Returns: Whether anything changed
-	pub fn compute_toplevel(&self, first_propagation_step: bool, component_update_tree: &mut Vec<ComponentUpdateTreeNode>) -> bool {
+	pub fn compute_toplevel(&self, first_propagation_step: bool, component_update_tree: &mut Vec<ComponentUpdateTreeNode>, update_all: bool) -> bool {
 		assert!(self.is_toplevel);
-		self.compute_immutable(&AncestryStack::new(), 0, first_propagation_step, component_update_tree).0
+		self.compute_immutable(&AncestryStack::new(), 0, first_propagation_step, component_update_tree, update_all).0
 	}
 	/// Main simulation function
-	/// TODO: Toplevel pin input issue
-	/// TODO: Implement this:
+	/// TODO: Trigger update on toplevel pin input change
 	/// 1. Get components to update, If `first_propagation_step`:
 	///        Check all components if `component.start_of_propagation()` returns true
 	///    else:
 	///        Use `self.components_to_update_next_step`
 	/// 2. Update each component that needs updating and record the nets of their pins that were internally changed
 	/// 3. Update nets attached to the changed pins
-	/// 4. For each net that was changed, update all connections to it and make new hash set of components to be updated, save that to `self.components_to_update_next_step`
+	/// 4. Update component pins and external pins
+	/// 5. For each net that was changed, update all connections to it and make new hash set of components to be updated, save that to `self.components_to_update_next_step`
 	/// Returns: (Whether anything changed, Vec of changed output nets)
 	pub fn compute_immutable(
 		&self,
 		ancestors_above: &AncestryStack,
 		self_component_id: u64,
 		first_propagation_step: bool,
-		component_update_tree: &mut Vec<ComponentUpdateTreeNode>
+		component_update_tree: &mut Vec<ComponentUpdateTreeNode>,
+		update_all: bool
 	) -> (bool, Vec<u64>) {
 		let mut propagation_states = self.propagation_done.borrow_mut();
 		let mut changed = false;
@@ -3394,7 +3396,7 @@ impl LogicCircuit {
 				if node_to_update.sub_nodes.is_none() {
 					(*node_to_update).sub_nodes = Some(Vec::new());
 				}
-				let (sub_circuit_changed, out) = circuit.compute_immutable(&ancestors, *comp_id, first_propagation_step, &mut node_to_update.sub_nodes.as_mut().unwrap());
+				let (sub_circuit_changed, out) = circuit.compute_immutable(&ancestors, *comp_id, first_propagation_step, &mut node_to_update.sub_nodes.as_mut().unwrap(), update_all);
 				changed |= sub_circuit_changed;
 				out
 			}
@@ -3412,6 +3414,7 @@ impl LogicCircuit {
 		// 3. Update nets attached to the changed pins, the current code that uses the net's deep searching feature maybe outdated and overkill, TODO
 		let nets = self.nets.borrow();
 		let mut new_net_states = HashMap::<u64, (LogicState, Vec<GlobalSourceReference>)>::new();
+		// TODO: Use the update everything flag
 		for net_id in &changed_nets {
 			let net = nets.get(&net_id).unwrap();
 			new_net_states.insert(*net_id, net.borrow().update_state(&ancestors, *net_id));
@@ -3424,18 +3427,36 @@ impl LogicCircuit {
 			net_mut_ref.state = state;
 			net_mut_ref.sources = sources;
 		}
-		// 4. Update connections from nets (components and circuit outputs)
+		// 4 & 5. Updatecomponent pins and external pins, update connections from nets (components and circuit outputs)
+		// TODO
 		let mut changed_parent_nets = Vec::<u64>::new();
+		let ext_pins = self.generic_device.logic_pins.borrow_mut();
 		for net_id in changed_nets {
 			let net_cell = nets.get(&net_id).unwrap();
 			let net = net_cell.borrow();
 			for net_conn in &net.connections {
 				match net_conn {
 					CircuitWideLogicPinReference::ComponentPin(comp_pin_ref) => {
+						// Find component pin and change it
+						let comp_cell = components.get(&comp_pin_ref.component_id).unwrap();
+						let comp = comp_cell.borrow();
+						let pins_cell = &comp.get_generic().logic_pins;
+						let pins = pins_cell.borrow();
+						let pin_cell = pins.get(&comp_pin_ref.pin_id).unwrap();
+						let mut pin = pin_cell.borrow_mut();
+						pin.set_drive_external(net.state);
+						// Record that this component needs to be updated on the next iteration
 						component_update_tree.push(ComponentUpdateTreeNode::new(comp_pin_ref.component_id, None));
 					},
-					CircuitWideLogicPinReference::ExternalConnection(parent_net_id) => {
-						changed_parent_nets.push(*parent_net_id);
+					CircuitWideLogicPinReference::ExternalConnection(ext_pin_id) => {
+						let pin_cell = ext_pins.get(ext_pin_id).unwrap();
+						let mut pin = pin_cell.borrow_mut();
+						pin.set_drive_internal(net.state);
+						if let Some(ext_conn) = &pin.external_source {
+							if let LogicConnectionPinExternalSource::Net(parent_net_id) = ext_conn {
+								changed_parent_nets.push(*parent_net_id);
+							}
+						}
 					}
 				}
 			}
@@ -3488,12 +3509,12 @@ impl LogicCircuit {
 				}
 			}
 		}
-		// Update propagation states
-		(*propagation_states).0 = changed;
 		// Done
 		changed
 		// ------------------------------ /OLD ------------------------------
 		*/
+		// Update propagation states
+		(*propagation_states).0 = changed;
 		(changed, changed_parent_nets)
 	}
 	/// Adds one time increment to the timing diagram data

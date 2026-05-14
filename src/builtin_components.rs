@@ -344,8 +344,10 @@ impl LogicDevice for GateAnd {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> { -> Vec<u64>
-		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() && self.get_pin_state_panic(1).to_bool()).into());
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
+		let mut out = Vec::new();
+		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() && self.get_pin_state_panic(1).to_bool()).into(), &mut out);
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateAnd(self.0.save()))
@@ -392,8 +394,10 @@ impl LogicDevice for GateNand {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
+		let mut out = Vec::new();
 		let and: bool = self.get_pin_state_panic(0).to_bool() && self.get_pin_state_panic(1).to_bool();
-		self.set_pin_internal_state_panic(2, (!and).into());
+		self.set_pin_internal_state_panic(2, (!and).into(), &mut out);
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateNand(self.0.save()))
@@ -440,7 +444,9 @@ impl LogicDevice for GateNot {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
-		self.set_pin_internal_state_panic(1, (!self.get_pin_state_panic(0).to_bool()).into());
+		let mut out = Vec::new();
+		self.set_pin_internal_state_panic(1, (!self.get_pin_state_panic(0).to_bool()).into(), &mut out);
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateNot(self.0.save()))
@@ -486,7 +492,9 @@ impl LogicDevice for GateNotNew {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
-		self.set_pin_internal_state_panic(1, (!self.get_pin_state_panic(0).to_bool()).into());
+		let mut out = Vec::new();
+		self.set_pin_internal_state_panic(1, (!self.get_pin_state_panic(0).to_bool()).into(), &mut out);
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateNotNew(self.0.save()))
@@ -532,7 +540,9 @@ impl LogicDevice for GateOr {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
-		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() || self.get_pin_state_panic(1).to_bool()).into());
+		let mut out = Vec::new();
+		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() || self.get_pin_state_panic(1).to_bool()).into(), &mut out);
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateOr(self.0.save()))
@@ -582,7 +592,9 @@ impl LogicDevice for GateNor {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
-		self.set_pin_internal_state_panic(2, (!(self.get_pin_state_panic(0).to_bool() || self.get_pin_state_panic(1).to_bool())).into());
+		let mut out = Vec::new();
+		self.set_pin_internal_state_panic(2, (!(self.get_pin_state_panic(0).to_bool() || self.get_pin_state_panic(1).to_bool())).into(), &mut out);
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateNor(self.0.save()))
@@ -633,7 +645,9 @@ impl LogicDevice for GateXor {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
-		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() != self.get_pin_state_panic(1).to_bool()).into());
+		let mut out = Vec::new();
+		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() != self.get_pin_state_panic(1).to_bool()).into(), &mut out);
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateXor(self.0.save()))
@@ -684,7 +698,9 @@ impl LogicDevice for GateXnor {
 		&mut self.0
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
-		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() == self.get_pin_state_panic(1).to_bool()).into());
+		let mut out = Vec::new();
+		self.set_pin_internal_state_panic(2, (self.get_pin_state_panic(0).to_bool() == self.get_pin_state_panic(1).to_bool()).into(), &mut out);
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::GateXnor(self.0.save()))
@@ -733,10 +749,12 @@ impl LogicDevice for ClockSymbol {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, clock_state: bool, first_propagation: bool) {
+	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, clock_state: bool, first_propagation: bool) -> Vec<u64> {
+		let mut out = Vec::new();
 		if first_propagation {
-			self.set_pin_internal_state_panic(0, clock_state.into());
+			self.set_pin_internal_state_panic(0, clock_state.into(), &mut out);
 		}
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::Clock(self.0.save()))
@@ -764,6 +782,9 @@ impl LogicDevice for ClockSymbol {
 			].iter().map(|p| self.0.ui_data.direction.rotate_v2_reverse(*p) + V2::new(2.0, 0.0)).collect(),
 			draw.styles().color_foreground
 		);
+	}
+	fn start_of_propagation(&self) -> bool {
+		true// TODO
 	}
 }
 
@@ -804,7 +825,9 @@ impl LogicDevice for FixedSource {
 		&mut self.generic
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
-		self.set_pin_internal_state_panic(0, self.state.into());
+		let mut out = Vec::new();
+		self.set_pin_internal_state_panic(0, self.state.into(), &mut out);
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::FixedSource(self.generic.save(), self.state))
@@ -882,15 +905,15 @@ impl EncoderOrDecoder {
 		};
 		// Clear address inputs
 		for a in 0..out.addr_size {
-			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("A", a as u16), LogicState::Floating);
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("A", a as u16), LogicState::Floating, &mut Vec::new());
 		}
 		if is_encoder {// Clear fanout pins
 			for d in 0..2_u16.pow(out.addr_size as u32) {
-				out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("D", d as u16), LogicState::Floating);
+				out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("D", d as u16), LogicState::Floating, &mut Vec::new());
 			}
 		}
 		else {// Clear enable/input
-			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Enable", 0), LogicState::Floating);
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Enable", 0), LogicState::Floating, &mut Vec::new());
 		}
 		out
 	}
@@ -913,9 +936,10 @@ impl LogicDevice for EncoderOrDecoder {
 		&mut self.generic
 	}
 	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
+		let mut out = Vec::new();
 		if self.is_encoder {
 			let input = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("D", self.get_address() as u16)).to_bool();
-			self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Enable", 0), input.into());
+			self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Enable", 0), input.into(), &mut out);
 		}
 		else {
 			let addr = self.get_address();
@@ -925,10 +949,12 @@ impl LogicDevice for EncoderOrDecoder {
 					match d_16 as u8 == addr {
 						true => self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("Enable", 0)).to_bool(),
 						false => false
-					}.into()
+					}.into(),
+					&mut out
 				);
 			}
 		}
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::EncoderOrDecoder(self.generic.save(), self.addr_size, self.is_encoder, self.layout.save()))
@@ -1031,14 +1057,14 @@ impl Memory {
 			layout
 		};
 		for a in 0..out.addr_size {
-			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("A", a as u16), LogicState::Floating);
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("A", a as u16), LogicState::Floating, &mut Vec::new());
 		}
 		for i in 0..8 {
-			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("D", i as u16), LogicState::Floating);
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("D", i as u16), LogicState::Floating, &mut Vec::new());
 		}
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("CE", 0), LogicState::Floating);
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("WE", 0), LogicState::Floating);
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("RE", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("CE", 0), LogicState::Floating, &mut Vec::new());
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("WE", 0), LogicState::Floating, &mut Vec::new());
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("RE", 0), LogicState::Floating, &mut Vec::new());
 		Self::trim_memory_if_blank(&mut out.data);
 		out
 	}
@@ -1084,21 +1110,22 @@ impl LogicDevice for Memory {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
+	fn compute_step(&mut self, _: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
+		let mut out = Vec::new();
 		let ce: bool = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("CE", 0)).to_bool();
 		let we: bool = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("WE", 0)).to_bool();
 		let re: bool = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("RE", 0)).to_bool();
 		let address = self.layout.get_bus_value_panic("A", &self.generic.logic_pins).0 as usize;
 		if !re || !ce {// Set all data lines floating
 			for bit_i in 0..8_u16 {
-				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("D", bit_i), LogicState::Floating);
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("D", bit_i), LogicState::Floating, &mut out);
 			}
 		}
 		if ce {
 			if re {// Memory read
 				let byte: u8 = self.get_data(address);
 				for bit_i in 0..8_u16 {
-					self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("D", bit_i), match (byte >> bit_i) & 1 {0 => false, 1 => true, _ => panic!("bruh")}.into());
+					self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("D", bit_i), match (byte >> bit_i) & 1 {0 => false, 1 => true, _ => panic!("bruh")}.into(), &mut out);
 				}
 			}
 			else if we {
@@ -1111,6 +1138,7 @@ impl LogicDevice for Memory {
 				Self::set_data(&mut self.data, address, new_byte);
 			}
 		}
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::Memory(
@@ -1269,13 +1297,15 @@ impl LogicDevice for TriStateBufferOld {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
+	fn compute_step(&mut self, _: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
+		let mut out = Vec::new();
 		if self.get_pin_state_panic(2).to_bool() {
-			self.set_pin_internal_state_panic(1, self.get_pin_state_panic(0).to_bool().into());
+			self.set_pin_internal_state_panic(1, self.get_pin_state_panic(0).to_bool().into(), &mut out);
 		}
 		else {
-			self.set_pin_internal_state_panic(1, LogicState::Floating);
+			self.set_pin_internal_state_panic(1, LogicState::Floating, &mut out);
 		}
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::TriStateBuffer(self.0.save()))
@@ -1319,7 +1349,7 @@ impl TriStateBuffer {
 			bw
 		);
 		for bit_i in 0..out.2 {
-			out.set_pin_internal_state_panic(out.1.get_logic_pin_id_panic("D", bit_i), LogicState::Floating);
+			out.set_pin_internal_state_panic(out.1.get_logic_pin_id_panic("D", bit_i), LogicState::Floating, &mut Vec::new());
 		}
 		out
 	}
@@ -1332,7 +1362,8 @@ impl LogicDevice for TriStateBuffer {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.0
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
+	fn compute_step(&mut self, _: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
+		let mut out = Vec::new();
 		let enable: bool = self.get_pin_state_panic(self.1.get_logic_pin_id_panic("En", 0)).to_bool();
 		for bit_i in 0..self.2 {
 			let state: LogicState = if enable {
@@ -1343,8 +1374,9 @@ impl LogicDevice for TriStateBuffer {
 			else {
 				LogicState::Floating
 			};
-			self.set_pin_internal_state_panic(self.1.get_logic_pin_id_panic("Q", bit_i), state);
+			self.set_pin_internal_state_panic(self.1.get_logic_pin_id_panic("Q", bit_i), state, &mut out);
 		}
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::TriStateBufferNew(self.0.save(), self.1.save(), self.2))
@@ -1410,10 +1442,10 @@ impl Adder {
 			layout
 		};
 		for i in 0..out.bits {
-			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("A", i), LogicState::Floating);
-			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("B", i), LogicState::Floating);
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("A", i), LogicState::Floating, &mut Vec::new());
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("B", i), LogicState::Floating, &mut Vec::new());
 		}
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Cin", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Cin", 0), LogicState::Floating, &mut Vec::new());
 		out
 	}
 }
@@ -1425,16 +1457,18 @@ impl LogicDevice for Adder {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _self_component_id: u64, _clock_state: bool, _first_propagation_step: bool) {
+	fn compute_step(&mut self, _: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
+		let mut out = Vec::new();
 		let mut carry = self.get_pin_state_panic(self.layout.group_logical_pins[&("Cin".to_owned(), 0)]).to_bool();
 		for i in 0..self.bits {
 			let a = self.get_pin_state_panic(self.layout.group_logical_pins[&("A".to_owned(), i)]).to_bool();
 			let b = self.get_pin_state_panic(self.layout.group_logical_pins[&("B".to_owned(), i)]).to_bool();
 			let sum: bool = (a ^ b) ^ carry;
-			self.set_pin_internal_state_panic(self.layout.group_logical_pins[&("C".to_owned(), i)], sum.into());
+			self.set_pin_internal_state_panic(self.layout.group_logical_pins[&("C".to_owned(), i)], sum.into(), &mut out);
 			carry = (a & b) | ((a ^ b) & carry);
 		}
-		self.set_pin_internal_state_panic(self.layout.group_logical_pins[&("Cout".to_owned(), 0)], carry.into());
+		self.set_pin_internal_state_panic(self.layout.group_logical_pins[&("Cout".to_owned(), 0)], carry.into(), &mut out);
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::Adder(self.generic.save(), self.layout.save(), self.bits))
@@ -1519,15 +1553,15 @@ impl DLatch {
 			sr
 		};
 		for i in 0..out.bits {
-			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("D".to_owned(), i)).unwrap(), LogicState::Floating);
+			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("D".to_owned(), i)).unwrap(), LogicState::Floating, &mut Vec::new());
 		}
-		out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("CLK".to_owned(), 0)).unwrap(), LogicState::Floating);
+		out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("CLK".to_owned(), 0)).unwrap(), LogicState::Floating, &mut Vec::new());
 		if out.oe {
-			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("OE".to_owned(), 0)).unwrap(), LogicState::Floating);
+			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("OE".to_owned(), 0)).unwrap(), LogicState::Floating, &mut Vec::new());
 		}
 		if out.sr {
-			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("S".to_owned(), 0)).unwrap(), LogicState::Floating);
-			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("R".to_owned(), 0)).unwrap(), LogicState::Floating);
+			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("S".to_owned(), 0)).unwrap(), LogicState::Floating, &mut Vec::new());
+			out.set_pin_internal_state_panic(*out.layout.group_logical_pins.get(&("R".to_owned(), 0)).unwrap(), LogicState::Floating, &mut Vec::new());
 		}
 		out
 	}
@@ -1540,7 +1574,8 @@ impl LogicDevice for DLatch {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _self_component_id: u64, _clock_state: bool, _first_propagation_step: bool) {
+	fn compute_step(&mut self, _: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
+		let mut out = Vec::new();
 		// Check positive clock edge
 		let current_clock: bool = self.get_pin_state_panic(*self.layout.group_logical_pins.get(&("CLK".to_owned(), 0)).unwrap()).to_bool();
 		let clock_rising_edge = match self.prev_clock {
@@ -1598,14 +1633,15 @@ impl LogicDevice for DLatch {
 				else {
 					((self.data_high >> (i-128)) & 1) % 2 == 1
 				};
-				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q", i), bit.into());
-				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q#", i), (!bit).into());
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q", i), bit.into(), &mut out);
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q#", i), (!bit).into(), &mut out);
 			}
 			else {
-				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q", i), LogicState::Floating);
-				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q#", i), LogicState::Floating);
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q", i), LogicState::Floating, &mut out);
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q#", i), LogicState::Floating, &mut out);
 			}
 		}
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::DLatch(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe, self.sr))
@@ -1690,8 +1726,8 @@ impl SRLatch {
 			layout,
 			state
 		};
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("S", 0), LogicState::Floating);
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("R", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("S", 0), LogicState::Floating, &mut Vec::new());
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("R", 0), LogicState::Floating, &mut Vec::new());
 		out
 	}
 }
@@ -1703,7 +1739,8 @@ impl LogicDevice for SRLatch {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _self_component_id: u64, _clock_state: bool, _first_propagation_step: bool) {
+	fn compute_step(&mut self, _: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
+		let mut out = Vec::new();
 		let s = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("S", 0)).to_bool();
 		let r = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("R", 0)).to_bool();
 		if s {
@@ -1712,8 +1749,9 @@ impl LogicDevice for SRLatch {
 		if r {
 			self.state = false;
 		}
-		self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q", 0), self.state.into());
-		self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q#", 0), (!(self.state || (s && r))).into());
+		self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q", 0), self.state.into(), &mut out);
+		self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q#", 0), (!(self.state || (s && r))).into(), &mut out);
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::SRLatch(self.generic.save(), self.layout.save(), self.state))
@@ -1790,11 +1828,11 @@ impl Counter {
 			data_high,
 			oe
 		};
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("CLK", 0), LogicState::Floating);
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("CLR", 0), LogicState::Floating);
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("CLK EN", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("CLK", 0), LogicState::Floating, &mut Vec::new());
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("CLR", 0), LogicState::Floating, &mut Vec::new());
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("CLK EN", 0), LogicState::Floating, &mut Vec::new());
 		if out.oe {
-			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("OE", 0), LogicState::Floating);
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("OE", 0), LogicState::Floating, &mut Vec::new());
 		}
 		out
 	}
@@ -1807,7 +1845,8 @@ impl LogicDevice for Counter {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _self_component_id: u64, _clock_state: bool, _first_propagation_step: bool) {
+	fn compute_step(&mut self, _: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
+		let mut out = Vec::new();
 		// Check positive clock edge
 		let current_clock: bool = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("CLK", 0)).to_bool();
 		let clock_rising_edge = match self.prev_clock {
@@ -1845,12 +1884,13 @@ impl LogicDevice for Counter {
 				else {
 					((self.data_high >> (i-128)) & 1) % 2 == 1
 				};
-				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q", i), bit.into());
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q", i), bit.into(), &mut out);
 			}
 			else {
-				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q", i), LogicState::Floating);
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Q", i), LogicState::Floating, &mut out);
 			}
 		}
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::Counter(self.generic.save(), self.layout.save(), self.bits, self.data_low, self.data_high, self.oe))
@@ -1943,16 +1983,16 @@ impl VectorCRT {
 			curr_lerp_value: 0.0,
 			start_lerp_pos: 0.0
 		};
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Clear", 0), LogicState::Floating);
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Beam Enable", 0), LogicState::Floating);
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Point (0) / Line (1) select", 0), LogicState::Floating);
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Update V0", 0), LogicState::Floating);
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Update V1", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Clear", 0), LogicState::Floating, &mut Vec::new());
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Beam Enable", 0), LogicState::Floating, &mut Vec::new());
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Point (0) / Line (1) select", 0), LogicState::Floating, &mut Vec::new());
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Update V0", 0), LogicState::Floating, &mut Vec::new());
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Update V1", 0), LogicState::Floating, &mut Vec::new());
 		for bit_i in 0..10 {
-			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("X0", bit_i), LogicState::Floating);
-			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("X1", bit_i), LogicState::Floating);
-			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Y0", bit_i), LogicState::Floating);
-			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Y1", bit_i), LogicState::Floating);
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("X0", bit_i), LogicState::Floating, &mut Vec::new());
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("X1", bit_i), LogicState::Floating, &mut Vec::new());
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Y0", bit_i), LogicState::Floating, &mut Vec::new());
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Y1", bit_i), LogicState::Floating, &mut Vec::new());
 		}
 		out
 	}
@@ -1995,11 +2035,12 @@ impl LogicDevice for VectorCRT {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _self_component_id: u64, _clock_state: bool, _first_propagation_step: bool) {
+	fn compute_step(&mut self, _: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
+		let mut out = Vec::new();
 		// Set quick signals back to 0
-		self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Line Done", 0), LogicState::Driven(false));
-		self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Update V0", 0), LogicState::Driven(false));
-		self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Update V1", 0), LogicState::Driven(false));
+		self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Line Done", 0), LogicState::Driven(false), &mut out);
+		self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Update V0", 0), LogicState::Driven(false), &mut out);
+		self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Update V1", 0), LogicState::Driven(false), &mut out);
 		// Check clear
 		if self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("Clear", 0)).to_bool() {
 			self.lines = Vec::new();
@@ -2016,7 +2057,7 @@ impl LogicDevice for VectorCRT {
 		};
 		// Check if line is done
 		if dt >= self.period {// Line end
-			self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Line Done", 0), LogicState::Driven(true));
+			self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Line Done", 0), LogicState::Driven(true), &mut out);
 			self.save_current_line();
 			self.start_lerp_pos = self.curr_lerp_value;
 			let ((new_v0, new_v1), _) = self.update_input_vectors();
@@ -2025,10 +2066,10 @@ impl LogicDevice for VectorCRT {
 			self.start_time = now;
 			self.lerp_rising = !self.lerp_rising;
 			if self.lerp_rising {
-				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Update V1", 0), LogicState::Driven(true));
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Update V1", 0), LogicState::Driven(true), &mut out);
 			}
 			else {
-				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Update V0", 0), LogicState::Driven(true));
+				self.set_pin_internal_state_panic(self.layout.get_logic_pin_id_panic("Update V0", 0), LogicState::Driven(true), &mut out);
 			}
 		}
 		// If vectors change even when line isn't done, save and start a new line
@@ -2039,6 +2080,7 @@ impl LogicDevice for VectorCRT {
 			self.v0 = new_v0;
 			self.v1 = new_v1;
 		}
+		out
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::VectorCRT(self.generic.save(), self.layout.save()))
@@ -2127,11 +2169,11 @@ impl LED32Square {
 			data_clk_prev_state: false,
 			px_grid_size
 		};
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Address CLK", 0), LogicState::Floating);
-		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Data CLK", 0), LogicState::Floating);
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Address CLK", 0), LogicState::Floating, &mut Vec::new());
+		out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Data CLK", 0), LogicState::Floating, &mut Vec::new());
 		for bit_i in 0..8 {
-			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Address", bit_i), LogicState::Floating);
-			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Data", bit_i), LogicState::Floating);
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Address", bit_i), LogicState::Floating, &mut Vec::new());
+			out.set_pin_internal_state_panic(out.layout.get_logic_pin_id_panic("Data", bit_i), LogicState::Floating, &mut Vec::new());
 		}
 		out
 	}
@@ -2144,7 +2186,7 @@ impl LogicDevice for LED32Square {
 	fn get_generic_mut(&mut self) -> &mut LogicDeviceGeneric {
 		&mut self.generic
 	}
-	fn compute_step(&mut self, _ancestors: &AncestryStack, _self_component_id: u64, _clock_state: bool, _first_propagation_step: bool) {
+	fn compute_step(&mut self, _: &AncestryStack, _: u64, _: bool, _: bool) -> Vec<u64> {
 		// Check input clocks
 		let current_address_clk = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("Address CLK", 0)).to_bool();
 		let current_data_clk = self.get_pin_state_panic(self.layout.get_logic_pin_id_panic("Data CLK", 0)).to_bool();
@@ -2158,6 +2200,7 @@ impl LogicDevice for LED32Square {
 		}
 		self.address_clk_prev_state = current_address_clk;
 		self.data_clk_prev_state = current_data_clk;
+		Vec::new()
 	}
 	fn save(&self) -> Result<EnumAllLogicDevices, String> {
 		Ok(EnumAllLogicDevices::LED32Square(self.generic.save(), self.layout.save(), self.px_grid_size))
