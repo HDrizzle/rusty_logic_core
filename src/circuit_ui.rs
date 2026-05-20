@@ -1113,7 +1113,7 @@ impl LogicCircuitToplevelView {
 			component_search_text: String::new(),
 			all_logic_devices_search: Vec::new(),
 			saved,
-			recompute_conns_next_frame: false,
+			recompute_conns_next_frame: true,
 			frame_compute_cycles: 0,
 			showing_flatten_opoup: false,
 			flatten_error: None,
@@ -1204,7 +1204,7 @@ impl LogicCircuitToplevelView {
 				self.circuit.check_wire_geometry_and_connections(Some(&mut self.timing.tree));
 			}
 			// Update
-			self.logic_loop_error = self.propagate_until_stable(CIRCUIT_MAX_COMPUTE_CYCLES);
+			self.logic_loop_error = self.propagate_until_stable(CIRCUIT_MAX_COMPUTE_CYCLES, self.recompute_conns_next_frame);
 			self.recompute_conns_next_frame = false;
 			// graphics help from https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/painting.rs
 			// Right side toolbar
@@ -1426,13 +1426,13 @@ impl LogicCircuitToplevelView {
 		(return_new_mouse_pos, return_new_circuit_tab, inner_response.response, return_reload)
 	}
 	/// Runs `compute_step()` repeatedly on the circuit until there are no changes, there must be a limit because there are circuits (ex. NOT gate connected to itself) where this would otherwise never end
-	pub fn propagate_until_stable(&mut self, propagation_limit: usize) -> bool {
+	pub fn propagate_until_stable(&mut self, propagation_limit: usize, update_all: bool) -> bool {
 		let start_t = Instant::now();
 		loop {
 			let mut count: usize = 0;
 			let mut comp_update_tree = Vec::<ComponentUpdateTreeNode>::new();
 			while count < propagation_limit {
-				if !self.circuit.compute_toplevel(count == 0, &mut comp_update_tree, false) {
+				if !self.circuit.compute_toplevel(count == 0, &mut comp_update_tree, update_all) {
 					/*if count > 0 {
 						self.circuit.update_timing_diagram(&mut self.circuit.propagation_done.borrow_mut(), &mut self.timing, count == 0);
 					}*/

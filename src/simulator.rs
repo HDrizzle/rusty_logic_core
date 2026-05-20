@@ -804,7 +804,7 @@ pub struct LogicCircuit {
 	/// {pin ID: (relative position (ending), direction, whether to show name)}
 	pub block_pin_positions: HashMap<u64, (IntV2, FourWayDir, bool)>,
 	displayed_as_block: bool,
-	is_toplevel: bool,
+	pub is_toplevel: bool,
 	/// Bounding box for the circuit, not the block diagram, relative to this circuit
 	/// The block diagram BB can be found at `self.generic_device.bounding_box`
 	pub circuit_internals_bb: (V2, V2),
@@ -1166,7 +1166,7 @@ impl LogicCircuit {
 		}
 		new_wire_ids
 	}
-	/// Fixes everything, should be run when a new circuit is created or when anything is moved, deleted, or placed
+	/// Fixes everything, should be run when a new circuit is created/loaded or when anything is moved, deleted, or placed
 	pub fn check_wire_geometry_and_connections(&mut self, timing_tree_opt: Option<&mut Vec<TimingDiagramTreeNode>>) {
 		// Find overlapping wires and correct them, connections can be ignored
 		self.merge_overlapping_wires();
@@ -1182,8 +1182,12 @@ impl LogicCircuit {
 		self.update_splitter_wire_connections();
 		// Combine consecutive segments in the same direction
 		self.merge_consecutive_wires();
-		// Compute nets, has to be done after all geometry and connection fixes
-		self.bit_width_errors = self.recompute_nets();
+		// Compute nets within this circuit, has to be done after all geometry and connection fixes
+		self.bit_width_errors = self.recompute_nets_within_circuit();
+		// Flatten all nets across all layers, only if toplevel
+		if self.is_toplevel {
+			self.flatten_nets_toplevel();
+		}
 		// Logic probes
 		if let Some(timing_tree) = timing_tree_opt {
 			self.update_probe_net_connections_and_timing(timing_tree);
@@ -2013,10 +2017,18 @@ impl LogicCircuit {
 		// 3. Update nets attached to the changed pins, the current code that uses the net's deep searching feature maybe outdated and overkill, TODO
 		let nets = self.nets.borrow();
 		let mut new_net_states = HashMap::<u64, (LogicState, Vec<GlobalSourceReference>)>::new();
-		// TODO: Use the update everything flag
-		for net_id in &changed_nets {
-			let net = nets.get(&net_id).unwrap();
-			new_net_states.insert(*net_id, net.borrow().update_state(&ancestors, *net_id));
+		// Use the update everything flag
+		if update_all {
+			for net_id in nets.keys() {
+				let net = nets.get(&net_id).unwrap();
+				new_net_states.insert(*net_id, net.borrow().update_state(&ancestors, *net_id));
+			}
+		}
+		else {
+			for net_id in &changed_nets {
+				let net = nets.get(&net_id).unwrap();
+				new_net_states.insert(*net_id, net.borrow().update_state(&ancestors, *net_id));
+			}
 		}
 		drop(ancestors);
 		for (net_id, (state, sources)) in new_net_states.into_iter() {

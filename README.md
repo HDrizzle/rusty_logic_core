@@ -1,5 +1,7 @@
 # Welcome to Rusty Logic
 
+Latest stable commit: [https://github.com/HDrizzle/rusty_logic_core/tree/d38c01c6bab6ead4a8361290cd7769f9c6ac4fd8](https://github.com/HDrizzle/rusty_logic_core/tree/d38c01c6bab6ead4a8361290cd7769f9c6ac4fd8), anything newer may not be wrking.
+
 I was inspired to create this program after making a crude logic simulator/animator in TS for MotionCanvas for my DIY computer presentation. There are also features inspired by CircuitVerse and KiCad.
 
 <img src="example_scrot.png" />
