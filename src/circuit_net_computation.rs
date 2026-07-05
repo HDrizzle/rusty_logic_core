@@ -1,7 +1,7 @@
 //! This module implements logic for `LogicCircuit` to recompute the nets of all wires, pins, & splitters
 //! The logic for correcting wire geometry is not here
 
-use std::{cell::{RefCell, RefMut}, collections::{HashMap, HashSet, VecDeque}};
+use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}};
 use crate::{prelude::*, simulator::CircuitWideGraphicPinReference};
 
 /// Wire or Splitter
@@ -53,7 +53,7 @@ impl LogicCircuit {
 	/// * Update wire nets/bitwidths from islands
 	/// * DFS to find all connected bits across wires and splitters
 	/// * Set pin nets and add connections to nets
-	pub fn recompute_nets_within_circuit(&self) -> Vec<BitWidthError> {
+	pub fn recompute_nets(&self) -> Vec<BitWidthError> {
 		// Init stuff
 		let mut errors = Vec::<BitWidthError>::new();
 		// New set of nets, wire islands will be created with all new nets and then they may be merged together
@@ -306,41 +306,4 @@ impl LogicCircuit {
 			NotAWire::Splitter(splitter_id, splitter_pin_id) => self.splitters.borrow().get(splitter_id).unwrap().graphic_pin_bit_width(*splitter_pin_id)
 		}
 	}
-	/// Run this after `recompute_nets_within_circuit`, this function connects everything in all subcircuits to only nets in the toplevel circuit
-	/// How it works:
-	/// 1. Create a bunch of trees for each toplevel net
-	/// 2. Recurse through all sub circuits (BFS Only, important so `recompute_nets_within_circuit()` doesn't get called repeatedly which would fuck it up)
-	///    and find all sub circuit nets connected the toplevel through sub circuit pins.
-	///    For any sub circuit nets not connected to the outside, make a new toplevel net for them to be "connected to"
-	///    Everything will be added to the toplevel net trees
-	/// 3. Find any overlapping trees and merge them since that means its all the same physical connection
-	/// 4. 
-	pub fn flatten_nets_toplevel(&self) {
-		let mut net_trees = Vec::<NetFlattenTreeNode>::new();
-		self.find_sub_nets_recursive(&mut net_trees);
-	}
-	/// Go through all nets that belong to this circuit and find sub circuit nets that connect to the
-	/// Returns: Vec<(Component ID of sub circuit, Sub circuit net ID that does not have any connected nets in this circuit)
-	fn find_sub_nets_recursive(
-		&self,
-		net_trees: &mut HashMap<u64, >
-	) -> (u64, u64) {
-		// If toplevel then this has already been done
-		if !self.is_toplevel {
-			self.recompute_nets_within_circuit();
-		}
-		// Search through nets
-		let nets = self.nets.borrow_mut();
-		let components = self.components.borrow_mut();
-		for (comp_id, component) in &*components {
-			
-		}
-	}
-}
-
-// Need to be able too look up by parent net
-struct NetFlattenTreeNode {
-	net_id: u64,
-	/// Vec<(Sub circuit component ID, Sub circuit Net)>
-	children: Vec<(u64, NetFlattenTreeNode)>
 }

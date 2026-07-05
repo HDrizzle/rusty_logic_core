@@ -69,6 +69,8 @@ pub struct LogicCircuitSave {
 	pub block_pin_positions: HashMap<u64, (IntV2, FourWayDir, bool)>,
 	pub type_name: String,
 	#[serde(default)]
+	pub fixed_sub_cycles_opt: Option<usize>,
+	#[serde(default)]
 	pub clock_enabled: bool,
 	#[serde(default)]
 	pub clock_freq: f32,
@@ -107,7 +109,9 @@ mod restore_old_files {
 		pub components: HashMap<u64, EnumAllLogicDevices>,
 		pub wires: HashMap<u64, (IntV2, FourWayDir, u32)>,
 		pub block_pin_positions: HashMap<u64, (IntV2, FourWayDir, bool)>,
-		pub type_name: String
+		pub type_name: String,
+		#[serde(default)]
+		pub fixed_sub_cycles_opt: Option<usize>
 	}
 	/// LogicDeviceGeneric shouldn't be serialized, so this struct has fields to be compatible with old save files
 	#[derive(Debug, Serialize, Deserialize)]
@@ -158,6 +162,7 @@ mod restore_old_files {
 				labels: HashMap::new(),
 				block_pin_positions: self.block_pin_positions,
 				type_name: self.type_name,
+				fixed_sub_cycles_opt: self.fixed_sub_cycles_opt,
 				clock_enabled: false,
 				clock_freq: 1.0,
 				clock_state: false,

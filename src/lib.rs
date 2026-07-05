@@ -10,20 +10,11 @@ use wasm_bindgen::prelude::wasm_bindgen;
 
 pub mod simulator;
 #[cfg(feature = "using_egui")]
-pub mod top_ui;
-#[cfg(feature = "using_egui")]
-pub mod circuit_ui;
+pub mod ui;
 pub mod graphics;
 pub mod resource_interface;
 pub mod builtin_components;
 pub mod circuit_net_computation;
-pub mod pins;
-pub mod graphic_label;
-pub mod splitter;
-pub mod wire;
-pub mod probe;
-pub mod timing_diagram;
-pub mod clock;
 #[cfg(test)]
 pub mod tests;
 
@@ -45,17 +36,9 @@ pub mod prelude {
 	#[cfg(feature = "using_egui")]
 	use eframe::egui::{Align2, Align, Color32, CornerRadius};
 	#[cfg(feature = "using_egui")]
-	pub use top_ui::App;
-	#[cfg(feature = "using_egui")]
-	pub use circuit_ui::{LogicCircuitToplevelView, SelectProperty, CopiedGraphicItem, CopiedItemSet, Tool, SelectionState};
+	pub use ui::{LogicCircuitToplevelView, App, SelectProperty, CopiedGraphicItem, CopiedItemSet};
 	pub use graphics::{UIData, GraphicSelectableItem, DrawInterface, Styles, DrawData};
-	pub use simulator::{LogicDevice, LogicDeviceGeneric, LogicNet, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, LogicDeviceSave, CircuitInstanceConfig, ComponentInstanceConfig, ComponentUpdateTreeNode, CircuitWideGraphicPinReference};
-	pub use pins::{LogicConnectionPin, GraphicPin};
-	pub use graphic_label::{GraphicLabel, GraphicLabelSave};
-	pub use splitter::{Splitter, SplitterSave};
-	pub use wire::{Wire, WireConnection};
-	pub use probe::{Probe, ProbeSave};
-	pub use timing_diagram::{TimingDiagram, TimingDiagramTreeNode, TimingDiagramSignalGroupSource, TimingDiagramTimestamp, TimingTiagramRunningState};
+	pub use simulator::{LogicDevice, LogicDeviceGeneric, Wire, LogicNet, LogicConnectionPin, GraphicPin, LogicCircuit, LogicState, LogicConnectionPinExternalSource, LogicConnectionPinInternalSource, WireConnection, LogicDeviceSave, GraphicLabel, GraphicLabelSave, Splitter, SplitterSave, Probe, ProbeSave, CircuitInstanceConfig, ComponentInstanceConfig, TimingDiagramSignalGroupSource};
 	pub use resource_interface::{EnumAllLogicDevices, TimingDiagramTreeRootNodeSave};
 	#[cfg(feature = "using_filesystem")]
 	pub use resource_interface::load_file_with_better_error;
@@ -586,6 +569,7 @@ pub mod prelude {
 				(IntV2(4, 0), FourWayDir::E, 1.0, "q".to_owned(), vec![2]),
 			],
 			"test-circuit".to_string(),
+			None,
 			vec_to_u64_keyed_hashmap(vec![
 				Wire::new(IntV2(-4, -1), 1, FourWayDir::E, vec![0], Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new()))),
 				Wire::new(IntV2(-4, 1), 1, FourWayDir::E, vec![1], Rc::new(RefCell::new(HashSet::new())), Rc::new(RefCell::new(HashSet::new()))),
